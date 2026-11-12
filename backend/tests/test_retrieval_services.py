@@ -220,12 +220,11 @@ def test_jev_can_be_reached_elsewhere(monkeypatch: pytest.MonkeyPatch):
     )
 
 
-def test_the_old_gateway_key_alone_stops_the_start(monkeypatch: pytest.MonkeyPatch):
+def test_the_old_gateway_key_does_not_require_a_platform_judge(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("JEV_API_KEY", raising=False)
     monkeypatch.setenv("AI_GATEWAY_API_KEY", "gw-key")
     monkeypatch.setenv("CHAT_LLM_BASE_URL", "http://llm.invalid/v1")
     monkeypatch.setenv("CHAT_LLM_API_KEY", "chat-key")
     monkeypatch.setenv("CHAT_LLM_MODEL", "chat-model")
 
-    with pytest.raises(RuntimeError, match="AI_GATEWAY_API_KEY.*JEV_API_KEY"):
-        Settings.from_env()
+    assert Settings.from_env().judge is None
