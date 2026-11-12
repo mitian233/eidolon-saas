@@ -20,7 +20,7 @@ from eidolon.config import Settings
 from tests.test_producer_profile import NO_CITY
 from tests.conftest import ClientFactory
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     FakeBackgroundLLM,
     FakeLLM,
     FakeServiceClients,
@@ -51,7 +51,7 @@ REPLY = ["<ja>[小声で]はい</ja><zh>好的</zh>"]
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """Affinity on, judged by the judge model."""
-    return replace(settings, judge=FAKE_JUDGE, affinity_and_gifts=True)
+    return replace(settings, affinity_and_gifts=True)
 
 
 def deployment(make_client: ClientFactory, settings: Settings, tmp_path: Path, name: str,
@@ -101,26 +101,26 @@ async def test_conversations_move_to_another_deployment_as_they_were(
     make_client: ClientFactory, settings: Settings, tmp_path: Path
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0), level(4), level(1), level(3), level(2), level(4)]
+    clients.user_judge.judgings = [level(0), level(4), level(1), level(3), level(2), level(4)]
     here = deployment(
         make_client, settings, tmp_path, "here", *[REPLY] * 6, clients=clients,
         background_llm=FakeBackgroundLLM(answering(TITLE)),
     )
     at_here = database(tmp_path, "here")
     ended = await start_conversation(here)
-    await send_turn(here, ended, "我住在大阪")
+    await send_turn(here, ended, "我住在大阪", own_keys=JUDGED_KEYS)
     said_at(at_here, "我住在大阪", datetime.now(UTC) - timedelta(days=9))
     registered_at(at_here, datetime.now(UTC) - timedelta(days=9))
     hang_up(at_here, ended)
     end(at_here, ended)
     given = await start_conversation(here)
-    await send_turn(here, given, "给你布丁")
+    await send_turn(here, given, "给你布丁", own_keys=JUDGED_KEYS)
     keep_call(at_here, given, 75.5)
     titled = await start_conversation(here)
     for text in ("第一句", "第二句", "第三句"):
-        await send_turn(here, titled, text)
+        await send_turn(here, titled, text, own_keys=JUDGED_KEYS)
     kogane = await start_conversation(here, "kogane")
-    await send_turn(here, kogane, "你好")
+    await send_turn(here, kogane, "你好", own_keys=JUDGED_KEYS)
     assert (await listed(here))[0][0] == TITLE
     there = deployment(make_client, settings, tmp_path, "there", REPLY, REPLY)
 
@@ -157,7 +157,7 @@ async def test_conversations_move_to_another_deployment_as_they_were(
     # The newest of each of hers is her current one, to go on in.
     for character in ("mano", "kogane"):
         current = (await hers(there, character))[0]["id"]
-        assert (await send_turn(there, current, "我回来了"))[-1]["type"] == "done"
+        assert (await send_turn(there, current, "我回来了", own_keys=JUDGED_KEYS))[-1]["type"] == "done"
 
 
 def said(text: str, at: str, *, hurt: float | None = 0.0) -> dict:
@@ -220,7 +220,7 @@ async def test_her_conversation_here_stays_current_and_one_imported_is_where_the
 ):
     client = deployment(make_client, settings, tmp_path, "here", REPLY, REPLY)
     mine = await start_conversation(client)
-    await send_turn(client, mine, "这边的")
+    await send_turn(client, mine, "这边的", own_keys=JUDGED_KEYS)
 
     res = await import_package(client, conversations_package(
         packaged_conversation("older", "2026-09-01"),
@@ -234,7 +234,7 @@ async def test_her_conversation_here_stays_current_and_one_imported_is_where_the
     assert latest["mano"]["conversation_id"] == mine
     kogane = latest["kogane"]["conversation_id"]
     assert latest["kogane"]["last_message"]["zh"] == "好的"
-    assert (await send_turn(client, kogane, "接着聊"))[-1]["type"] == "done"
+    assert (await send_turn(client, kogane, "接着聊", own_keys=JUDGED_KEYS))[-1]["type"] == "done"
 
 
 async def test_a_conversation_already_here_is_passed_over_whole(
