@@ -8,8 +8,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from eidolon.accounts import Accounts
-from eidolon.activity import ActivityLog, MeteredJudge, metered_retrieval, judge_origin
-from eidolon.affinity_judge import ModelAffinityJudge
+from eidolon.activity import ActivityLog, metered_retrieval
 from eidolon.admission import Admissions
 from eidolon.affinity import Affinities
 from eidolon.announcements import Announcements
@@ -29,7 +28,6 @@ from eidolon.housekeeping import keep_tidy
 from eidolon.identity import IdentityProvider, ProviderName, open_identity_providers
 from eidolon.invites import Invites
 from eidolon.live_config import AFFINITY, LiveConfig, Reach
-from eidolon.judge import JudgeModel
 from eidolon.llm import TurnServices
 from eidolon.loop_lag import watch_the_loop
 from eidolon.memory import Memories
@@ -120,7 +118,6 @@ def build(
     identity_providers: dict[ProviderName, IdentityProvider] | None = None,
     own_llm_service: LLMService | None = None,
     own_retrieval_service: OwnRetrievalService | None = None,
-    judge_model: JudgeModel | None = None,
     clients: ServiceClients | None = None,
     catalog_transport: httpx.AsyncBaseTransport | None = None,
     backup_transport: httpx.AsyncBaseTransport | None = None,
@@ -176,23 +173,19 @@ def build(
     embedder, reranker = metered_retrieval(activity, settings, embedder, reranker)
     retrieval = None
     corpus = None
-    retrieval_judge = (
-        MeteredJudge(ModelRetrievalJudge(judge_model, config.judge_thresholds), activity,
-                     judge_origin(settings.judge)) if judge_model is not None else config.retrieval_judge()
-    )
     if embedder is not None:
         references = open_reference_sources(database, embedder, characters.values(), None)
         corpus = references.corpus
         closers.append(corpus.aclose)
         retrieval = Retrieval(
-            retrieval_judge, references, reranker, lambda: config.rerank_thresholds.references
+            None, references, reranker, lambda: config.rerank_thresholds.references
         )
 
     async def retrieval_for(services: TurnServices, character_id: str) -> Retrieval | None:
         if services.embedder is None:
             return None
         sources = await asyncio.to_thread(
-            open_reference_sources, database, services.embedder, (), None, warn=False,
+            open_reference_sources, database, services.embedder, (characters[character_id],), None, warn=False,
         )
         await sources.corpus.prepare_character(character_id)
         judge = (
@@ -215,13 +208,13 @@ def build(
     own_keys = OwnKeys(
         own_llm_service, config, activity, speech, exempting=lambda: config.exempting_keys,
         retrieval_service=own_retrieval_service,
+        emotion=settings.emotion,
     )
     her_now = HerNow(characters, affinities=affinities)
     engine = ConversationEngine(
         database, store, characters, {}, memories, titles, clock, her_now, retrieval,
         history_turns=lambda: config.history_turns,
         affinities=affinities,
-        affinity_judge=ModelAffinityJudge(judge_model, config.judge_thresholds) if judge_model else config.affinity_judge(),
         retrieval_for=retrieval_for,
         affinity_enabled=lambda: config.effective(AFFINITY)["enabled"],
     )
