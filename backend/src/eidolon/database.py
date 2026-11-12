@@ -398,9 +398,14 @@ class _PostgresConnection:
         upper = raw.upper()
         try:
             if upper == "BEGIN IMMEDIATE":
-                self._conn.execute("BEGIN")
-                # Preserve callbacks' read-then-write atomicity across API processes.
-                self._conn.execute("SELECT pg_advisory_xact_lock(1936287820)")
+                try:
+                    self._conn.execute("BEGIN")
+                    # Preserve callbacks' read-then-write atomicity across API processes.
+                    self._conn.execute("SELECT pg_advisory_xact_lock(1936287820)")
+                except psycopg.Error:
+                    # The access layer has not entered its transaction context yet.
+                    self._conn.rollback()
+                    raise
                 return [], [], -1, None
             if upper == "BEGIN":
                 self._conn.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -524,6 +529,10 @@ class _PostgresConnection:
         for rounded in tree.find_all(exp.Round):
             if rounded.args.get("decimals"):
                 rounded.set("this", exp.Cast(this=rounded.this, to=exp.DataType.build("NUMERIC")))
+        for null_test in tree.find_all(exp.Is):
+            if isinstance(null_test.this, exp.Placeholder) and isinstance(null_test.expression, exp.Null):
+                # An isolated NULL test gives server-side parameters no inferred type.
+                null_test.set("this", exp.Cast(this=null_test.this, to=exp.DataType.build("TEXT")))
         self._boolean_values(tree)
         if tree.find(exp.Placeholder):
             for literal in tree.find_all(exp.Literal):
@@ -538,11 +547,18 @@ class _PostgresConnection:
         # SQLite uses 0/1 both for stored flags and selected predicates. Postgres
         # distinguishes integers and booleans, including SUM/MAX of a predicate.
         boolean = (exp.Predicate, exp.And, exp.Or, exp.Not)
-        for node in list(tree.walk()):
+        for node in reversed(list(tree.walk())):
             if isinstance(node, exp.Not) and isinstance(node.this, exp.Column):
                 node.set("this", exp.NEQ(this=node.this, expression=exp.Literal.number(0)))
             if isinstance(node, (exp.Where, exp.Having, exp.If)) and isinstance(node.this, exp.Column):
                 node.set("this", exp.NEQ(this=node.this, expression=exp.Literal.number(0)))
+            if isinstance(node, (exp.And, exp.Or)):
+                for key in ("this", "expression"):
+                    operand = node.args[key]
+                    while isinstance(operand, exp.Paren):
+                        operand = operand.this
+                    if isinstance(operand, exp.Column):
+                        operand.replace(exp.NEQ(this=operand.copy(), expression=exp.Literal.number(0)))
             if isinstance(node, boolean):
                 parent = node.parent
                 while isinstance(parent, (exp.Paren, exp.Alias)):
