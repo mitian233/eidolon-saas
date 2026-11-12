@@ -30,6 +30,7 @@ from tests.fakes import (
     system_of,
 )
 from tests.test_affinity import keep
+from tests.test_affinity_turns import judge_calls, value
 from tests.test_text_turn import send_turn, start_conversation
 
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
@@ -78,6 +79,7 @@ async def prompted(
     *,
     settings: Settings,
     kept: float | None = None,
+    judge_enabled: bool = True,
 ) -> tuple[FakeLLM, httpx.AsyncClient]:
     """Take a turn for each of `judgings`, her affinity `kept` as the first begins if given;
     the chat model, with the prompts it got."""
@@ -90,7 +92,10 @@ async def prompted(
     if kept is not None:
         keep(settings.database_path, "producer", kept, clock.now)
     for i in range(len(judgings)):
-        await send_turn(client, conversation, f"第{i}句", own_keys=JUDGED_KEYS)
+        await send_turn(
+            client, conversation, f"第{i}句",
+            own_keys=JUDGED_KEYS | {"judge_enabled": judge_enabled},
+        )
     return llm, client
 
 
@@ -98,23 +103,28 @@ async def test_in_trust_and_wherever_affinity_is_off_the_prompt_is_as_it_was(
     make_client: ClientFactory, settings: Settings
 ):
     on, _ = await prompted(make_client, [level(2)], settings=settings)
-    # Off, neither her tier nor what she was told is there, however low it is kept.
     off, _ = await prompted(
         make_client, [level(0)], kept=10, settings=replace(settings, affinity_and_gifts=False)
     )
-    no_judge, _ = await prompted(make_client, [level(0)], settings=replace(settings, ))
 
     # Each takes its turn in the same database, after the one before: but for when that was.
-    told_on, told_off, told_no_judge = (
+    told_on, told_off = (
         [line for line in system_of(llm.prompts[0]).splitlines()
          if not line.startswith(LAST_TALKED)]
-        for llm in (on, off, no_judge)
+        for llm in (on, off)
     )
     assert told_on == told_off
-    assert told_no_judge != told_off
-    assert "你现在对对方态度很冷" in about_now(no_judge)
     assert IN_HER_OWN_WAY not in about_now(on)
     assert SWEET_WITHIN_BOUNDS not in about_now(on)
+
+
+async def test_without_judging_existing_affinity_is_kept_and_no_new_judgment_runs(
+    make_client: ClientFactory, settings: Settings
+):
+    await prompted(make_client, [level(0)], kept=30, settings=settings, judge_enabled=False)
+
+    assert judge_calls(settings.database_path) == 0
+    assert value(settings.database_path) == 30
 
 
 async def test_each_tier_but_trust_has_her_speak_as_its_own_in_her_own_way(
