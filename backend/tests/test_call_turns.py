@@ -51,10 +51,12 @@ from eidolon.call_outcome import CallLimits, CallOutcome
 from eidolon.config import EmotionSettings, Settings
 from eidolon.engine import MAX_INPUT_LENGTH
 from eidolon.own_keys import BroughtKeys
+from eidolon.account_api import OwnKeysInput
+from tests.fakes import RETRIEVAL_KEYS
 from eidolon.store import Conversation
 from tests.conftest import ClientFactory, store_in
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     HANG,
     FakeBackgroundLLM,
     FakeEmbedder,
@@ -154,17 +156,18 @@ class CallUnderTest:
         settings = self._settings if emotion is None else replace(self._settings, emotion=emotion)
         clients = FakeServiceClients()
         if affinity is not None:
-            settings = replace(settings, judge=FAKE_JUDGE, affinity_and_gifts=True)
-            clients.judge.judgings = list(affinity)
+            settings = replace(settings, affinity_and_gifts=True)
+            clients.user_judge.judgings = list(affinity)
         backend = build_faked(
             settings, llm, clients=clients, clock=lambda: NOW, emotion_judge=judge,
             **remembering,
         )
         await backend.character_repository.load()
         try:
+            keys = RETRIEVAL_KEYS if remembering else JUDGED_KEYS if judge is not None or affinity is not None else {}
             mano = backend.characters["mano"]
             admission = await backend.admissions.call(
-                self.conversation.user_id, "mano", BroughtKeys()
+                self.conversation.user_id, "mano", OwnKeysInput.model_validate(keys).brought()
             )
             call = Call(self.conversation, mano, admission.llms, muted, "standard")
             outcome = CallOutcome(
