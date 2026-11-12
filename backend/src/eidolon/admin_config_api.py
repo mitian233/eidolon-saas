@@ -272,6 +272,8 @@ class ProxyInput(BaseModel):
     own_tts: StrictBool
     own_stt: StrictBool
     own_image: StrictBool
+    own_embedding: StrictBool = False
+    own_rerank: StrictBool = False
 
 
 class ServiceStatusInput(BaseModel):
