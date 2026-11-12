@@ -10,7 +10,7 @@ import pytest
 
 from eidolon.config import Settings
 from tests.conftest import ClientFactory, character_id
-from tests.fakes import FAKE_JUDGE, START, FakeClock, FakeLLM
+from tests.fakes import START, FakeClock, FakeLLM
 from tests.test_affinity import keep
 from tests.test_stats import meguru, stats  # noqa: F401 (a fixture)
 
@@ -18,7 +18,7 @@ from tests.test_stats import meguru, stats  # noqa: F401 (a fixture)
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """With the judge model, and affinity on in `.env`."""
-    return replace(settings, judge=FAKE_JUDGE, affinity_and_gifts=True)
+    return replace(settings, affinity_and_gifts=True)
 
 
 async def test_each_tier_has_those_in_it_by_tier_alone(
