@@ -100,7 +100,7 @@ from eidolon.affinity import (
     hurt,
     warns,
 )
-from eidolon.affinity_judge import AffinityJudge
+from eidolon.affinity_judge import AffinityJudge, ModelAffinityJudge
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.config import FishAudioModel
@@ -108,8 +108,8 @@ from eidolon.data_access import Database
 from eidolon.gift_catalog import Gift
 from eidolon.her_now import HerNow, KnownNow, Occasion
 from eidolon.judge import JudgeError
-from eidolon.llm import ChatMessage, Reasoning, Tool, ToolCall, TurnLLMs
-from eidolon.memory import Memories
+from eidolon.llm import ChatMessage, Reasoning, Tool, ToolCall, TurnLLMs, TurnServices
+from eidolon.memory import Memories, MemoryServices
 from eidolon.own_keys import OwnKeyFailed
 from eidolon.producer import ProducerProfile, effective_timezone, producer_prompt
 from eidolon.reply_format import (
@@ -468,6 +468,8 @@ class ConversationEngine:
         history_turns: Callable[[], int | None] = lambda: None,
         affinities: Affinities | None = None,
         affinity_judge: AffinityJudge | None = None,
+        retrieval_for: Callable[[TurnServices, str], Awaitable[Retrieval | None]] | None = None,
+        affinity_enabled: Callable[[], bool] = lambda: True,
     ) -> None:
         """Without `retrieval`, turns carry no story or character facts and find no
         memories. Each turn reads only the conversation's latest turns, as many as
@@ -486,6 +488,8 @@ class ConversationEngine:
         self._history_turns = history_turns
         self._affinities = affinities
         self._affinity_judge = affinity_judge
+        self._retrieval_for = retrieval_for
+        self._affinity_enabled = affinity_enabled
         self._her_now = her_now
         self._ended_listeners: list[Callable[[str, EndsFor], None]] = []
         self._cooled_listeners: list[Callable[[str, str, datetime], None]] = []
@@ -524,10 +528,15 @@ class ConversationEngine:
         # A text turn is under way, so that she does not reach out meanwhile; a call is, as
         # long as it lasts.
         taking = self._store.taking_turn(conversation.id) if in_call is None else nullcontext()
+        retrieval = self._retrieval
+        if llms.services is not None:
+            retrieval = None
         try:
+            if llms.services is not None and self._retrieval_for is not None:
+                retrieval = await self._retrieval_for(llms.services, conversation.character_id)
             with taking:
                 async for event in self._reply(
-                    conversation, text, llms, device_timezone, stop, in_call, voiced_by
+                    conversation, text, llms, device_timezone, stop, in_call, voiced_by, retrieval,
                 ):
                     yield event
         except OwnKeyFailed as e:  # theirs to fix, so they are told what went wrong
@@ -537,6 +546,9 @@ class ConversationEngine:
         except Exception:  # the turn has started; report instead of dropping it
             log.exception("turn failed in conversation %s", conversation.id)
             yield TurnFailed(FAILED)
+        finally:
+            if llms.services is not None and retrieval is not None:
+                await retrieval.aclose()
 
     async def _reply(
         self,
@@ -547,6 +559,7 @@ class ConversationEngine:
         stop: asyncio.Event | None,
         in_call: InCall | None,
         voiced_by: FishAudioModel | None,
+        retrieval: Retrieval | None,
     ) -> AsyncIterator[TurnEvent]:
         # The database is read and written on threads all through the turn: waiting on it
         # on the event loop would keep everyone's calls on it from going on meanwhile.
@@ -554,7 +567,12 @@ class ConversationEngine:
         known = await self._her_now.read(
             conversation.user_id, conversation.character_id, device_timezone, occasion
         )
-        read = await self._db.read(self._before_turn, conversation, in_call, self._affinity_on)
+        services = llms.services
+        affinity_on = (
+            self._affinity_on if services is None else
+            self._affinities is not None and self._affinity_enabled() and services.judge is not None
+        )
+        read = await self._db.read(self._before_turn, conversation, in_call, affinity_on)
         if read.ended:
             yield TurnRejected(ENDED)
             return
@@ -571,18 +589,31 @@ class ConversationEngine:
         timezone = effective_timezone(profile, device_timezone)
         judging = affinity is not None and not affinity.cooling
         judged_apart = None
-        if judging and self._retrieval is None and self._affinity_judge:
+        affinity_judge = self._affinity_judge
+        if services is not None:
+            affinity_judge = (
+                ModelAffinityJudge(services.judge, services.judge_thresholds)
+                if services.judge is not None and services.judge_thresholds is not None else None
+            )
+        if judging and retrieval is None and affinity_judge:
             judged_apart = asyncio.ensure_future(_judged(
-                self._affinity_judge, character, history, text, judging
+                affinity_judge, character, history, text, judging
             ))
         try:
+            memory_services = (
+                MemoryServices(
+                    services.embedder, services.reranker,
+                    lambda: services.rerank_thresholds.memories if services.rerank_thresholds else 0.0,
+                ) if services is not None and services.embedder is not None else None
+            )
             memory = await self._memory.begin(
-                conversation, timezone, llms.background, llms.hold_background
+                conversation, timezone, llms.background, llms.hold_background,
+                services=memory_services, own=services is not None,
             )
             retrieved = Retrieved(None)
-            if self._retrieval:
+            if retrieval:
                 recalling = asyncio.Event()
-                retrieving = asyncio.ensure_future(self._retrieval.retrieve(
+                retrieving = asyncio.ensure_future(retrieval.retrieve(
                     character, history, text, memory, judging, False, None, recalling.set,
                 ))
                 try:
@@ -637,7 +668,7 @@ class ConversationEngine:
 
         # Offered on every turn, so that what goes before the history (the tools, with
         # many services) opens every turn's prompt alike, for the service to cache it.
-        tools: list[Tool] = [RECALL_STORY_TOOL] if self._retrieval else []
+        tools: list[Tool] = [RECALL_STORY_TOOL] if retrieval else []
         parser = ReplyParser(bilingual=bilingual)
         step, asked_again = 0, False
         try:
@@ -701,7 +732,7 @@ class ConversationEngine:
                     ChatMessage("assistant", said, tuple(calls), reasoning=tuple(reasoning)),
                 ]
                 for call in calls:
-                    result = await _unless_stopped(stop, self._call_tool, character, call)
+                    result = await _unless_stopped(stop, self._call_tool, character, call, retrieval)
                     if step + 1 == MAX_TOOL_ROUNDS:
                         result = f"{result}\n\n{LAST_ROUND_NOTE}"
                     prompt.append(ChatMessage("tool", result, tool_call_id=call.id))
@@ -844,14 +875,16 @@ class ConversationEngine:
         )
         return message, affinity
 
-    async def _call_tool(self, character: Character, call: ToolCall) -> str:
+    async def _call_tool(
+        self, character: Character, call: ToolCall, retrieval: Retrieval | None = None,
+    ) -> str:
         """The tool's result, or what went wrong, for the model to read: what she recalls."""
-        if call.name != RECALL_STORY_TOOL.name or self._retrieval is None:
+        if call.name != RECALL_STORY_TOOL.name or retrieval is None:
             return f"没有 {call.name} 这个工具。"
         query = (call.arguments or {}).get("query")
         if not isinstance(query, str) or not query.strip():
             return "调用参数有误：需要 query（要回顾的事，一句概括）。"
-        return await self._retrieval.recall_story(character, query.strip())
+        return await retrieval.recall_story(character, query.strip())
 
     def _now_section(
         self,
