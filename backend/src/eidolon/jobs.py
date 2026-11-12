@@ -29,7 +29,20 @@ class JobRunner:
         self, turn_id: int, kind: JobType, action: Callable[[], Awaitable[None]],
     ) -> None:
         try:
-            job = await self._store.create_job(turn_id, kind)
+            await self._execute(turn_id, kind, action)
+        except Exception as error:
+            # Accounting failures cannot turn a completed conversation into a failed one.
+            log.warning("recording %s job for turn %s failed: %s",
+                        kind, turn_id, type(error).__name__)
+
+    async def _execute(
+        self, turn_id: int, kind: JobType, action: Callable[[], Awaitable[None]],
+    ) -> None:
+        creating = asyncio.ensure_future(self._store.create_job(turn_id, kind))
+        try:
+            # Database.write commits even if its waiter is cancelled. Retain the result
+            # so shutdown can mark the resulting row instead of losing its id.
+            job = await asyncio.shield(creating)
             if job is None:  # duplicate submission, or the reply was deleted meanwhile
                 return
             for _ in range(2):
@@ -37,9 +50,6 @@ class JobRunner:
                     return
                 try:
                     await action()
-                except asyncio.CancelledError:
-                    await self._store.finish_job(job.id, "failed", "CancelledError")
-                    raise
                 except Exception as error:
                     # A provider's exception text can repeat a key, endpoint or user input.
                     reason = type(error).__name__
@@ -48,7 +58,8 @@ class JobRunner:
                 else:
                     await self._store.finish_job(job.id, "succeeded")
                     return
-        except Exception as error:
-            # Accounting failures cannot turn a completed conversation into a failed one.
-            log.warning("recording %s job for turn %s failed: %s",
-                        kind, turn_id, type(error).__name__)
+        except asyncio.CancelledError:
+            job = await creating
+            if job is not None:
+                await self._store.finish_job(job.id, "cancelled", "CancelledError")
+            raise
