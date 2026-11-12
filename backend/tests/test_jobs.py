@@ -189,7 +189,7 @@ async def test_running_job_is_visible_and_cancelled_without_retry(job_world: Wor
     cancelled = await world.store.get_job(job.id)
     assert cancelled is not None
     assert (cancelled.status, cancelled.attempts, cancelled.error) == (
-        "failed", 1, "CancelledError",
+        "cancelled", 1, "CancelledError",
     )
 
 
@@ -256,3 +256,52 @@ async def test_deletion_before_submission_does_not_run_or_recreate_the_job(job_w
     await JobRunner(world.store).submit(reply.id, "memory", doing)
     assert not ran
     assert await world.store.jobs_for_turn(reply.id) == []
+
+
+@pytest.mark.parametrize("step, attempts", [("create_job", 0), ("start_job", 1)])
+async def test_cancelling_a_queued_accounting_write_records_cancellation(
+    job_world: World, monkeypatch: pytest.MonkeyPatch, step: str, attempts: int,
+):
+    import threading
+
+    from eidolon.jobs import JobRunner
+
+    world = job_world
+    conversation = await world.conversation("friend")
+    reply = await world.reply(conversation, "你好")
+    entered, release = threading.Event(), threading.Event()
+    waiting = asyncio.Event()
+    original = getattr(world.store, step)
+    blocking: asyncio.Task[None] | None = None
+    ran = False
+
+    def occupy_writer(conn) -> None:
+        entered.set()
+        release.wait()
+
+    async def observed(*args):
+        # Keep the real store write; observe it waiting behind a real queued transaction.
+        nonlocal blocking
+        blocking = asyncio.create_task(world.db.write(occupy_writer))
+        await asyncio.to_thread(entered.wait)
+        waiting.set()
+        return await original(*args)
+
+    async def action() -> None:
+        nonlocal ran
+        ran = True
+
+    monkeypatch.setattr(world.store, step, observed)
+    task = JobRunner(world.store).submit(reply.id, "memory", action)
+    try:
+        await asyncio.wait_for(waiting.wait(), 2)
+        task.cancel()
+    finally:
+        release.set()
+    await asyncio.gather(task, return_exceptions=True)
+    if blocking is not None:
+        await blocking
+    await world.db.write(lambda conn: None)  # queued writes still commit after cancellation
+    [job] = await world.store.jobs_for_turn(reply.id)
+    assert not ran
+    assert (job.status, job.attempts, job.error) == ("cancelled", attempts, "CancelledError")
