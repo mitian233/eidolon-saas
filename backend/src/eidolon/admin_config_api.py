@@ -11,46 +11,8 @@ from pydantic import BaseModel, Field, StrictBool, ValidationError, field_valida
 
 from eidolon.admin_api import Admin
 from eidolon.assembly import Backend
-from eidolon.config import (
-    MAX_IMAGE_CONCURRENCY,
-    BailianRegion,
-    FishAudioModel,
-    GptImageQuality,
-    ImageFormat,
-    JudgeProvider,
-    LLMProtocol,
-    checked_base_url,
-    SttProvider,
-)
-from eidolon.live_config import (
-    AFFINITY,
-    BAR,
-    CHAT_LLM,
-    CYCLES,
-    GPT_IMAGE,
-    IMAGE,
-    JUDGE,
-    JUDGE_THRESHOLDS,
-    LIMITS,
-    MEMORY_LLM,
-    LETTERS,
-    MOMENTS,
-    PROXY,
-    QWEATHER,
-    REACH_OUTS,
-    READ_ONLY,
-    REGISTRATION,
-    RERANK,
-    SCHEDULE,
-    SERVICE_STATUS,
-    STT,
-    STT_KEY_FIELDS,
-    TTS,
-    ConfigInvalid,
-    ConfigRejected,
-    KeysReadOnly,
-    Unavailable,
-)
+from eidolon.config import MAX_IMAGE_CONCURRENCY, FishAudioModel, GptImageQuality, ImageFormat, LLMProtocol, checked_base_url, SttProvider
+from eidolon.live_config import AFFINITY, BAR, CYCLES, LIMITS, LETTERS, MOMENTS, REACH_OUTS, READ_ONLY, REGISTRATION, SCHEDULE, STT, STT_KEY_FIELDS, ConfigInvalid, ConfigRejected, KeysReadOnly, Unavailable
 
 ApiKey = Field(None, min_length=8, max_length=500, pattern=r"^[\x21-\x7e]+$")
 
@@ -139,30 +101,6 @@ class GptImageInput(BaseModel):
     _base_url = field_validator("base_url")(checked_base_url)
 
 
-class JudgeInput(BaseModel):
-    provider: JudgeProvider
-    model: str = Field(min_length=1, max_length=200)
-    account_id: str | None = Field(None, min_length=1, max_length=100)
-    workspace_id: str | None = Field(None, min_length=1, max_length=100)
-    region: BailianRegion | None = None
-    emotion_timeout: float = Field(gt=0, le=30)
-    api_key: str | None = ApiKey
-
-    _trim = field_validator("model")(_trimmed)
-    _trim_workspace = field_validator("workspace_id")(_trimmed_if_given)
-
-
-class JudgeThresholdsInput(BaseModel):
-    recall: float = Field(ge=0, le=1)
-    emotion: float = Field(ge=0, le=1)
-    out_of_line: float = Field(ge=0, le=1)
-    manipulation: float = Field(ge=0, le=1)
-    photo: float = Field(ge=0, le=1)
-
-
-class RerankInput(BaseModel):
-    references: float = Field(ge=0, le=1)
-    memories: float = Field(ge=0, le=1)
 
 
 class LimitsInput(BaseModel):
@@ -298,26 +236,14 @@ class RegistrationInput(BaseModel):
 
 
 INPUTS: dict[str, type[BaseModel]] = {
-    CHAT_LLM: ChatLLMInput,
-    MEMORY_LLM: LLMInput,
-    TTS: TTSInput,
-    STT: STTInput,
-    IMAGE: ImageInput,
-    GPT_IMAGE: GptImageInput,
-    JUDGE: JudgeInput,
-    JUDGE_THRESHOLDS: JudgeThresholdsInput,
-    RERANK: RerankInput,
     LIMITS: LimitsInput,
     AFFINITY: AffinityInput,
     REACH_OUTS: ReachOutsInput,
     LETTERS: LettersInput,
     MOMENTS: MomentsInput,
-    QWEATHER: QWeatherInput,
     SCHEDULE: ScheduleInput,
     CYCLES: CyclesInput,
     BAR: BarInput,
-    PROXY: ProxyInput,
-    SERVICE_STATUS: ServiceStatusInput,
     REGISTRATION: RegistrationInput,
 }
 
@@ -374,19 +300,6 @@ def add_admin_config_routes(app: FastAPI, backend: Backend) -> None:
             raise HTTPException(422, f"试调失败，没有保存：{e}") from None
         return config.describe()
 
-    @app.post("/api/admin/config/{item}/models")
-    async def list_models(item: str, body: LLMListInput, _: Admin) -> dict:
-        """The models the service offers the key, as it lists them, for the model slot
-        `item` to pick one from; 422 saying why not."""
-        if item not in (CHAT_LLM, MEMORY_LLM):
-            raise HTTPException(404, "这一项不是模型")
-        try:
-            models = await config.list_models(
-                item, body.protocol, body.base_url, _trimmed_if_given(body.api_key)
-            )
-        except ConfigRejected as e:
-            raise HTTPException(422, f"获取模型失败：{e}") from None
-        return {"models": models}
 
     @app.delete("/api/admin/config/{item}")
     async def restore(item: str, _: Admin) -> dict:
