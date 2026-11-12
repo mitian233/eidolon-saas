@@ -17,18 +17,8 @@ from eidolon.billing import Billing
 from eidolon.config import EmbeddingSettings, RerankSettings, ServiceName, Settings
 from eidolon.live_config import TRIAL_MAX_TOKENS
 from tests.conftest import ClientFactory
-from tests.fakes import (
-    DEPLOYER_FISH_KEY,
-    FAKE_JUDGE,
-    FakeClock,
-    FakeEmbedder,
-    FakeIdentityProvider,
-    FakeLLM,
-    FakeReranker,
-    FakeServiceClients,
-    FakeSpeech,
-)
-from tests.test_live_config import REPLY, admin_client
+from tests.fakes import DEPLOYER_FISH_KEY, FakeClock, FakeEmbedder, FakeLLM, FakeReranker, FakeServiceClients, FakeSpeech
+from tests.test_live_config import REPLY
 
 STATUS = "/api/service-status"
 SERVICE_STATUS = "/api/admin/config/service_status"
@@ -99,12 +89,8 @@ async def test_a_service_without_calls_is_tried_twice_before_it_is_down_and_once
     llm = FakeLLM(REPLY)
     clients = FakeServiceClients(llm)
     embedder, reranker = FakeEmbedder(), FakeReranker()
-    retrieving = replace(
-        settings,
-        judge=FAKE_JUDGE,
-        embedding=EmbeddingSettings("https://embed.example", "embed", 1536, "sk-embed"),
-        rerank=RerankSettings("sk-rerank"),
-    )
+    retrieving = replace(settings, embedding=EmbeddingSettings("https://embed.example", "embed", 1536, "sk-embed"),
+    rerank=RerankSettings("sk-rerank"),)
     client = make_client(
         llm, settings=retrieving, clock=clock, clients=clients, embedder=embedder,
         reranker=reranker,
@@ -121,7 +107,7 @@ async def test_a_service_without_calls_is_tried_twice_before_it_is_down_and_once
     await backend.service_status.probe_idle()
     again = await statuses(client)
 
-    working = {"judge": "ok", "embedding": "ok", "rerank": "down"}
+    working = {"embedding": "ok", "rerank": "down"}
     assert first == {"chat_llm": "ok", "memory_llm": "ok", "tts": "down", "stt": "ok"} | working
     # The memory model had calls, and was not tried; once they were past, it was.
     assert again == {"chat_llm": "down", "memory_llm": "ok", "tts": "down", "stt": "ok"} | working
@@ -133,7 +119,7 @@ async def test_a_service_without_calls_is_tried_twice_before_it_is_down_and_once
     assert clients.memory_opened.count(trial) == 1  # the memory model is the chat model
     assert len(speech.voiced) == 4
     assert [s for s, _ in speech.checked if s == "soniox"] == ["soniox", "soniox"]
-    assert [kind for _, kind in clients.judge.asked] == ["check", "check"]
+    assert clients.user_judge.asked == []
     assert len(embedder.queries) == 2
     assert len(reranker.calls) == 4
     # Nothing tried is recorded: neither the dashboard's usage nor its costs count it.
@@ -146,40 +132,4 @@ def admins(settings: Settings) -> Settings:
     return replace(settings, admins=frozenset({("github", "1001")}))
 
 
-async def test_admins_choose_which_services_users_are_shown_and_over_how_long(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider, speech: FakeSpeech
-):
-    clients = FakeServiceClients(FakeLLM(REPLY, REPLY))
-    client = await admin_client(
-        lambda *a, **k: make_client(*a, clock=FakeClock(), **k), admins, github, clients
-    )
-    speech.rejects[DEPLOYER_FISH_KEY] = "Fish Audio 返回 503"
-    await backend_of(client).service_status.probe_idle()
-    before = await client.get(STATUS)
 
-    saved = await client.put(SERVICE_STATUS, json=SHOWN | {"window_minutes": 10, "chat_llm": False})
-    after = await client.get(STATUS)
-    refused = await client.put(SERVICE_STATUS, json=SHOWN | {"window_minutes": 15})
-    hidden = await client.put(
-        SERVICE_STATUS, json=SHOWN | {"window_minutes": 10} | dict.fromkeys(
-            ("chat_llm", "memory_llm", "tts", "stt"), False
-        )
-    )
-    none = await client.get(STATUS)
-
-    assert {s["service"]: s["status"] for s in before.json()["services"]}["tts"] == "down"
-    assert saved.status_code == 200, saved.text
-    assert saved.json()["service_status"]["unconfigured"] == ["judge", "embedding", "rerank", "image"]
-    # At once, though users were shown it a moment ago; what the probes found, maybe of a
-    # key since changed, is forgotten until they try again.
-    assert after.json() == {
-        "window_minutes": 10,
-        "services": [
-            {"service": "memory_llm", "status": "idle"},
-            {"service": "tts", "status": "idle"},
-            {"service": "stt", "status": "idle"},
-        ],
-    }
-    assert refused.status_code == 422
-    assert hidden.status_code == 200, hidden.text
-    assert none.json() == {"window_minutes": 10, "services": []}
