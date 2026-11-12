@@ -7,6 +7,7 @@ import { FailureNotice } from "@/components/app/FailureNotice";
 import { LLMProviderPicker, type LLMPick, type ModelLister } from "@/components/app/LLMProviderPicker";
 import { ModelChoiceField } from "@/components/app/ModelChoiceField";
 import { EffortField, ExtraBodyField, useEffortHint } from "@/components/app/ReasoningEffortFields";
+import { OwnJudgeSetting } from "@/components/OwnJudgeSetting";
 import { SettingsSection } from "@/components/app/SettingsSection";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
@@ -48,6 +49,8 @@ import {
   type LLMProtocol,
   type LocalImage,
   type LocalLLM,
+  type LocalEmbedding,
+  type LocalRerank,
   type LocalOwnKeys,
   type LocalTtsKey,
   type OwnService,
@@ -155,6 +158,23 @@ export function OwnKeysSettings() {
           disabled={!canKeep}
           onChecked={(llm) => change(() => keepOwnKey(userId, "llm", llm))}
           onDelete={() => change(() => forgetOwnKey(userId, "llm"))}
+        />
+        <OwnJudgeSetting
+          enabled={kept.judge_enabled === true}
+          disabled={!canKeep || !kept.llm}
+          onChange={(enabled) => change(() => keepOwnKey(userId, "judge_enabled", enabled))}
+        />
+        <Separator />
+        <OwnVectorForm
+          kind="embedding" current={kept.embedding} disabled={!canKeep}
+          onSave={(value) => change(() => keepOwnKey(userId, "embedding", value as LocalEmbedding))}
+          onDelete={() => change(() => forgetOwnKey(userId, "embedding"))}
+        />
+        <Separator />
+        <OwnVectorForm
+          kind="rerank" current={kept.rerank} disabled={!canKeep}
+          onSave={(value) => change(() => keepOwnKey(userId, "rerank", value))}
+          onDelete={() => change(() => forgetOwnKey(userId, "rerank"))}
         />
         {/* 后台模型只附加在自带 LLM 上：没填 LLM 时不显示，删掉 LLM 时一起删掉（`forgetOwnKey`）。 */}
         {kept.llm && (
@@ -804,6 +824,73 @@ function OwnLLMForm({
             canSubmit={!!toTry}
             onCancel={() => setEditing(false)}
           />
+        </FieldGroup>
+      </form>
+    </ServiceKey>
+  );
+}
+
+function OwnVectorForm({ kind, current, disabled, onSave, onDelete }: {
+  kind: "embedding" | "rerank";
+  current: LocalRerank | LocalEmbedding | undefined;
+  disabled: boolean;
+  onSave: (value: LocalRerank | LocalEmbedding) => void;
+  onDelete: () => void;
+}) {
+  const id = useId();
+  const [editing, setEditing] = useState(false);
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [dimensions, setDimensions] = useState("");
+  const embedding = kind === "embedding";
+  const title = embedding ? t.embeddingTitle : t.rerankTitle;
+  const key = apiKey.trim() || current?.api_key || "";
+  const count = Number(dimensions);
+  const valid = baseUrl.trim() && model.trim() && key && (!embedding || (Number.isInteger(count) && count > 0));
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!valid) return;
+    onSave({ base_url: baseUrl.trim().replace(/\/+$/, ""), model: model.trim(), api_key: key, ...(embedding && { dimensions: count }) });
+    setApiKey("");
+    setEditing(false);
+  }
+
+  return (
+    <ServiceKey title={title} hint={embedding ? t.embeddingHint : t.rerankHint}
+      summary={current ? [t.llmCurrent(current.model, current.base_url), t.last4(last4(current.api_key))] : [t.vectorNotSet]}
+      isSet={!!current} editing={editing} disabled={disabled} onDelete={onDelete}
+      onEdit={() => {
+        setBaseUrl(current?.base_url ?? "");
+        setModel(current?.model ?? "");
+        setDimensions(current && "dimensions" in current ? String(current.dimensions) : "");
+        setApiKey("");
+        setEditing(true);
+      }}>
+      <form onSubmit={submit}>
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor={`${id}-url`}>{t.baseUrl}</FieldLabel>
+            <Input id={`${id}-url`} type="url" required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} autoComplete="off" />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`${id}-model`}>{t.model}</FieldLabel>
+            <Input id={`${id}-model`} required value={model} onChange={(event) => setModel(event.target.value)} autoComplete="off" />
+          </Field>
+          {embedding && <Field>
+            <FieldLabel htmlFor={`${id}-dimensions`}>{t.dimensions}</FieldLabel>
+            <Input id={`${id}-dimensions`} type="number" min={1} step={1} required value={dimensions} onChange={(event) => setDimensions(event.target.value)} />
+          </Field>}
+          <Field>
+            <FieldLabel htmlFor={`${id}-key`}>{t.apiKey}</FieldLabel>
+            <Input id={`${id}-key`} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="new-password" />
+            {current && <FieldDescription>{t.keepApiKey}</FieldDescription>}
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            <Button type="submit" disabled={!valid}>{t.vectorSave}</Button>
+            <Button type="button" variant="ghost" onClick={() => setEditing(false)}>{copy.common.cancel}</Button>
+          </div>
         </FieldGroup>
       </form>
     </ServiceKey>
