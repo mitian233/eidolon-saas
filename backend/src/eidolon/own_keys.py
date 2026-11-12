@@ -53,32 +53,40 @@ from urllib.parse import urlsplit
 import httpcore
 import httpx
 
-from eidolon.activity import ActivityLog, ServiceName, llm_origin, metered_llm
+from eidolon.activity import (
+    OWN, ActivityLog, MeteredEmbedder, MeteredReranker, Origin, ServiceName,
+    llm_origin, metered_llm,
+)
 from eidolon.config import (
     DEFAULT_FISH_AUDIO_MODEL,
     DEFAULT_NOVELAI_BASE_URL,
     SERVICES,
     ChatModelSettings,
+    EmbeddingSettings,
     FishAudioModel,
     ImageSettings,
     NOT_AN_ADDRESS,
     LLMProtocol,
     LLMSettings,
+    RerankSettings,
     Service,
     SttKey,
     SttProvider,
 )
-from eidolon.emotion import EmotionJudging
+from eidolon.emotion import EmotionJudging, ModelEmotionJudge
+from eidolon.embedding import EMBEDDING_TIMEOUT, Document, Embedder, EmbeddingError, open_embedder
+from eidolon.judge import LLMJudge, judge_thresholds_for
 from eidolon.image_generation import (
     GENERATION_TIMEOUT,
     ImageFailed,
     ImageGenerator,
     try_image_service,
 )
-from eidolon.llm import ChatLLM, ChatMessage, LLMError, Streamed, Tool, TurnLLMs
+from eidolon.llm import ChatLLM, ChatMessage, LLMError, Streamed, Tool, TurnLLMs, TurnServices
 from eidolon.llm import listing
 from eidolon.llm.providers import check_chat_models, open_chat_models, open_llm
 from eidolon.proxy import POOL_LIMITS, TLS_CONTEXT, OwnAddressed, ProxyRoutes
+from eidolon.rerank import RERANK_TIMEOUT, RerankError, Reranker, SiliconFlowReranker, thresholds_for
 from eidolon.usage import UsageKind
 
 log = logging.getLogger(__name__)
@@ -87,6 +95,8 @@ SERVICE_LABELS: dict[Service, str] = {
     "llm": "LLM",
     "tts": "语音合成（Fish Audio）",
     "stt": "语音识别",
+    "embedding": "向量化",
+    "rerank": "重排",
 }
 STT_PROVIDER_NAMES: dict[SttProvider, str] = {"soniox": "Soniox", "bailian": "阿里云百炼"}
 
@@ -346,6 +356,71 @@ class _HttpsOnly(httpx.AsyncBaseTransport):
         await self._inner.aclose()
 
 
+class OwnRetrievalService:
+    """Shared HTTP pools; endpoints and credentials live only in request adapters."""
+
+    def __init__(
+        self, *, public_only: bool, routes: ProxyRoutes | None = None,
+        known_provider: Callable[[str], bool] = lambda host: False,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._embedding = (
+            httpx.AsyncClient(transport=transport, timeout=EMBEDDING_TIMEOUT, trust_env=False)
+            if transport is not None else _own_client(
+                "own_embedding", EMBEDDING_TIMEOUT, public_only=public_only,
+                routes=routes, known_provider=known_provider,
+            )
+        )
+        self._rerank = (
+            httpx.AsyncClient(transport=transport, timeout=RERANK_TIMEOUT, trust_env=False)
+            if transport is not None else _own_client(
+                "own_rerank", RERANK_TIMEOUT, public_only=public_only,
+                routes=routes, known_provider=known_provider,
+            )
+        )
+
+    def embedder(self, settings: EmbeddingSettings) -> Embedder:
+        return _OwnEmbedder(open_embedder(settings, self._embedding), settings.api_key)
+
+    def reranker(self, settings: RerankSettings) -> Reranker:
+        return _OwnReranker(SiliconFlowReranker(settings.api_key, settings.model, settings.base_url, self._rerank), settings.api_key)
+
+    async def aclose(self) -> None:
+        await self._embedding.aclose()
+        await self._rerank.aclose()
+
+
+class _OwnEmbedder:
+    def __init__(self, embedder: Embedder, key: str) -> None:
+        self._embedder, self._key = embedder, key
+        self.model = embedder.model
+
+    async def embed_query(self, text: str) -> list[float]:
+        with _masked_vector_error(self._key, EmbeddingError):
+            return await self._embedder.embed_query(text)
+
+    async def embed_documents(self, documents: Sequence[Document]) -> list[list[float]]:
+        with _masked_vector_error(self._key, EmbeddingError):
+            return await self._embedder.embed_documents(documents)
+
+
+class _OwnReranker:
+    def __init__(self, reranker: Reranker, key: str) -> None:
+        self._reranker, self._key = reranker, key
+
+    async def rerank(self, query: str, documents: Sequence[str], top_n: int) -> list[tuple[int, float]]:
+        with _masked_vector_error(self._key, RerankError):
+            return await self._reranker.rerank(query, documents, top_n)
+
+
+@contextmanager
+def _masked_vector_error(key: str, error: type[EmbeddingError] | type[RerankError]) -> Iterator[None]:
+    try:
+        yield
+    except Exception as cause:
+        raise error(masked_cause(str(cause), key), transient=getattr(cause, "transient", False)) from None
+
+
 @dataclass(frozen=True)
 class BroughtKeys:
     """The user's own keys a turn or call brings, by service; None for one it does not
@@ -366,6 +441,9 @@ class BroughtKeys:
     image: ImageSettings | None = None
     """For the image service her photos are generated on, at the user's own expense and
     counting towards nothing; in the deployment's art style, one at a time."""
+    embedding: EmbeddingSettings | None = None
+    rerank: RerankSettings | None = None
+    judge_enabled: bool = False
 
     def __post_init__(self) -> None:
         assert self.memory_llm is None or self.llm is not None
@@ -504,6 +582,7 @@ class OwnKeys:
         *,
         exempting: Callable[[], frozenset[Service]],
         image_service: OwnImageService | None = None,
+        retrieval_service: OwnRetrievalService | None = None,
     ) -> None:
         """Each request to a user's own LLM is recorded in `activity` as a service call
         on their own key; the deployer's models are recorded as `deployer` leases them.
@@ -515,6 +594,7 @@ class OwnKeys:
         self._speech_check = speech_check
         self._exempting = exempting
         self._image_service = image_service
+        self._retrieval_service = retrieval_service
 
     def for_turn(self, brought: BroughtKeys) -> TurnKeys:
         """Whose keys a text turn bringing `brought` runs on: the user's own LLM, if it
@@ -547,7 +627,8 @@ class OwnKeys:
             raise
         return CallKeys(
             llms, stt, tts, own, self.exempt("call", brought.services), lease.release,
-            tts_model, deployer.emotions, own_llm=brought.llm is not None,
+            tts_model, self._emotions(llms) if llms.services is not None else deployer.emotions,
+            own_llm=brought.llm is not None,
         )
 
     def for_read_aloud(self, brought: BroughtKeys) -> ReadAloudKeys:
@@ -657,9 +738,41 @@ class OwnKeys:
             return TurnLLMs(chat, memory, deployer.hold_background)
         chat_settings = own_llm.call if call else own_llm.text
         memory_settings = brought.memory_llm or own_llm.text
+        services = self._services(brought)
         return TurnLLMs(
-            self._own_llm("chat_llm", chat_settings), self._own_llm("memory_llm", memory_settings)
+            self._own_llm("chat_llm", chat_settings), self._own_llm("memory_llm", memory_settings),
+            services=services,
         )
+
+    def _services(self, brought: BroughtKeys) -> TurnServices:
+        embedding, reranker = None, None
+        if self._retrieval_service is not None:
+            if brought.embedding is not None:
+                embedding = MeteredEmbedder(
+                    self._retrieval_service.embedder(brought.embedding), self._activity,
+                    Origin("embedding", OWN, OWN, own_key=True),
+                )
+            if brought.rerank is not None:
+                reranker = MeteredReranker(
+                    self._retrieval_service.reranker(brought.rerank), self._activity,
+                    Origin("rerank", OWN, OWN, own_key=True),
+                )
+        judge, thresholds = None, None
+        if brought.llm is not None and brought.judge_enabled:
+            settings = replace(brought.llm.text, reasoning_effort="low", max_tokens=1024, extra_body=None)
+            judge = LLMJudge(self._own_llm("judge", settings))
+            thresholds = judge_thresholds_for(settings.model)
+        return TurnServices(
+            embedding, reranker, judge, thresholds,
+            thresholds_for(brought.rerank) if brought.rerank is not None else None,
+        )
+
+    @staticmethod
+    def _emotions(llms: TurnLLMs) -> EmotionJudging | None:
+        services = llms.services
+        if services is None or services.judge is None or services.judge_thresholds is None:
+            return None
+        return EmotionJudging(ModelEmotionJudge(services.judge), services.judge_thresholds.emotion, 5.0)
 
     def _own_llm(self, service: ServiceName, settings: LLMSettings) -> ChatLLM:
         """The user's own LLM `settings` describe, its every request recorded."""
