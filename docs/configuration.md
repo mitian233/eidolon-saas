@@ -2,7 +2,7 @@
 
 Eidolon-SaaS 是公益 BYOK 服务：**平台零凭据也能启动和服务**。所有第三方 key 都可选——不配时每个回合用用户自带的 key；配了部署者的 key 就作兜底（用户没带时用部署者的）。环境变量的完整清单和写法见仓库根目录 [`.env.example`](../.env.example)，部署步骤见 [deploy.md](deploy.md)。
 
-有后台时（设了 `EIDOLON_ADMINS`，或开着开发登录），模型、key、限额等很多项也可以在 `/admin` 后台改：后台改过的项优先于 `.env`，之后再改 `.env` 的同一项不生效，要先在后台恢复。启动日志列出被后台覆盖的项。
+有后台时（设了 `EIDOLON_ADMINS`，或开着开发登录），可在 `/admin` 修改限额、玩法开关和注册方式。后台不再展示或接受平台模型、语音、向量、重排、判断及天气服务的凭据；用户自己的 key 只在用户浏览器里填写。后台改过的运营设置优先于 `.env`，要重新使用 `.env` 的值可在后台恢复。
 
 ## 数据库
 
@@ -86,6 +86,8 @@ key 只存在浏览器里，回合/通话期间随请求带给后端、在进程
 - `EIDOLON_HISTORY_TURNS`：每回合带给模型的历史回合数下限（默认 20，0 为整段对话）。
 - `EIDOLON_SECRET_KEY`：加密后台保存的 key、给封禁名单做哈希；`openssl rand -hex 32`，填了不要换。用户的自带密钥跟它无关。
 
+后台配置页仅提供限额、玩法开关和注册设置。模型、语音、向量化、重排、天气等平台凭据不会出现在 `/api/admin/config` 响应中，也不能通过后台配置接口保存；旧的模型和网络配置标签已移除。
+
 ## 部署者的模型（可选兜底）
 
 对话模型 `CHAT_LLM_BASE_URL`/`API_KEY`/`MODEL` 三项要么都填、要么都不填；配了就要支持流式输出和工具调用（启动时检查）。`CHAT_LLM_PROTOCOL` 三选一：`chat-completions`（默认）、`responses`、`anthropic`。可选 `CHAT_LLM_MAX_TOKENS`、`CHAT_LLM_REASONING_EFFORT`、`CHAT_LLM_CALL_REASONING_EFFORT`、`CHAT_LLM_EXTRA_BODY`。
@@ -100,7 +102,9 @@ key 只存在浏览器里，回合/通话期间随请求带给后端、在进程
 - 重排可不填：按向量相似度取前几条。填写时用支持 SiliconFlow `/rerank` 格式的端点，输入 `{model, query, documents, top_n}`，输出 `results[].index/relevance_score`。OpenRouter 没有此接口。已校准模型继续使用原来的资料/记忆阈值，未知模型沿用 Qwen3-Reranker-4B 的 `0.7 / 0.005`。
 - 判断功能默认关闭。在设置页开启后，用用户对话 LLM 的同一模型与 key，以 `reasoning_effort=low` 发一次小请求，沿用召回的三个是非题与阈值；通话逐段表情也使用此模型。关闭或未配 LLM 时好感度不再更新、通话表情使用默认值，有向量端点时仍提供 `recall_story` 工具。已保存的好感度仍显示，既有冷却继续阻止新回合，不能通过关闭判断功能绕过。设置页会明确显示是否关闭及调用费用由用户承担。
 
-部署者不需要配置向量化、重排或判断模型的 key。`EMBEDDING_PROVIDER` 和 Gemini 原生向量接口已移除；旧的 `JUDGE_PROVIDER`、`JEV_*`、Cloudflare/百炼判断模型变量不再影响启动与用户请求。底层组件保留 `EMBEDDING_BASE_URL/MODEL/DIMENSIONS/API_KEY`、`RERANK_BASE_URL/MODEL/API_KEY` 读取入口，供本机直接使用；不会成为用户端点的兜底。
+通话的判断阈值与最长等待时间继续用 `JUDGE_EMOTION_MIN_PROBABILITY`、`JUDGE_EMOTION_TIMEOUT`（默认 1.5 秒）调整。显式设置的情绪阈值优先；未设置才使用模型阈值，未知模型沿用默认阈值。旧的 `JEV_EMOTION_MIN_PROBABILITY`、`JEV_EMOTION_TIMEOUT` 已废弃，可删除，残留值会被忽略。
+
+部署者不需要配置向量化、重排或判断模型的 key。`EMBEDDING_PROVIDER` 和 Gemini 原生向量接口已移除。旧判断变量 `JUDGE_PROVIDER`、`JEV_API_KEY`、`JEV_MODEL`、`JEV_BASE_URL`、`AI_GATEWAY_API_KEY`、`AI_GATEWAY_BASE_URL`、`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_JUDGE_MODEL`、`BAILIAN_JUDGE_API_KEY`、`BAILIAN_JUDGE_WORKSPACE_ID`、`BAILIAN_JUDGE_REGION`、`BAILIAN_JUDGE_MODEL` 已废弃，可从 `.env` 删除；残留值会被忽略，既不会导致启动失败，也不会产生平台判断调用。底层组件保留 `EMBEDDING_BASE_URL/MODEL/DIMENSIONS/API_KEY`、`RERANK_BASE_URL/MODEL/API_KEY` 读取入口，供本机直接使用；不会成为用户端点的兜底。
 
 代理新增 `own_embedding` 与 `own_rerank` 两个开关，沿用已知服务商才经代理、其他用户端点直连的规则。走用户 key 的向量化、重排与判断请求记录为用户自带服务，不计平台限额。
 
@@ -121,7 +125,7 @@ WebRTC：`EIDOLON_ICE_SERVERS`（默认 Google 公共 STUN）、`EIDOLON_TURN_UR
 
 ## 网络代理与服务状态
 
-见 [deploy.md「网络和代理」](deploy.md#网络和代理)。`EIDOLON_PROXY_URL` + `EIDOLON_PROXY_SERVICES`；后台「网络」标签可改。
+见 [deploy.md「网络和代理」](deploy.md#网络和代理)。`EIDOLON_PROXY_URL` + `EIDOLON_PROXY_SERVICES` 在服务器设置，后台不再提供「网络」标签。
 
 服务状态（对话列表铃铛旁给用户看各项服务正不正常）：`EIDOLON_STATUS_SERVICES`（逗号分隔，`all`/`none`）、`EIDOLON_STATUS_WINDOW_MINUTES`（10/30/60，默认 30）。没配的服务自动不显示。
 
