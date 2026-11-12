@@ -41,7 +41,7 @@ import json
 import logging
 import os
 import sqlite3
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
@@ -54,64 +54,12 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from eidolon.activity import (
     ActivityLog,
-    MeteredAffinityJudge,
-    MeteredEmotionJudge,
-    MeteredJudge,
-    judge_origin,
     llm_origin,
     metered_llm,
 )
-from eidolon.characters import Character
 from eidolon.clock import Clock
-from eidolon.config import (
-    CLOUDFLARE_JUDGE_MODELS,
-    DEFAULT_MAP_SITE,
-    DEFAULT_MOMENT_REPLIES_PER_DAY,
-    DEFAULT_MOMENTS_PER_DAY,
-    MAP_SITES,
-    DEFAULT_REACH_OUTS_PER_DAY,
-    DEFAULT_BAILIAN_JUDGE_REGION,
-    ChatModelSettings,
-    DEFAULT_JEV_BASE_URL,
-    FISH_AUDIO_MODELS,
-    BailianJudgeSettings,
-    CloudflareJudgeSettings,
-    GptImageSettings,
-    ImageSettings,
-    JevSettings,
-    JudgeSettings,
-    EXEMPTING_SERVICES,
-    LLMProtocol,
-    LLMSettings,
-    OWN_KEYS_PROXIED,
-    PROXIED_SERVICES,
-    REGISTRATIONS,
-    SERVICE_NAMES,
-    STATUS_WINDOWS,
-    ProxiedService,
-    ProxySettings,
-    QWEATHER_FIELDS,
-    QWeatherSettings,
-    qweather_host,
-    MomentSettings,
-    ReachOutSettings,
-    Registration,
-    Service,
-    ServiceName,
-    ServiceStatusSettings,
-    Settings,
-    SttKey,
-    UsageLimits,
-    checked_extra_body,
-    checked_proxy_url,
-    effort_problem,
-    split_proxy_password,
-    with_proxy_password,
-)
+from eidolon.config import DEFAULT_MAP_SITE, DEFAULT_MOMENT_REPLIES_PER_DAY, DEFAULT_MOMENTS_PER_DAY, MAP_SITES, DEFAULT_REACH_OUTS_PER_DAY, ChatModelSettings, FISH_AUDIO_MODELS, GptImageSettings, ImageSettings, EXEMPTING_SERVICES, LLMProtocol, LLMSettings, PROXIED_SERVICES, REGISTRATIONS, SERVICE_NAMES, STATUS_WINDOWS, ProxiedService, ProxySettings, QWEATHER_FIELDS, QWeatherSettings, qweather_host, MomentSettings, ReachOutSettings, Registration, Service, ServiceName, ServiceStatusSettings, Settings, SttKey, UsageLimits, checked_extra_body, checked_proxy_url, effort_problem, split_proxy_password, with_proxy_password
 from eidolon.data_access import Database
-from eidolon.affinity import Days, Judged
-from eidolon.affinity_judge import ModelAffinityJudge
-from eidolon.emotion import EmotionJudging, ModelEmotionJudge
 from eidolon.image_generation import (
     GENERATION_TIMEOUT,
     GPT_GENERATION_TIMEOUT,
@@ -121,25 +69,13 @@ from eidolon.image_generation import (
     try_gpt_image,
     try_image_service,
 )
-from eidolon.judge import (
-    CLOUDFLARE_API_URL,
-    JudgeError,
-    JudgeModel,
-    JudgeThresholds,
-    judge_thresholds,
-    same_judge_family,
-    try_judge_model,
-    warn_if_uncalibrated,
-)
 from eidolon.llm import ChatLLM, ChatModels, LLMError
 from eidolon.llm.providers import check_chat_llm, check_chat_models
 from eidolon.own_keys import DeployerKeys, DeployerLease, KeyCheck, OwnKeyRejected, _no_hold
 from eidolon.qweather import QWeather, QWeatherFailed, private_key_body
 from eidolon.proxy import ProxyRoutes, Unreachable, reach as reach_provider
 from eidolon.rerank import DEFAULT_THRESHOLDS, RerankThresholds, thresholds_for
-from eidolon.retrieval import ModelRetrievalJudge, Need
 from eidolon.service_clients import Lease, ServiceClients, Swappable
-from eidolon.store import Message
 
 log = logging.getLogger(__name__)
 
@@ -153,8 +89,6 @@ TTS = "tts"
 STT = "stt"
 IMAGE = "image"
 GPT_IMAGE = "gpt_image"
-JUDGE = "judge"
-JUDGE_THRESHOLDS = "judge_thresholds"
 RERANK = "rerank"
 LIMITS = "limits"
 AFFINITY = "affinity"
@@ -584,106 +518,6 @@ class _GptImage(_Item):
         except ImageFailed as e:
             raise ConfigRejected(e.detail[:MAX_REASON_LENGTH]) from None
         return values, None
-
-
-class _Judge(_Item):
-    name = JUDGE
-    fields = ("provider", "api_key", "model", "account_id", "workspace_id", "region", "emotion_timeout")
-    secrets = frozenset({"api_key"})
-    _per_service = ("api_key", "account_id", "workspace_id", "region")
-    """What each service has of its own, and another cannot use."""
-    unavailable_reason = (
-        ".env 里没有配置判断模型，检索、记忆和通话中的情绪判断在启动时就关掉了；"
-        "要启用，请在 .env 里配置后重启"
-    )
-
-    def available(self) -> bool:
-        return self.c.settings.judge is not None
-
-    def env(self) -> Values:
-        judge = self.c.settings.judge
-        values: Values = {field: None for field in self._per_service} | {
-            "emotion_timeout": self.c.settings.emotion.timeout
-        }
-        if isinstance(judge, CloudflareJudgeSettings):
-            return values | {"provider": "cloudflare", "api_key": judge.api_token,
-                             "model": judge.model, "account_id": judge.account_id}
-        if isinstance(judge, BailianJudgeSettings):
-            return values | {"provider": "bailian", "api_key": judge.api_key, "model": judge.model,
-                             "workspace_id": judge.workspace_id, "region": judge.region}
-        assert judge is not None
-        return values | {"provider": "jev", "api_key": judge.api_key, "model": judge.model}
-
-    def candidate(self, current: Values, change: Values) -> Values:
-        env = self.env()
-        values = current | change
-        provider = values["provider"]
-        if provider != current["provider"]:
-            # Another service's key, account and workspace cannot be the ones in effect.
-            for field in self._per_service:
-                if field not in change:
-                    values[field] = env[field] if env["provider"] == provider else None
-            if "api_key" not in change and values["api_key"] is None:
-                raise ConfigInvalid("换了判断模型的服务，需要填写它的 key")
-        if provider != "cloudflare":
-            values["account_id"] = None
-        if provider != "bailian":
-            values["workspace_id"] = values["region"] = None
-        if provider == "cloudflare":
-            if not values["account_id"]:
-                raise ConfigInvalid("Cloudflare 需要填写账号 ID（account_id）")
-            if values["model"] not in CLOUDFLARE_JUDGE_MODELS:
-                raise ConfigInvalid(
-                    f"Cloudflare 的判断模型只能是 {'、'.join(CLOUDFLARE_JUDGE_MODELS)}"
-                )
-        if provider == "bailian":
-            if not values["workspace_id"]:
-                raise ConfigInvalid("阿里云百炼需要填写业务空间 ID（workspace_id）")
-            values["region"] = values["region"] or DEFAULT_BAILIAN_JUDGE_REGION
-        return values
-
-    async def tried(self, values: Values) -> tuple[Values, Any]:
-        model = self.c._clients.judge_model(self.c._judge_settings(values))
-        try:
-            await try_judge_model(model)
-        except JudgeError as e:
-            await model.aclose()
-            raise ConfigRejected(str(e)[:MAX_REASON_LENGTH]) from None
-        return values, model
-
-    async def apply(self, values: Values, prepared: Any = None) -> None:
-        if self.c._judge is not None:
-            settings = self.c._judge_settings(values)
-            await self.c._judge.replace(
-                prepared or self.c._clients.judge_model(settings), settings
-            )
-        elif prepared is not None:
-            await prepared.aclose()
-
-    async def retry(self, values: Values) -> Values:
-        if self.c._judge is not None:
-            try:
-                await try_judge_model(self.c._judge.current)
-            except JudgeError as e:
-                raise ConfigRejected(str(e)[:MAX_REASON_LENGTH]) from None
-        return values
-
-
-class _JudgeThresholds(_Item):
-    name = JUDGE_THRESHOLDS
-    fields = ("recall", "emotion", "out_of_line", "manipulation", "photo")
-    stored = (FOR_MODEL,)
-    unavailable_reason = _Judge.unavailable_reason
-
-    def available(self) -> bool:
-        return self.c.settings.judge is not None
-
-    def env(self) -> Values:
-        thresholds = judge_thresholds(self.c.judge_settings, self.c.settings.emotion)
-        return {field: getattr(thresholds, field) for field in self.fields}
-
-    def bound_model(self) -> str | None:
-        return self.c.effective(JUDGE)["model"]
 
 
 class _Rerank(_Item):
@@ -1157,7 +991,7 @@ class LiveConfig:
             for item in (
                 # The proxy first: as the server starts, the services are tried through it.
                 _Proxy(self), _ChatLLM(self), _MemoryLLM(self), _TTS(self), _STT(self),
-                _Image(self), _GptImage(self), _Judge(self), _JudgeThresholds(self), _Rerank(self),
+                _Image(self), _GptImage(self), _Rerank(self),
                 _Limits(self), _Affinity(self), _ReachOuts(self), _Letters(self), _Moments(self), _QWeather(self), _Schedule(self),
                 _Cycles(self), _Bar(self), _ServiceStatus(self), _Registration(self),
             )
@@ -1182,10 +1016,6 @@ class LiveConfig:
         self._memory: Swappable[ChatLLM, LLMSettings] | None = (
             Swappable(clients.memory_llm(memory), memory) if memory is not None else None
         )
-        self._judge: Swappable[JudgeModel, JudgeSettings] | None = None
-        if (judge := self.judge_settings) is not None:
-            self._judge = Swappable(clients.judge_model(judge), judge)
-            warn_if_uncalibrated(judge.model)
 
     @property
     def keys_editable(self) -> bool:
@@ -1203,28 +1033,6 @@ class LiveConfig:
         """The deployer's memory model in effect now; None without one."""
         values = self.effective(MEMORY_LLM)
         return _llm(values) if values["base_url"] else None
-
-    @property
-    def judge_settings(self) -> JudgeSettings | None:
-        """The judge model in effect now; None without one."""
-        if self.settings.judge is None:
-            return None
-        return self._judge_settings(self.effective(JUDGE))
-
-    @property
-    def judge_thresholds(self) -> JudgeThresholds:
-        """What the judge model in effect now judges by."""
-        return self.judge_thresholds_of(self.judge_settings)
-
-    def judge_thresholds_of(self, judge: JudgeSettings | None) -> JudgeThresholds:
-        """What the judge model `judge` judges by: its own thresholds, overridden by
-        those set in the admin console if they hold for it."""
-        thresholds = judge_thresholds(judge, self.settings.emotion)
-        item = self._items[JUDGE_THRESHOLDS]
-        if judge is None or not self._in_effect(item, judge.model):
-            return thresholds
-        override = self._overrides[JUDGE_THRESHOLDS]
-        return replace(thresholds, **{k: v for k, v in override.items() if k in item.fields})
 
     @property
     def rerank_thresholds(self) -> RerankThresholds:
@@ -1332,7 +1140,7 @@ class LiveConfig:
             case "stt":
                 return self.stt_key is not None
             case "judge":
-                return self._judge is not None
+                return False
             case "embedding":
                 return self.settings.embedding is not None
             case "rerank":
@@ -1368,10 +1176,6 @@ class LiveConfig:
         finally:
             await memory.aclose()
 
-    def lease_judge(self) -> Lease[JudgeModel, JudgeSettings] | None:
-        """A hold on the judge model in effect now, to try it: what is asked of it is not
-        recorded. None without one."""
-        return None if self._judge is None else self._judge.lease()
 
     @property
     def image_settings(self) -> ImageSettings | None:
@@ -1457,16 +1261,6 @@ class LiveConfig:
         memory = self._memory.lease() if self._memory is not None else None
         held: list[Lease[Any, Any]] = [hold for hold in (chat, memory) if hold is not None]
         emotions = None
-        if self._judge is not None:
-            judge = self._judge.lease()
-            held.append(judge)
-            emotions = EmotionJudging(
-                MeteredEmotionJudge(
-                    ModelEmotionJudge(judge.client), self._activity, judge_origin(judge.settings)
-                ),
-                self.judge_thresholds_of(judge.settings).emotion,
-                self.effective(JUDGE)["emotion_timeout"],
-            )
         tts = self.effective(TTS)
         keys = DeployerKeys(
             metered_llm(
@@ -1484,20 +1278,6 @@ class LiveConfig:
         )
         return DeployerLease(keys, lambda: _release(held))
 
-    def retrieval_judge(self) -> "LiveRetrievalJudge | None":
-        """The judge model as retrieval asks it, the one in effect at each question, each
-        recorded as a service call; None without one."""
-        if self._judge is None:
-            return None
-        return LiveRetrievalJudge(self, self._judge, self._activity)
-
-    def affinity_judge(self) -> "LiveAffinityJudge | None":
-        """The judge model as a turn asks it about affinity or a photo apart, where retrieval
-        is off: the one in effect at each question, each recorded as a service call; None
-        without one."""
-        if self._judge is None:
-            return None
-        return LiveAffinityJudge(self, self._judge, self._activity)
 
     async def start(self) -> None:
         """Try every override as the server starts: one that fails falls back to `.env`,
@@ -1525,8 +1305,6 @@ class LiveConfig:
             except ConfigRejected as e:
                 self._failures[item.name] = str(e)
                 await item.apply(self.effective(item.name))
-                if item.name == JUDGE:
-                    await self._judge_changed(values, self.effective(item.name), clear=False)
                 log.warning(
                     "the admin console's override of %s failed, so .env's is used until an"
                     " admin fixes or restores it: %s",
@@ -1537,7 +1315,8 @@ class LiveConfig:
                 self._overrides[item.name] |= {k: kept[k] for k in item.stored}
         in_effect = [
             name for name in sorted(self._rows)
-            if self._in_effect(self._items[name.split(".")[0]])
+            if name.split(".")[0] in self._items
+            and self._in_effect(self._items[name.split(".")[0]])
             and not name.endswith(f".{FOR_MODEL}")
         ]
         if in_effect:
@@ -1547,42 +1326,24 @@ class LiveConfig:
             )
 
     def describe(self) -> dict[str, Any]:
-        """What the admin console shows: for each item, `.env`'s value, the one in effect,
-        the override if any and its status. Of a key, only its last 4 characters."""
-        described: dict[str, Any] = {"keys_editable": self.keys_editable}
-        for name, item in self._items.items():
+        """What the admin console shows of limits and gameplay switches."""
+        visible = (LIMITS, AFFINITY, REACH_OUTS, LETTERS, MOMENTS, SCHEDULE, CYCLES, BAR, REGISTRATION)
+        described: dict[str, Any] = {}
+        for name in visible:
+            item = self._items[name]
             if not item.available():
                 described[name] = {"unavailable": item.unavailable_reason}
                 continue
             override = self._overrides.get(name)
             failure = self._failures.get(name)
-            if override is not None and failure is None and not self._bound_holds(item):
-                failure = (
-                    f"这项覆盖是为 {override.get(FOR_MODEL)} 设的，现在用的是"
-                    f" {item.bound_model()}，所以没有生效"
-                )
             status: Status = "failed" if failure else "env" if override is None else "overridden"
-            entry = {
+            described[name] = {
                 "status": status,
                 "env": item.shown(item.env()),
                 "effective": item.shown(self.effective(name)),
                 "override": item.shown(override) if override else None,
                 "failure": failure,
             }
-            if name == MEMORY_LLM:
-                entry["follows_chat"] = self._memory_follows()
-            if name == SERVICE_STATUS:
-                entry["unconfigured"] = [s for s in SERVICE_NAMES if not self.has_service(s)]
-            if name == PROXY:
-                targets = self._proxy_targets()
-                own = OWN_KEYS_PROXIED.values()
-                entry["unconfigured"] = [
-                    s for s in PROXIED_SERVICES if s not in targets and s not in own
-                ]
-            if item.bound_model() is not None:
-                entry["model"] = item.bound_model()
-            described[name] = entry
-        described["read_only"] = self._read_only()
         return described
 
     async def save(self, name: str, change: Values) -> None:
@@ -1599,7 +1360,6 @@ class LiveConfig:
         async with self._changing:
             current = self.effective(name)
             values = item.candidate(current, change)
-            _check_ranges(item, values)
             values, prepared = await item.tried(values)
             if item.bound_model() is not None:
                 values[FOR_MODEL] = item.bound_model()
@@ -1628,19 +1388,9 @@ class LiveConfig:
 
     async def _changed(self, name: str, before: dict[str, Any], after: dict[str, Any]) -> None:
         """Item `name` went from `before` to `after`."""
-        if name == JUDGE:
-            await self._judge_changed(before, after, clear=True)
         for listener in self._listeners:
             await listener()
 
-    async def _judge_changed(self, before: Values, after: Values, *, clear: bool) -> None:
-        """The judge model went from `before`'s to `after`'s: a model not calibrated is
-        warned of, and with `clear`, thresholds that no longer hold for it go."""
-        if after["model"] == before["model"]:
-            return
-        warn_if_uncalibrated(after["model"])
-        if clear and not same_judge_family(before["model"], after["model"]):
-            await self._delete(JUDGE_THRESHOLDS)
 
     async def aclose(self) -> None:
         await self.qweather.aclose()
@@ -1648,19 +1398,6 @@ class LiveConfig:
             await self._chat.aclose()
         if self._memory is not None:
             await self._memory.aclose()
-        if self._judge is not None:
-            await self._judge.aclose()
-
-    def _judge_settings(self, values: Values) -> JudgeSettings:
-        if values["provider"] == "cloudflare":
-            return CloudflareJudgeSettings(values["api_key"], values["account_id"], values["model"])
-        if values["provider"] == "bailian":
-            return BailianJudgeSettings(
-                values["api_key"], values["workspace_id"], values["region"], values["model"]
-            )
-        env = self.settings.judge
-        base_url = env.base_url if isinstance(env, JevSettings) else DEFAULT_JEV_BASE_URL
-        return JevSettings(values["api_key"], values["model"], base_url)
 
     def _memory_follows(self) -> bool:
         """Whether the memory model is the chat model in effect: `.env` has it nowhere
@@ -1732,11 +1469,6 @@ class LiveConfig:
         memory = self.memory_llm
         if memory is not None:
             targets["memory_llm"] = memory.base_url
-        judge = self.judge_settings
-        if isinstance(judge, CloudflareJudgeSettings):
-            targets["judge"] = CLOUDFLARE_API_URL
-        elif judge is not None:
-            targets["judge"] = judge.base_url
         if self.settings.embedding is not None:
             targets["embedding"] = self.settings.embedding.base_url
         if self.settings.rerank is not None:
@@ -1789,8 +1521,6 @@ class LiveConfig:
         if bound is None:
             return True
         set_for = self._overrides.get(item.name, {}).get(FOR_MODEL)
-        if item.name == JUDGE_THRESHOLDS:
-            return set_for is not None and same_judge_family(set_for, bound)
         return set_for == bound
 
     def _overridden(self, name: str) -> bool:
@@ -1883,75 +1613,6 @@ class LiveConfig:
         return [{"name": k, "value": values[k], "why": why} for k, why in READ_ONLY.items()]
 
 
-class LiveRetrievalJudge:
-    """The judge model as retrieval asks it: at each question, the one in effect then,
-    held while it answers, by its own thresholds, recorded as the model it is."""
-
-    def __init__(
-        self,
-        config: LiveConfig,
-        judge: Swappable[JudgeModel, JudgeSettings],
-        activity: ActivityLog,
-    ) -> None:
-        self._config = config
-        self._judge = judge
-        self._activity = activity
-
-    async def judge(
-        self,
-        character: Character,
-        history: Sequence[Message],
-        text: str,
-        affinity: bool = False,
-        photo: bool = False,
-        days: Days | None = None,
-    ) -> tuple[Need, Judged | None, bool]:
-        lease = self._judge.lease()
-        try:
-            judge = MeteredJudge(
-                ModelRetrievalJudge(lease.client, self._config.judge_thresholds_of(lease.settings)),
-                self._activity,
-                judge_origin(lease.settings),
-            )
-            return await judge.judge(character, history, text, affinity, photo, days)
-        finally:
-            lease.release()
-
-
-class LiveAffinityJudge:
-    """The judge model as a turn asks it about affinity or a photo apart, where retrieval is
-    off: at each question, the one in effect then, held while it answers, by its own
-    thresholds, recorded as the model it is."""
-
-    def __init__(
-        self,
-        config: LiveConfig,
-        judge: Swappable[JudgeModel, JudgeSettings],
-        activity: ActivityLog,
-    ) -> None:
-        self._config = config
-        self._judge = judge
-        self._activity = activity
-
-    async def judge(
-        self,
-        character: Character,
-        history: Sequence[Message],
-        text: str,
-        affinity: bool = True,
-        photo: bool = False,
-        days: Days | None = None,
-    ) -> tuple[Judged | None, bool]:
-        lease = self._judge.lease()
-        try:
-            judge = MeteredAffinityJudge(
-                ModelAffinityJudge(lease.client, self._config.judge_thresholds_of(lease.settings)),
-                self._activity,
-                judge_origin(lease.settings),
-            )
-            return await judge.judge(character, history, text, affinity, photo, days)
-        finally:
-            lease.release()
 
 
 def _open(db: sqlite3.Connection) -> dict[str, _Row]:
@@ -1984,13 +1645,6 @@ def _forget(db: sqlite3.Connection, name: str) -> None:
     """Delete the overrides of the item `name`."""
     db.execute("DELETE FROM config_overrides WHERE name LIKE ?", (f"{name}.%",))
 
-
-def _check_ranges(item: _Item, values: Values) -> None:
-    """Thresholds are probabilities and scores, from 0 to 1."""
-    if isinstance(item, _JudgeThresholds | _Rerank):
-        for field in item.fields:
-            if not 0 <= values[field] <= 1:
-                raise ConfigInvalid("阈值需要在 0 到 1 之间")
 
 
 def _release(held: list[Lease[Any, Any]]) -> None:
