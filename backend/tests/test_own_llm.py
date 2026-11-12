@@ -15,7 +15,7 @@ import pytest
 
 from eidolon.config import ChatModelSettings, LLMSettings, Settings, UsageLimits
 from eidolon.llm import ChatMessage, LLMError
-from eidolon.own_keys import ProviderLLMService, PublicOnlyBackend
+from eidolon.own_keys import OwnRetrievalService, ProviderLLMService, PublicOnlyBackend
 from tests.browser import Browser
 from tests.conftest import ClientFactory
 from tests.fakes import (
@@ -40,6 +40,7 @@ LLM = {
     "model": "my-model",
     "protocol": "chat-completions",
 }
+EMBEDDING = {"base_url": "https://vectors.example/v1", "api_key": "vector-secret", "model": "user-vector", "dimensions": 2}
 
 
 THINKING = LLM | {
@@ -96,16 +97,17 @@ async def test_a_turn_bringing_an_own_llm_plays_on_it_and_one_bringing_none_on_t
 
 
 async def test_the_users_own_llm_writes_down_their_memories(
-    make_client: ClientFactory, own_llm: FakeLLMService
+    make_client: ClientFactory, own_llm: FakeLLMService, own_vectors: OwnRetrievalService
 ):
     own_llm.llm = FakeLLM(REPLY, [memorized(CAT)])
     deployers_background = FakeBackgroundLLM()
     client = make_client(
         FakeLLM(), retrieval_judge=FakeJudge(), embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
         background_llm=deployers_background,
+        own_retrieval_service=own_vectors,
     )
 
-    await send_turn(client, await start_conversation(client), "我家的猫叫小白哦", own_llm=THINKING)
+    await send_turn(client, await start_conversation(client), "我家的猫叫小白哦", own_keys={"llm": THINKING, "embedding": EMBEDDING})
 
     assert [m["text"] for m in (await client.get("/api/memories")).json()] == [CAT]
     assert own_llm.llm.keys == [MINE, MINE]
@@ -196,14 +198,16 @@ async def test_a_call_uses_the_users_own_llm(
 
 
 async def test_a_call_on_an_own_llm_talks_at_its_call_effort_and_writes_down_memories_at_its_text_one(
-    make_client: ClientFactory, own_llm: FakeLLMService, speech: FakeSpeech, browser: Browser
+    make_client: ClientFactory, own_llm: FakeLLMService, speech: FakeSpeech, browser: Browser,
+    own_vectors: OwnRetrievalService,
 ):
     own_llm.llm = FakeLLM(REPLY, [memorized(CAT)])
     client = make_client(
         FakeLLM(), retrieval_judge=FakeJudge(), embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
+        own_retrieval_service=own_vectors,
     )
     await browser.call(
-        client, conversation_id=await start_conversation(client), own_keys={"llm": THINKING}
+        client, conversation_id=await start_conversation(client), own_keys={"llm": THINKING, "embedding": EMBEDDING}
     )
     await browser.connect()
 
@@ -300,18 +304,19 @@ async def check_memory_llm(client: httpx.AsyncClient, **changes: object) -> http
 
 
 async def test_an_own_memory_llm_writes_down_memories_while_the_own_llm_plays(
-    make_client: ClientFactory, own_llm: FakeLLMService
+    make_client: ClientFactory, own_llm: FakeLLMService, own_vectors: OwnRetrievalService
 ):
     own_llm.llm = FakeLLM(REPLY, [memorized(CAT)])
     deployers_background = FakeBackgroundLLM()
     client = make_client(
         FakeLLM(), retrieval_judge=FakeJudge(), embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
         background_llm=deployers_background,
+        own_retrieval_service=own_vectors,
     )
 
     await send_turn(
         client, await start_conversation(client), "我家的猫叫小白哦",
-        own_keys={"llm": THINKING, "memory_llm": MEMORY_LLM},
+        own_keys={"llm": THINKING, "memory_llm": MEMORY_LLM, "embedding": EMBEDDING},
     )
 
     assert [m["text"] for m in (await client.get("/api/memories")).json()] == [CAT]
@@ -326,15 +331,17 @@ async def test_an_own_memory_llm_writes_down_memories_while_the_own_llm_plays(
 
 
 async def test_a_call_on_an_own_llm_writes_down_memories_on_an_own_memory_llm(
-    make_client: ClientFactory, own_llm: FakeLLMService, speech: FakeSpeech, browser: Browser
+    make_client: ClientFactory, own_llm: FakeLLMService, speech: FakeSpeech, browser: Browser,
+    own_vectors: OwnRetrievalService,
 ):
     own_llm.llm = FakeLLM(REPLY, [memorized(CAT)])
     client = make_client(
         FakeLLM(), retrieval_judge=FakeJudge(), embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
+        own_retrieval_service=own_vectors,
     )
     await browser.call(
         client, conversation_id=await start_conversation(client),
-        own_keys={"llm": THINKING, "memory_llm": MEMORY_LLM},
+        own_keys={"llm": THINKING, "memory_llm": MEMORY_LLM, "embedding": EMBEDDING},
     )
     await browser.connect()
 
