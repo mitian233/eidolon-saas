@@ -37,7 +37,6 @@ from eidolon.call import Speech
 from eidolon.clock import Clock
 from eidolon.config import SERVICE_NAMES, ServiceName
 from eidolon.embedding import Embedder
-from eidolon.judge import try_judge_model
 from eidolon.live_config import TTS, LiveConfig
 from eidolon.llm import ChatLLM, ChatMessage
 from eidolon.rerank import Reranker
@@ -202,14 +201,6 @@ def probes(
         async with config.trial_llm("memory_llm") as llm:
             await first_word(llm)
 
-    async def judge() -> None:
-        lease = config.lease_judge()
-        if lease is None:
-            raise RuntimeError("没有判断模型")
-        try:
-            await try_judge_model(lease.client)
-        finally:
-            lease.release()
 
     async def tts() -> None:
         values = config.effective(TTS)
@@ -222,7 +213,7 @@ def probes(
         await speech.check_stt(key.provider, key.api_key, own=False)
 
     found: dict[ServiceName, Probe] = {
-        "chat_llm": chat_llm, "memory_llm": memory_llm, "judge": judge, "tts": tts, "stt": stt,
+        "chat_llm": chat_llm, "memory_llm": memory_llm, "tts": tts, "stt": stt,
     }
     if embedder is not None:
         found["embedding"] = lambda: embed_a_word(embedder)
