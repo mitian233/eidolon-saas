@@ -3,8 +3,8 @@ typed or in a call, the turn's background model names it, after the turn, holdin
 nothing, memory on or off, she having ended it in that turn or not; the deployer's model
 is held till it is named, replaced meanwhile or not, and a turn on the user's own
 background model is named by it. Her conversations list it with its title, which is
-never changed after; one the model failed to name, or named with nothing, has none, and
-is not named again. The model reads the record up to then, events and all, but no
+never changed after; one the model fails to name twice has none, and is not named by
+later turns. The model reads the record up to then, events and all, but no
 memories; what it answers is cut down to a title. No one but the user sees it: not she,
 nor memory, nor the admin's dashboard, which counts naming as the background model's,
 nor the logs; deleting the user deletes it. A database from before titles lists its
@@ -224,10 +224,10 @@ async def test_the_answer_is_cut_down_to_a_title(
 
 
 @pytest.mark.parametrize("answer", [LLMError("模型返回 503: 我想去看海"), "「」。"])
-async def test_a_conversation_not_named_has_no_title_and_is_not_named_again(
+async def test_a_conversation_not_named_after_retry_is_not_named_by_later_turns(
     make_client: ClientFactory, caplog: pytest.LogCaptureFixture, answer: str | Exception
 ):
-    background = FakeBackgroundLLM(answer, TITLE)
+    background = FakeBackgroundLLM(answer, answer, TITLE)
     client = make_client(FakeLLM(*[REPLY] * 4), background_llm=background)
     conversation = await start_conversation(client)
 
@@ -239,8 +239,8 @@ async def test_a_conversation_not_named_has_no_title_and_is_not_named_again(
 
     assert third[-1]["type"] == "done"
     assert (after_three, await listed_titles(client)) == ([None], [None])
-    assert len(background.prompts) == 1
-    assert "naming conversation" in caplog.text or "named conversation" in caplog.text
+    assert len(background.prompts) == 2
+    assert "title job" in caplog.text
     assert "看海" not in caplog.text
 
 
