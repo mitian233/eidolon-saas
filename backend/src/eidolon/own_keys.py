@@ -63,6 +63,7 @@ from eidolon.config import (
     SERVICES,
     ChatModelSettings,
     EmbeddingSettings,
+    EmotionSettings,
     FishAudioModel,
     ImageSettings,
     NOT_AN_ADDRESS,
@@ -583,6 +584,7 @@ class OwnKeys:
         exempting: Callable[[], frozenset[Service]],
         image_service: OwnImageService | None = None,
         retrieval_service: OwnRetrievalService | None = None,
+        emotion: EmotionSettings = EmotionSettings(),
     ) -> None:
         """Each request to a user's own LLM is recorded in `activity` as a service call
         on their own key; the deployer's models are recorded as `deployer` leases them.
@@ -595,6 +597,7 @@ class OwnKeys:
         self._exempting = exempting
         self._image_service = image_service
         self._retrieval_service = retrieval_service
+        self._emotion = emotion
 
     def for_turn(self, brought: BroughtKeys) -> TurnKeys:
         """Whose keys a text turn bringing `brought` runs on: the user's own LLM, if it
@@ -767,12 +770,14 @@ class OwnKeys:
             thresholds_for(brought.rerank) if brought.rerank is not None else None,
         )
 
-    @staticmethod
-    def _emotions(llms: TurnLLMs) -> EmotionJudging | None:
+    def _emotions(self, llms: TurnLLMs) -> EmotionJudging | None:
         services = llms.services
         if services is None or services.judge is None or services.judge_thresholds is None:
             return None
-        return EmotionJudging(ModelEmotionJudge(services.judge), services.judge_thresholds.emotion, 5.0)
+        minimum = self._emotion.min_probability
+        if minimum is None:
+            minimum = services.judge_thresholds.emotion
+        return EmotionJudging(ModelEmotionJudge(services.judge), minimum, self._emotion.timeout)
 
     def _own_llm(self, service: ServiceName, settings: LLMSettings) -> ChatLLM:
         """The user's own LLM `settings` describe, its every request recorded."""
