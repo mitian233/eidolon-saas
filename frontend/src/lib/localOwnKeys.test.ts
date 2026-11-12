@@ -336,3 +336,25 @@ describe("own keys changing", () => {
     expect(told).toHaveBeenCalledTimes(4);
   });
 });
+
+describe("user vector endpoints", () => {
+  const embedding = { base_url: "https://openrouter.ai/api/v1", model: "qwen/qwen3-embedding-4b", dimensions: 128, api_key: "vector-secret" };
+  const rerank = { base_url: "https://rerank.example/v1", model: "custom-reranker", api_key: "rank-secret" };
+
+  it("keeps endpoints apart by user and brings them to both turns and calls", () => {
+    storage();
+    keepOwnKey("u1", "llm", LLM);
+    keepOwnKey("u1", "embedding", embedding);
+    keepOwnKey("u1", "rerank", rerank);
+    keepOwnKey("u1", "judge_enabled", true);
+    expect(turnOwnKeys("u1")).toEqual({ llm: LLM, embedding, rerank, judge_enabled: true });
+    expect(callOwnKeys("u1").services).toEqual(["llm", "embedding", "rerank"]);
+    expect(callOwnKeys("u1").ownKeys).toEqual({ llm: LLM, embedding, rerank, judge_enabled: true });
+    expect(localOwnKeys("u2")).toEqual({});
+  });
+
+  it("keeps a disabled judge switch and drops invalid vector dimensions", () => {
+    storage({ "eidolon.ownKeys.u1": JSON.stringify({ llm: LLM, judge_enabled: false, embedding: { ...embedding, dimensions: 0 } }) });
+    expect(turnOwnKeys("u1")).toEqual({ llm: LLM, judge_enabled: false });
+  });
+});
