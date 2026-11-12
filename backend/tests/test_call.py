@@ -34,6 +34,7 @@ from tests.fakes import (
 )
 from tests.test_service_status import backend_of
 from tests.test_text_turn import start_conversation
+from tests.fakes import RETRIEVAL_KEYS
 
 MANO_REPLY = ["<ja>ほわっ、", "おはようございます！</ja><zh>哇，早上好！</zh><ja>今日も</ja><zh>今天也</zh>"]
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
@@ -93,7 +94,7 @@ async def test_call_turns_look_things_up_and_remember(
         llm, retrieval_judge=jev, embedder=FakeEmbedder(), reranker=FakeReranker("猫"),
         background_llm=FakeBackgroundLLM(json.dumps({"memories": [CAT]}, ensure_ascii=False)),
     )
-    assert (await browser.call(client, conversation_id=await start_conversation(client))).status_code == 200
+    assert (await browser.call(client, conversation_id=await start_conversation(client), own_keys=RETRIEVAL_KEYS)).status_code == 200
     await browser.connect()
 
     await speech.stts[-1].hear("我家的猫叫小白哦")
