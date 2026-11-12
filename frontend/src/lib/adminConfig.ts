@@ -152,7 +152,11 @@ export async function getAdminConfig(): Promise<AdminConfig> {
   return json(await api("/api/admin/config"));
 }
 export async function saveItem(name: ItemName, change: Change): Promise<AdminConfig> {
-  return json(await api(`/api/admin/config/${name}`, { method: "PUT", body: JSON.stringify(change) }));
+  return json(await api(`/api/admin/config/${name}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(change),
+  }));
 }
 export async function restoreItem(name: ItemName): Promise<AdminConfig> {
   return json(await api(`/api/admin/config/${name}`, { method: "DELETE" }));
