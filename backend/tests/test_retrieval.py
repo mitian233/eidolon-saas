@@ -16,6 +16,7 @@ from tests.test_live_config import until
 from tests.test_shared_memory import CAT, memorized
 from tests.stories import corpus_in, sample_episodes
 from tests.test_text_turn import send_turn, start_conversation
+from tests.fakes import RETRIEVAL_KEYS
 
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
 
@@ -58,11 +59,31 @@ async def embedder(settings: Settings) -> FakeEmbedder:
     return embedder
 
 
+async def test_user_reference_sources_keep_facts_separate_and_memories_shared(
+    make_client: ClientFactory, embedder: FakeEmbedder,
+):
+    llm = FakeLLM(REPLY, REPLY, REPLY)
+    client = make_client(
+        llm, retrieval_judge=FakeJudge(), embedder=embedder, reranker=FakeReranker(),
+        background_llm=FakeBackgroundLLM(memorized(CAT)),
+    )
+    await system_prompt(client, llm, "我家的猫叫小白哦", "mano")
+    await client.get("/api/memories")
+    kogane = await system_prompt(client, llm, "你知道我家的猫吗？", "kogane")
+    assert CAT in kogane
+    assert "来自长崎" in kogane and "## 剧情" in kogane
+    assert "生日是3月4日" not in kogane and PARK_LINE not in kogane
+    mano = await system_prompt(client, llm, "公園の鳩と猫のこと覚えてる？", "mano")
+    assert CAT in mano
+    assert "## 角色资料" in mano and PARK_LINE in mano
+    assert "来自长崎" not in mano
+
+
 async def system_prompt(
     client: httpx.AsyncClient, llm: FakeLLM, text: str, character: str = "mano"
 ) -> str:
     conversation_id = await start_conversation(client, character)
-    events = await send_turn(client, conversation_id, text)
+    events = await send_turn(client, conversation_id, text, own_keys=RETRIEVAL_KEYS)
     assert events[-1]["type"] == "done"
     return system_of(llm.prompts[-1])
 
@@ -166,10 +187,10 @@ async def test_references_are_looked_up_with_her_previous_reply_as_people_see_it
     llm = FakeLLM(PARK_REPLY, REPLY)
     client = make_client(llm, retrieval_judge=jev, embedder=embedder, reranker=reranker)
     conversation_id = await start_conversation(client)
-    await send_turn(client, conversation_id, "还记得那天吗？")
+    await send_turn(client, conversation_id, "还记得那天吗？", own_keys=RETRIEVAL_KEYS)
     jev.answer = "references"
 
-    events = await send_turn(client, conversation_id, "那时候累吗？")
+    events = await send_turn(client, conversation_id, "那时候累吗？", own_keys=RETRIEVAL_KEYS)
 
     assert events[-1]["type"] == "done"
     query = "是和鸽子一起在公园唱歌的那天吧\n那时候累吗？"
@@ -282,7 +303,7 @@ async def test_with_the_reranker_down_the_nearest_references_are_brought_but_no_
 
 async def tell_of_the_cat(client: httpx.AsyncClient) -> None:
     """A turn in which the user tells Mano of their cat, which is written down."""
-    await send_turn(client, await start_conversation(client), "我家的猫叫小白哦")
+    await send_turn(client, await start_conversation(client), "我家的猫叫小白哦", own_keys=RETRIEVAL_KEYS)
     memories = (await client.get("/api/memories")).json()  # once written down
     assert [m["text"] for m in memories] == [CAT]
 
@@ -318,7 +339,7 @@ async def test_the_query_is_embedded_while_the_judge_model_judges(
     conversation_id = await start_conversation(client)
     judge.hold()
 
-    turn = asyncio.create_task(send_turn(client, conversation_id, "公園の鳩のこと覚えてる？"))
+    turn = asyncio.create_task(send_turn(client, conversation_id, "公園の鳩のこと覚えてる？", own_keys=RETRIEVAL_KEYS))
     await asyncio.wait_for(judge.holding.wait(), 5)
     await until(lambda: embedder.queries)
 
@@ -342,7 +363,7 @@ async def test_a_turn_needing_nothing_drops_what_it_found_while_the_judge_model_
     conversation_id = await start_conversation(client)
     judge.hold()
 
-    turn = asyncio.create_task(send_turn(client, conversation_id, "公園の鳩と猫、かわいいね"))
+    turn = asyncio.create_task(send_turn(client, conversation_id, "公園の鳩と猫、かわいいね", own_keys=RETRIEVAL_KEYS))
     await asyncio.wait_for(judge.holding.wait(), 5)
     await until(lambda: "公園の鳩と猫、かわいいね" in embedder.queries)
     judge.let_go()
