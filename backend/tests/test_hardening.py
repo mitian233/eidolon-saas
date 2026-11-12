@@ -19,13 +19,13 @@ REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
 SECRET = "制作人偷偷告诉我他的银行卡密码"
 
 
-async def test_a_memory_answer_that_cannot_be_read_is_logged_by_its_length_only(
+async def test_an_unreadable_memory_answer_is_retried_without_logging_its_contents(
     make_client: ClientFactory, caplog: pytest.LogCaptureFixture
 ):
     unreadable = f"好的，我记下了：{SECRET}"  # not the JSON asked for
     client = make_client(
         FakeLLM(REPLY), retrieval_judge=FakeJudge(), embedder=FakeEmbedder(), reranker=FakeReranker(),
-        background_llm=FakeBackgroundLLM(unreadable),
+        background_llm=FakeBackgroundLLM(unreadable, unreadable),
     )
     conversation_id = await start_conversation(client)
 
@@ -33,9 +33,9 @@ async def test_a_memory_answer_that_cannot_be_read_is_logged_by_its_length_only(
         await send_turn(client, conversation_id, "我的银行卡密码是七七八八")
         await client.get("/api/memories")  # waits for the memory to be written down
 
-    [warning] = [r for r in caplog.records if "memories JSON" in r.getMessage()]
-    assert f"({len(unreadable)} characters)" in warning.getMessage()
-    assert conversation_id in warning.getMessage()
+    warnings = [r.getMessage() for r in caplog.records if "memory job" in r.getMessage()]
+    assert len(warnings) == 2
+    assert all(message.endswith("failed: ValueError") for message in warnings)
     assert SECRET not in caplog.text and "七七八八" not in caplog.text
 
 
