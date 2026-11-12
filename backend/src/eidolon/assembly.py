@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 import httpx
 
 from eidolon.accounts import Accounts
-from eidolon.activity import ActivityLog, metered_retrieval
+from eidolon.activity import ActivityLog, MeteredJudge, metered_retrieval, judge_origin
+from eidolon.affinity_judge import ModelAffinityJudge
 from eidolon.admission import Admissions
 from eidolon.affinity import Affinities
 from eidolon.announcements import Announcements
@@ -21,21 +22,23 @@ from eidolon.config import DEFAULT_BAILIAN_STT_MODEL, Settings
 from eidolon.corpus import StoryCorpus
 from eidolon.data_access import Database
 from eidolon.data_package import DataPackages
-from eidolon.embedding import EMBEDDING_TIMEOUT, Embedder, open_embedder
+from eidolon.embedding import Embedder
 from eidolon.engine import ConversationEngine
 from eidolon.her_now import HerNow
 from eidolon.housekeeping import keep_tidy
 from eidolon.identity import IdentityProvider, ProviderName, open_identity_providers
 from eidolon.invites import Invites
-from eidolon.live_config import LiveConfig, Reach
+from eidolon.live_config import AFFINITY, LiveConfig, Reach
+from eidolon.judge import JudgeModel
+from eidolon.llm import TurnServices
 from eidolon.loop_lag import watch_the_loop
 from eidolon.memory import Memories
-from eidolon.own_keys import LLMService, OwnKeys, ProviderLLMService
+from eidolon.own_keys import LLMService, OwnKeys, OwnRetrievalService, ProviderLLMService
 from eidolon.price_catalog import Catalog
 from eidolon.prices import Prices
 from eidolon.proxy import ProxyRoutes, reach as reach_provider
-from eidolon.rerank import RERANK_TIMEOUT, Reranker, SiliconFlowReranker
-from eidolon.retrieval import Retrieval, open_reference_sources
+from eidolon.rerank import Reranker
+from eidolon.retrieval import ModelRetrievalJudge, Retrieval, open_reference_sources
 from eidolon.service_clients import ProviderClients, ServiceClients
 from eidolon.service_status import ServiceStatus, probes
 from eidolon.sponsor import Sponsor
@@ -116,6 +119,8 @@ def build(
     speech: Speech | None = None,
     identity_providers: dict[ProviderName, IdentityProvider] | None = None,
     own_llm_service: LLMService | None = None,
+    own_retrieval_service: OwnRetrievalService | None = None,
+    judge_model: JudgeModel | None = None,
     clients: ServiceClients | None = None,
     catalog_transport: httpx.AsyncBaseTransport | None = None,
     backup_transport: httpx.AsyncBaseTransport | None = None,
@@ -159,28 +164,44 @@ def build(
             known_provider=catalog.known_provider,
         )
         closers.append(own_llm_service.aclose)
-    if embedder is None and settings.embedding is not None:
-        embedder = open_embedder(settings.embedding, routes.client("embedding", EMBEDDING_TIMEOUT))
-        closers.append(embedder.aclose)
-    if reranker is None and settings.rerank is not None:
-        reranker = SiliconFlowReranker(
-            settings.rerank.api_key, settings.rerank.model, settings.rerank.base_url,
-            routes.client("rerank", RERANK_TIMEOUT),
+    if own_retrieval_service is None:
+        own_retrieval_service = OwnRetrievalService(
+            public_only=settings.domain is not None, routes=routes,
+            known_provider=catalog.known_provider,
         )
-        closers.append(reranker.aclose)
+        closers.append(own_retrieval_service.aclose)
     service_status = ServiceStatus(
         activity, config, probes(config, speech, "", embedder, reranker), clock
     )
     embedder, reranker = metered_retrieval(activity, settings, embedder, reranker)
     retrieval = None
     corpus = None
-    retrieval_judge = config.retrieval_judge()
-    if embedder is not None and reranker is not None and retrieval_judge is not None:
+    retrieval_judge = (
+        MeteredJudge(ModelRetrievalJudge(judge_model, config.judge_thresholds), activity,
+                     judge_origin(settings.judge)) if judge_model is not None else config.retrieval_judge()
+    )
+    if embedder is not None:
         references = open_reference_sources(database, embedder, characters.values(), None)
         corpus = references.corpus
         closers.append(corpus.aclose)
         retrieval = Retrieval(
             retrieval_judge, references, reranker, lambda: config.rerank_thresholds.references
+        )
+
+    async def retrieval_for(services: TurnServices, character_id: str) -> Retrieval | None:
+        if services.embedder is None:
+            return None
+        sources = await asyncio.to_thread(
+            open_reference_sources, database, services.embedder, (), None, warn=False,
+        )
+        await sources.corpus.prepare_character(character_id)
+        judge = (
+            ModelRetrievalJudge(services.judge, services.judge_thresholds)
+            if services.judge is not None and services.judge_thresholds is not None else None
+        )
+        return Retrieval(
+            judge, sources, services.reranker,
+            lambda: services.rerank_thresholds.references if services.rerank_thresholds else 0.0,
         )
     memories = Memories(
         database, characters, clock, embedder=embedder, reranker=reranker,
@@ -192,13 +213,17 @@ def build(
     affinities = Affinities(database, clock, lambda: config.affinity_on)
     usage = UsageLimiter(database, lambda: config.usage_limits, clock)
     own_keys = OwnKeys(
-        own_llm_service, config, activity, speech, exempting=lambda: config.exempting_keys
+        own_llm_service, config, activity, speech, exempting=lambda: config.exempting_keys,
+        retrieval_service=own_retrieval_service,
     )
     her_now = HerNow(characters, affinities=affinities)
     engine = ConversationEngine(
         database, store, characters, {}, memories, titles, clock, her_now, retrieval,
         history_turns=lambda: config.history_turns,
-        affinities=affinities, affinity_judge=config.affinity_judge(),
+        affinities=affinities,
+        affinity_judge=ModelAffinityJudge(judge_model, config.judge_thresholds) if judge_model else config.affinity_judge(),
+        retrieval_for=retrieval_for,
+        affinity_enabled=lambda: config.effective(AFFINITY)["enabled"],
     )
     admissions = Admissions(usage, activity, own_keys, cooldown_until=affinities.cooldown_until)
     closers.append(admissions.aclose)
