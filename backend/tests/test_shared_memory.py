@@ -19,6 +19,7 @@ from tests.fakes import (
     context_of,
 )
 from tests.test_text_turn import send_turn, start_conversation
+from tests.fakes import RETRIEVAL_KEYS
 
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
 CAT = "制作人家里养了一只叫小白的猫"
@@ -34,7 +35,7 @@ def memories_section(system: str) -> str:
 
 
 async def turn(client: httpx.AsyncClient, conversation_id: str, text: str) -> None:
-    events = await send_turn(client, conversation_id, text)
+    events = await send_turn(client, conversation_id, text, own_keys=RETRIEVAL_KEYS)
     assert events[-1]["type"] == "done", events[-1]
 
 
