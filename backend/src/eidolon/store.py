@@ -40,6 +40,8 @@ PhotoFailure = Literal["timeout", "service_error", "bad_image", "own_key_failed"
 it failed, or could not be reached; it answered with what is not one picture of the size
 asked for; the user's own key to it failed; or the photos of the hour were used up as it
 was about to be generated."""
+JobType = Literal["memory", "title"]
+JobStatus = Literal["pending", "running", "succeeded", "failed"]
 
 _SCHEMA = """
 -- `name` only tells users apart on the admin command line; it need not be unique.
@@ -116,6 +118,20 @@ CREATE TABLE IF NOT EXISTS messages (
     out_of_line INTEGER
 );
 CREATE INDEX IF NOT EXISTS messages_by_conversation ON messages(conversation_id, id);
+-- Post-turn actions run with credentials held only in their API process (`jobs`).
+-- `turn_id` is the character's saved reply, one job of each type per reply.
+CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    turn_id INTEGER NOT NULL REFERENCES messages(id),
+    type TEXT NOT NULL CHECK (type IN ('memory', 'title')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (turn_id, type)
+);
+CREATE INDEX IF NOT EXISTS jobs_by_status ON jobs(status, created_at);
 CREATE TABLE IF NOT EXISTS conversation_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -284,6 +300,24 @@ class NewPhoto:
 
     id: str
     tag: str
+
+
+@dataclass(frozen=True)
+class Job:
+    """A post-turn action's outcome; never a prompt, endpoint or credential.
+
+    `turn_id` identifies the character's reply. `error` is only an exception type:
+    provider messages can contain credentials or what the user said.
+    """
+
+    id: str
+    turn_id: int
+    type: JobType
+    status: JobStatus
+    attempts: int
+    error: str | None
+    created_at: str
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -735,6 +769,25 @@ class Store:
         """Give the conversation its title (GLOSSARY.md「对话标题」), unless it has one: it is
         named once."""
         await self._db.write(_name_conversation, conversation_id, title)
+
+    async def create_job(self, turn_id: int, kind: JobType) -> Job | None:
+        """Record a pending action, unless already recorded or its reply was deleted."""
+        return await self._db.write(_create_job, turn_id, kind)
+
+    async def get_job(self, job_id: str) -> Job | None:
+        return await self._db.read(_job, job_id)
+
+    async def jobs_for_turn(self, turn_id: int) -> list[Job]:
+        return await self._db.read(_jobs_for_turn, turn_id)
+
+    async def start_job(self, job_id: str) -> bool:
+        """Count an attempt; False if the job was deleted or is already running/done."""
+        return await self._db.write(_start_job, job_id)
+
+    async def finish_job(
+        self, job_id: str, status: Literal["succeeded", "failed"], error: str | None = None,
+    ) -> None:
+        await self._db.write(_finish_job, job_id, status, error)
 
     async def delete_conversation(self, conversation: Conversation) -> None:
         """Delete a past conversation (GLOSSARY.md「历史对话」) and its record, for good, all
@@ -2097,3 +2150,47 @@ def timestamp() -> str:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+_JOB_COLUMNS = "id, turn_id, type, status, attempts, error, created_at, updated_at"
+
+
+def _create_job(db: sqlite3.Connection, turn_id: int, kind: JobType) -> Job | None:
+    now = _now()
+    job = Job(uuid.uuid4().hex, turn_id, kind, "pending", 0, None, now, now)
+    inserted = db.execute(
+        "INSERT OR IGNORE INTO jobs (id, turn_id, type, status, attempts, error,"
+        " created_at, updated_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?"
+        " FROM messages WHERE id = ? AND role = 'character'",
+        (*asdict(job).values(), turn_id),
+    ).rowcount
+    return job if inserted else None
+
+
+def _job(db: sqlite3.Connection, job_id: str) -> Job | None:
+    row = db.execute(f"SELECT {_JOB_COLUMNS} FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    return Job(*row) if row is not None else None
+
+
+def _jobs_for_turn(db: sqlite3.Connection, turn_id: int) -> list[Job]:
+    return [Job(*row) for row in db.execute(
+        f"SELECT {_JOB_COLUMNS} FROM jobs WHERE turn_id = ? ORDER BY type", (turn_id,),
+    )]
+
+
+def _start_job(db: sqlite3.Connection, job_id: str) -> bool:
+    return db.execute(
+        "UPDATE jobs SET status = 'running', attempts = attempts + 1, error = NULL,"
+        " updated_at = ? WHERE id = ? AND status IN ('pending', 'failed')",
+        (_now(), job_id),
+    ).rowcount > 0
+
+
+def _finish_job(
+    db: sqlite3.Connection, job_id: str, status: str, error: str | None,
+) -> None:
+    db.execute(
+        "UPDATE jobs SET status = ?, error = ?, updated_at = ?"
+        " WHERE id = ? AND status = 'running'",
+        (status, error, _now(), job_id),
+    )
