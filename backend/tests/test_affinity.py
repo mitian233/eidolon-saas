@@ -17,9 +17,9 @@ import httpx
 import pytest
 
 from eidolon.affinity import Judged, hurt
-from eidolon.config import JevSettings, Settings
+from eidolon.config import Settings
 from tests.conftest import ClientFactory, character_id
-from tests.fakes import FAKE_JUDGE, START, FakeClock, FakeIdentityProvider, FakeLLM
+from tests.fakes import START, FakeClock, FakeIdentityProvider, FakeLLM
 from tests.test_admin_users import admin_beside
 from tests.test_delete_account import user_id
 
@@ -29,12 +29,7 @@ AFFINITY = "/api/admin/config/affinity"
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """With an admin, the judge model, and affinity on in `.env`."""
-    return replace(
-        settings,
-        admins=frozenset({("github", "9001")}),
-        judge=FAKE_JUDGE,
-        affinity_and_gifts=True,
-    )
+    return replace(settings, admins=frozenset({("github", "9001")}), affinity_and_gifts=True,)
 
 
 def status(client: httpx.AsyncClient, character: str = "mano"):
@@ -142,12 +137,12 @@ async def test_reading_it_needs_a_signed_in_user_and_a_character(make_client: Cl
     assert (await status(nobody)).status_code == 401
 
 
-@pytest.mark.parametrize("judge", [FAKE_JUDGE, None])
+@pytest.mark.parametrize("legacy_key", ["unused-legacy-key", None])
 async def test_platform_affinity_switch_does_not_require_judge_credentials(
     make_client: ClientFactory,
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
-    judge: JevSettings | None,
+    legacy_key: str | None,
 ):
     for name in ("EIDOLON_AFFINITY_AND_GIFTS", "JUDGE_PROVIDER", "JEV_API_KEY", "JEV_MODEL",
                  "JEV_BASE_URL", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"):
@@ -155,12 +150,12 @@ async def test_platform_affinity_switch_does_not_require_judge_credentials(
     monkeypatch.setenv("CHAT_LLM_BASE_URL", "https://llm.example.com/v1")
     monkeypatch.setenv("CHAT_LLM_API_KEY", "sk-deployer")
     monkeypatch.setenv("CHAT_LLM_MODEL", "deployer-model")
-    if judge is not None:
-        monkeypatch.setenv("JEV_API_KEY", judge.api_key)
+    if legacy_key is not None:
+        monkeypatch.setenv("JEV_API_KEY", legacy_key)
     env = Settings.from_env()
     client = make_client(
         FakeLLM(),
-        settings=replace(settings, judge=env.judge, affinity_and_gifts=env.affinity_and_gifts),
+        settings=replace(settings, affinity_and_gifts=env.affinity_and_gifts),
     )
 
     affinity = (await status(client)).json()
@@ -210,7 +205,7 @@ async def test_off_in_env_there_is_none_until_the_admin_turns_it_on(
 async def test_affinity_platform_switch_can_be_set_without_platform_judge(
     make_client: ClientFactory, settings: Settings, github: FakeIdentityProvider
 ):
-    client = make_client(FakeLLM(), settings=replace(settings, judge=None))
+    client = make_client(FakeLLM(), settings=replace(settings, ))
 
     async with admin_beside(client, github) as admin:
         described = (await admin.get("/api/admin/config")).json()["affinity"]
