@@ -6,9 +6,9 @@ import io
 import json
 import secrets
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+from typing import Any, Literal, cast, get_args
 import zipfile
 from http import HTTPStatus
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
@@ -37,9 +37,6 @@ from eidolon.characters import Character
 from eidolon.config import (
     BailianRegion,
     ChatModelSettings,
-    CloudflareJudgeSettings,
-    JevSettings,
-    JudgeSettings,
     LLMProtocol,
     LLMSettings,
     ReasoningEffort,
@@ -47,6 +44,7 @@ from eidolon.config import (
     SttKey,
     SttProvider,
 )
+from eidolon.config import EmbeddingSettings, RerankSettings
 from eidolon.embedding import Document, EmbeddingError
 from eidolon.rerank import RerankError
 from eidolon.emotion import _EMOTION_OPTIONS, _NOD_OPTIONS, Emotion, EmotionAnswer, Nod
@@ -62,14 +60,12 @@ from eidolon.llm import (
     ToolCall,
 )
 from eidolon.llm.providers import check_chat_models
-from eidolon.own_keys import OwnKeyRejected
+from eidolon.own_keys import OwnKeyRejected, OwnRetrievalService
 from eidolon.s3 import Bucket, S3Settings
 from eidolon.affinity_judge import LEVEL as AFFINITY_LEVEL
 from eidolon.affinity_judge import CONSIDERATE_QUESTION, MANIPULATION, OUT_OF_LINE
 from eidolon.judge import SAID, JudgeError
 
-if TYPE_CHECKING:
-    from eidolon.judge import JudgeModel
 from eidolon.retrieval import Need
 
 START = datetime(2026, 9, 25, 12, 0, tzinfo=UTC)
@@ -235,12 +231,32 @@ class FakeLLMService:
         pass
 
 
+@dataclass
+class ScriptedUserLLMService:
+    source: FakeLLMService
+    scripted: "FakeServiceClients"
+
+    def open(self, settings: LLMSettings) -> ChatLLM:
+        self.source.opened.append(settings)
+        return _KeyedLLM(self.source, settings, self.scripted)
+
+    async def check(self, settings: ChatModelSettings) -> None:
+        await self.source.check(settings)
+
+    async def list_models(self, protocol: LLMProtocol, base_url: str, api_key: str) -> list[str]:
+        return await self.source.list_models(protocol, base_url, api_key)
+
+    async def aclose(self) -> None:
+        await self.source.aclose()
+
+
 class _KeyedLLM:
-    def __init__(self, service: FakeLLMService, settings: LLMSettings) -> None:
+    def __init__(self, service: FakeLLMService, settings: LLMSettings, scripted: "FakeServiceClients | None" = None) -> None:
         self._service = service
         self._settings = settings
+        self._scripted = scripted
 
-    def stream(
+    async def stream(
         self,
         messages: Sequence[ChatMessage],
         tools: Sequence[Tool] = (),
@@ -248,9 +264,26 @@ class _KeyedLLM:
         forbid_calls: bool = False,
     ) -> AsyncIterator[Streamed]:
         self._service.efforts.append(self._settings.reasoning_effort)
-        return self._service.llm.stream_with(
-            self._settings.api_key, messages, tools, forbid_calls=forbid_calls
-        )
+        scripted = self._scripted
+        if scripted is not None and self._settings.model == "test-user-chat" and self._settings.reasoning_effort == "low":
+            body = json.loads(messages[-1].content)
+            answer = await scripted.user_judge.answer(self._settings.api_key, body["state"], body["questions"])
+            # LLMJudge expects every option, including zero-probability ones.
+            for name, question in body["questions"].items():
+                if question["type"] != "noul":
+                    options = [str(i) for i in range(len(question["criteria"]))] if question["type"] == "score" else question["criteria"]
+                    probabilities = answer[name].setdefault("probabilities", {})
+                    for option in options:
+                        probabilities.setdefault(option, 0.0)
+            yield json.dumps(answer, ensure_ascii=False)
+            return
+        if scripted is not None and self._settings.model == "test-user-memory":
+            async for chunk in scripted.background.stream(messages, tools, forbid_calls=forbid_calls):
+                yield chunk
+            return
+        llm = scripted.llm if scripted is not None and self._settings.model == "test-user-chat" else self._service.llm
+        async for chunk in llm.stream_with(self._settings.api_key, messages, tools, forbid_calls=forbid_calls):
+            yield chunk
 
     async def aclose(self) -> None:
         pass
@@ -306,9 +339,7 @@ class FakeServiceClients:
         self.background = FakeBackgroundLLM()
         self.memory_opened: list[LLMSettings] = []
         self.memory_keys: list[str] = []
-        self.judge = FakeJudgeModel()
-        self.judges_opened: list[JudgeSettings] = []
-        self.judges_closed: list[JudgeSettings] = []
+        self.user_judge = FakeJudgeModel()
         self.listed: list[tuple[str, LLMProtocol, str, str]] = []
         self.models: list[str] = ["model-a", "model-b"]
 
@@ -323,9 +354,6 @@ class FakeServiceClients:
         self.memory_opened.append(settings)
         return _ConfiguredLLM(self, settings, self.closed, memory=True)
 
-    def judge_model(self, settings: JudgeSettings) -> "JudgeModel":
-        self.judges_opened.append(settings)
-        return _ConfiguredJudge(self, settings)
 
     async def list_models(
         self, service: Literal["chat_llm", "memory_llm"], protocol: LLMProtocol,
@@ -476,28 +504,35 @@ class FakeJudgeModel:
         } | scripted
 
 
-class _ConfiguredJudge:
-    def __init__(self, clients: FakeServiceClients, settings: JudgeSettings) -> None:
-        self._clients = clients
-        self._settings = settings
-
-    async def ask(self, state: dict[str, Any], questions: dict[str, dict]) -> dict[str, Any]:
-        key = judge_key(self._settings)
-        if key in self._clients.rejects:
-            raise JudgeError(self._clients.rejects[key])
-        return await self._clients.judge.answer(key, state, questions)
-
-    async def aclose(self) -> None:
-        self._clients.judges_closed.append(self._settings)
+USER_LLM = {"base_url": "https://user.example/v1", "api_key": "test-user-secret", "model": "test-user-chat"}
+JUDGED_KEYS = {
+    "llm": USER_LLM,
+    "memory_llm": USER_LLM | {"model": "test-user-memory"},
+    "judge_enabled": True,
+}
+RETRIEVAL_KEYS = JUDGED_KEYS | {
+    "embedding": {"base_url": "https://user.example/v1", "api_key": "user-vector-secret", "model": "test-user-embedding", "dimensions": 128},
+    "rerank": {"base_url": "https://user.example/v1", "api_key": "user-rerank-secret", "model": "Qwen/Qwen3-Reranker-0.6B"},
+}
 
 
-def judge_key(settings: JudgeSettings) -> str:
-    return settings.api_token if isinstance(settings, CloudflareJudgeSettings) else settings.api_key
+class FakeUserRetrieval(OwnRetrievalService):
+    """External responses for user endpoints explicitly named in test requests."""
 
+    def __init__(self, embedder=None, reranker=None) -> None:
+        super().__init__(public_only=False)
+        self.embedding_script = embedder or FakeEmbedder()
+        self.rerank_script = reranker or FakeReranker()
 
-FAKE_JUDGE = JevSettings("fake-judge-key")
-"""The judge model `.env` has when a test hands one a script: Jev, whose thresholds are
-the ones every model not calibrated judges by."""
+    def embedder(self, settings: EmbeddingSettings):
+        if settings.model == "test-user-embedding":
+            return self.embedding_script
+        return super().embedder(settings)
+
+    def reranker(self, settings: RerankSettings):
+        if settings.api_key == "user-rerank-secret":
+            return self.rerank_script
+        return super().reranker(settings)
 
 _test_registries: dict[int, Mapping[str, Character]] = {}
 
@@ -531,11 +566,16 @@ def build_faked(
         clients.llm = llm
     if background_llm is not None:
         clients.background = background_llm
-    if retrieval_judge is not None or emotion_judge is not None:
-        clients.judge.needs = retrieval_judge or emotion_judge
-        clients.judge.feels = emotion_judge or retrieval_judge
-        if settings.judge is None:
-            settings = replace(settings, judge=FAKE_JUDGE)
+    clients.user_judge.needs = retrieval_judge or emotion_judge
+    clients.user_judge.feels = emotion_judge or retrieval_judge
+    own = services.get("own_llm_service")
+    if own is None:
+        own = FakeLLMService()
+        services["own_llm_service"] = own
+    if isinstance(own, FakeLLMService):
+        services["own_llm_service"] = ScriptedUserLLMService(own, clients)
+    if "own_retrieval_service" not in services:
+        services["own_retrieval_service"] = FakeUserRetrieval(services.get("embedder"), services.get("reranker"))
     backend = build(settings, clients=clients, **services)
     _test_registries[id(backend)] = characters or {}
     if characters:
