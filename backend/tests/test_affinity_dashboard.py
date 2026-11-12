@@ -167,7 +167,7 @@ async def test_with_affinity_off_there_is_no_section(
     github: FakeIdentityProvider,
     judge: JevSettings | None,
 ):
-    off = replace(settings, affinity_and_gifts=judge is None, judge=judge)
+    off = replace(settings, affinity_and_gifts=False, judge=judge)
     client = make_client(FakeLLM(REPLY), clients=FakeServiceClients(), settings=off)
     conversation = await start_conversation(client)
 
