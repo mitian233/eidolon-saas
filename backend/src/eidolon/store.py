@@ -41,7 +41,7 @@ it failed, or could not be reached; it answered with what is not one picture of 
 asked for; the user's own key to it failed; or the photos of the hour were used up as it
 was about to be generated."""
 JobType = Literal["memory", "title"]
-JobStatus = Literal["pending", "running", "succeeded", "failed"]
+JobStatus = Literal["pending", "running", "succeeded", "failed", "cancelled"]
 
 _SCHEMA = """
 -- `name` only tells users apart on the admin command line; it need not be unique.
@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY,
     turn_id INTEGER NOT NULL REFERENCES messages(id),
     type TEXT NOT NULL CHECK (type IN ('memory', 'title')),
-    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'cancelled')),
     attempts INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     created_at TEXT NOT NULL,
@@ -785,7 +785,8 @@ class Store:
         return await self._db.write(_start_job, job_id)
 
     async def finish_job(
-        self, job_id: str, status: Literal["succeeded", "failed"], error: str | None = None,
+        self, job_id: str, status: Literal["succeeded", "failed", "cancelled"],
+        error: str | None = None,
     ) -> None:
         await self._db.write(_finish_job, job_id, status, error)
 
@@ -2191,6 +2192,6 @@ def _finish_job(
 ) -> None:
     db.execute(
         "UPDATE jobs SET status = ?, error = ?, updated_at = ?"
-        " WHERE id = ? AND status = 'running'",
+        " WHERE id = ? AND status IN ('pending', 'running')",
         (status, error, _now(), job_id),
     )
