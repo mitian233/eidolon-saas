@@ -111,7 +111,8 @@ async def test_in_trust_and_wherever_affinity_is_off_the_prompt_is_as_it_was(
         for llm in (on, off, no_judge)
     )
     assert told_on == told_off
-    assert told_no_judge == told_off
+    assert told_no_judge != told_off
+    assert "你现在对对方态度很冷" in about_now(no_judge)
     assert IN_HER_OWN_WAY not in about_now(on)
     assert SWEET_WITHIN_BOUNDS not in about_now(on)
 
