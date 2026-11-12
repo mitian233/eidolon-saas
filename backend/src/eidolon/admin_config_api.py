@@ -7,98 +7,12 @@ shown; a key left out of a change stays as it is. What cannot be changed here
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException
-from pydantic import BaseModel, Field, StrictBool, ValidationError, field_validator
+from pydantic import BaseModel, ValidationError
 
 from eidolon.admin_api import Admin
 from eidolon.assembly import Backend
-from eidolon.config import MAX_IMAGE_CONCURRENCY, FishAudioModel, GptImageQuality, ImageFormat, LLMProtocol, checked_base_url, SttProvider
-from eidolon.live_config import AFFINITY, BAR, CYCLES, LIMITS, LETTERS, MOMENTS, REACH_OUTS, READ_ONLY, REGISTRATION, SCHEDULE, STT, STT_KEY_FIELDS, ConfigInvalid, ConfigRejected, KeysReadOnly, Unavailable
+from eidolon.live_config import AFFINITY, BAR, CYCLES, LIMITS, LETTERS, MOMENTS, REACH_OUTS, READ_ONLY, REGISTRATION, SCHEDULE, ConfigInvalid, ConfigRejected, KeysReadOnly, Unavailable
 
-ApiKey = Field(None, min_length=8, max_length=500, pattern=r"^[\x21-\x7e]+$")
-
-
-def _trimmed(value: str) -> str:
-    value = value.strip()
-    if not value:
-        raise ValueError("不能为空")
-    return value
-
-
-def _trimmed_if_given(value: str | None) -> str | None:
-    return None if value is None else _trimmed(value)
-
-
-class LLMInput(BaseModel):
-    """A model slot as the admin saves it; without `api_key`, its key stays as it is."""
-
-    protocol: LLMProtocol
-    base_url: str = Field(min_length=1, max_length=500)
-    model: str = Field(min_length=1, max_length=200)
-    max_tokens: int | None = Field(None, gt=0)
-    # Both checked by the live configuration, which says what is wrong in so many words.
-    reasoning_effort: Any = None
-    extra_body: Any = None
-    api_key: str | None = ApiKey
-
-    _trim = field_validator("model")(_trimmed)
-    _base_url = field_validator("base_url")(checked_base_url)
-
-
-class LLMListInput(BaseModel):
-    """Where a model slot's service is, for it to list the models it offers the key;
-    without `api_key`, the key in effect now, at the address it is in effect for."""
-
-    protocol: LLMProtocol
-    base_url: str = Field(min_length=1, max_length=500)
-    api_key: str | None = ApiKey
-
-    _base_url = field_validator("base_url")(checked_base_url)
-
-
-class ChatLLMInput(LLMInput):
-    """The chat model, with its reasoning effort in calls besides its own, for text turns."""
-
-    call_reasoning_effort: Any = None
-
-
-class TTSInput(BaseModel):
-    model: FishAudioModel
-    api_key: str | None = ApiKey
-
-
-class STTInput(BaseModel):
-    """The service chosen, and its key, if it changes."""
-
-    provider: SttProvider
-    api_key: str | None = ApiKey
-
-
-class ImageInput(BaseModel):
-    """Image generation; without `api_key`, its key stays as it is. An art style left out
-    or empty is none."""
-
-    api_format: ImageFormat
-    base_url: str = Field(min_length=1, max_length=500)
-    model: str = Field(min_length=1, max_length=200)
-    concurrency: int = Field(ge=1, le=MAX_IMAGE_CONCURRENCY)
-    style: str | None = Field(None, max_length=1000)
-    api_key: str | None = ApiKey
-
-    _trim = field_validator("base_url", "model")(_trimmed)
-
-
-class GptImageInput(BaseModel):
-    """GPT Image; without `api_key`, its key stays as it is. An art style left out or empty
-    is the default one."""
-
-    base_url: str = Field(min_length=1, max_length=500)
-    model: str = Field(min_length=1, max_length=200)
-    quality: GptImageQuality
-    style: str | None = Field(None, max_length=1000)
-    api_key: str | None = ApiKey
-
-    _trim = field_validator("model")(_trimmed)
-    _base_url = field_validator("base_url")(checked_base_url)
 
 
 
@@ -120,19 +34,6 @@ class LimitsInput(BaseModel):
     exempting_llm: Any
     exempting_tts: Any
     exempting_stt: Any
-
-
-class QWeatherInput(BaseModel):
-    """The deployer's QWeather account; without `private_key`, the key stays as it is.
-    Checked by the live configuration, which says what is wrong in so many words."""
-
-    host: str = Field(min_length=1, max_length=200)
-    developer_id: str = Field(min_length=1, max_length=100)
-    project_id: str = Field(min_length=1, max_length=100)
-    key_id: str = Field(min_length=1, max_length=100)
-    private_key: str | None = Field(None, min_length=8, max_length=1000)
-
-    _trim = field_validator("host", "developer_id", "project_id", "key_id")(_trimmed)
 
 
 class AffinityInput(BaseModel):
@@ -188,46 +89,6 @@ class BarInput(BaseModel):
     enabled: Any
 
 
-class ProxyInput(BaseModel):
-    """The proxy as the admin saves it: the switch, the address (a password typed into it
-    is kept apart, as a key is; empty for none), and a switch for each of the deployer's
-    services and of users' own keys; without `password`, it stays as it is. The address
-    is checked by the live configuration, which says what is wrong in so many words."""
-
-    enabled: StrictBool
-    url: str | None = Field(None, max_length=500)
-    password: str | None = Field(None, min_length=1, max_length=500)
-    chat_llm: StrictBool
-    memory_llm: StrictBool
-    judge: StrictBool
-    embedding: StrictBool
-    rerank: StrictBool
-    tts: StrictBool
-    stt: StrictBool
-    image: StrictBool
-    gpt_image: StrictBool
-    own_llm: StrictBool
-    own_tts: StrictBool
-    own_stt: StrictBool
-    own_image: StrictBool
-    own_embedding: StrictBool = False
-    own_rerank: StrictBool = False
-
-
-class ServiceStatusInput(BaseModel):
-    """Which services users are shown the status of, a switch for each, and over how many
-    minutes, checked by the live configuration, which says what is wrong in so many words."""
-
-    window_minutes: Any
-    chat_llm: StrictBool
-    memory_llm: StrictBool
-    tts: StrictBool
-    stt: StrictBool
-    judge: StrictBool
-    embedding: StrictBool
-    rerank: StrictBool
-    image: StrictBool
-
 
 class RegistrationInput(BaseModel):
     """Who may sign up, `open` or `invite`; checked by the live configuration."""
@@ -248,21 +109,12 @@ INPUTS: dict[str, type[BaseModel]] = {
 }
 
 
-def _change(item: str, body: BaseModel) -> dict[str, Any]:
-    """What the input changes of the item: every field given (a model slot's max_tokens
-    may be None, its protocol's default), a key, the judge model's account, workspace
-    and region, a proxy's password and the moments' map and how many comments a day they
-    reply to only if given."""
+def _change(body: BaseModel) -> dict[str, Any]:
+    """Drop optional moments fields when they are not part of the change."""
     change = body.model_dump()
-    for field in ("account_id", "workspace_id", "region", "map", "replies_per_day"):
-        if change.get(field, "") is None:
+    for field in ("map", "replies_per_day"):
+        if field in change and change[field] is None:
             del change[field]
-    if change.get("password", "") is None:
-        del change["password"]
-    if change.get("private_key", "") is None:
-        del change["private_key"]
-    if key := change.pop("api_key", None):
-        change[STT_KEY_FIELDS[change["provider"]] if item == STT else "api_key"] = key
     return change
 
 
@@ -289,7 +141,7 @@ def add_admin_config_routes(app: FastAPI, backend: Backend) -> None:
         except ValidationError as e:
             raise HTTPException(422, e.errors(include_url=False, include_context=False)) from None
         try:
-            await config.save(item, _change(item, parsed))
+            await config.save(item, _change(parsed))
         except KeysReadOnly as e:
             raise HTTPException(409, str(e)) from None
         except Unavailable as e:
