@@ -19,7 +19,7 @@ import pytest
 from eidolon.config import Settings
 from tests.browser import TIMEOUT, Browser, open_browser
 from tests.conftest import ClientFactory
-from tests.fakes import FAKE_JUDGE, FakeClock, FakeLLM, FakeServiceClients, FakeSpeech
+from tests.fakes import JUDGED_KEYS, FakeClock, FakeLLM, FakeServiceClients, FakeSpeech
 from tests.test_conversation_events import record, shape
 from tests.test_delete_account import DELETE
 from tests.test_she_hangs_up import OUT_OF_LINE
@@ -112,10 +112,10 @@ async def test_a_call_she_hangs_up_as_she_ends_the_conversation_elsewhere_counts
     make_client: ClientFactory, settings: Settings, speech: FakeSpeech, clock: FakeClock
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [OUT_OF_LINE, OUT_OF_LINE]
+    clients.user_judge.judgings = [OUT_OF_LINE, OUT_OF_LINE]
     client = make_client(
         FakeLLM(REPLY, REPLY), clients=clients, clock=clock,
-        settings=replace(settings, judge=FAKE_JUDGE, affinity_and_gifts=True),
+        settings=replace(settings, affinity_and_gifts=True),
     )
     conversation = await start_conversation(client)
 
@@ -123,7 +123,7 @@ async def test_a_call_she_hangs_up_as_she_ends_the_conversation_elsewhere_counts
         await browser.call(client, conversation_id=conversation)
         await browser.connect()
         for text in ("第一句", "第二句"):
-            await send_turn(client, conversation, text)
+            await send_turn(client, conversation, text, own_keys=JUDGED_KEYS)
         assert (await browser.next_server_message("ended"))["reason"] == "she_hung_up"
         await browser.hung_up()
 
