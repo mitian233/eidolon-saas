@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS episode_passages (
     embedding BLOB NOT NULL,
     PRIMARY KEY (episode_id, seq)
 );
+CREATE TABLE IF NOT EXISTS user_passage_vectors (
+    episode_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    text TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    PRIMARY KEY (episode_id, seq, model),
+    FOREIGN KEY (episode_id, seq) REFERENCES episode_passages(episode_id, seq) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS story_corpus_version (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     version INTEGER NOT NULL
@@ -285,6 +294,18 @@ class StoryCorpus:
         finally:
             self._loading = None
 
+    async def prepare_character(self, character_id: str) -> None:
+        """Compute only this character's missing user-model vectors, keeping models apart."""
+        rows = await self._db.read(_user_passages, character_id, self._embedder.model)
+        missing = [row for row in rows if row["embedding"] is None]
+        if missing:
+            vectors = await self._embedder.embed_documents([Document(row["text"]) for row in missing])
+            await self._db.write(_save_user_vectors, self._embedder.model, [
+                (row["episode_id"], row["seq"], row["text"], to_blob(vector))
+                for row, vector in zip(missing, vectors, strict=True)
+            ])
+        self._held = await self._load()
+
     async def embed_missing(
         self, batch: int = REEMBED_BATCH, progress: Callable[[int], None] | None = None
     ) -> int:
@@ -441,9 +462,11 @@ def _vectors(
     """The corpus's version; the episode, place and vector from `model` of every passage
     that has one; and each character with an episode they are cast in."""
     passages = db.execute(
-        "SELECT episode_id, seq, embedding FROM episode_passages WHERE model = ?"
-        " ORDER BY episode_id, seq",
-        (model,),
+        "SELECT p.episode_id, p.seq, COALESCE(v.embedding, p.embedding)"
+        " FROM episode_passages p LEFT JOIN user_passage_vectors v"
+        " ON v.episode_id = p.episode_id AND v.seq = p.seq AND v.model = ? AND v.text = p.text"
+        " WHERE v.embedding IS NOT NULL OR p.model = ? ORDER BY p.episode_id, p.seq",
+        (model, model),
     ).fetchall()
     cast = db.execute("SELECT character_id, episode_id FROM episode_cast").fetchall()
     return _version(db), passages, cast
@@ -489,6 +512,29 @@ def _texts(
         if row is not None:
             texts[key] = row[0]
     return _version(db), texts
+
+
+def _user_passages(db: sqlite3.Connection, character_id: str, model: str) -> list[sqlite3.Row]:
+    return by_name(db).execute(
+        "SELECT p.episode_id, p.seq, p.text,"
+        " CASE WHEN p.model = ? THEN p.embedding ELSE v.embedding END AS embedding"
+        " FROM episode_passages p JOIN episode_cast c ON c.episode_id = p.episode_id"
+        " LEFT JOIN user_passage_vectors v ON v.episode_id = p.episode_id AND v.seq = p.seq"
+        " AND v.model = ? AND v.text = p.text WHERE c.character_id = ?",
+        (model, model, character_id),
+    ).fetchall()
+
+
+def _save_user_vectors(db: sqlite3.Connection, model: str, rows: list[tuple[str, int, str, bytes]]) -> None:
+    for episode_id, seq, text, vector in rows:
+        db.execute(
+            "INSERT OR REPLACE INTO user_passage_vectors (episode_id, seq, model, text, embedding)"
+            " SELECT episode_id, seq, ?, text, ? FROM episode_passages"
+            " WHERE episode_id = ? AND seq = ? AND text = ?",
+            (model, vector, episode_id, seq, text),
+        )
+    if rows:
+        _changed(db)
 
 
 def _unembedded(
