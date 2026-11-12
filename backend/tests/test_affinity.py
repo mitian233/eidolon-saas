@@ -24,10 +24,6 @@ from tests.test_admin_users import admin_beside
 from tests.test_delete_account import user_id
 
 AFFINITY = "/api/admin/config/affinity"
-UNAVAILABLE = (
-    ".env 里没有配置判断模型，好感度要靠它判断，在启动时就关掉了；"
-    "要启用，请在 .env 里配置判断模型后重启"
-)
 
 
 @pytest.fixture
@@ -147,7 +143,7 @@ async def test_reading_it_needs_a_signed_in_user_and_a_character(make_client: Cl
 
 
 @pytest.mark.parametrize("judge", [FAKE_JUDGE, None])
-async def test_unset_in_env_it_is_on_with_the_judge_model_and_off_without(
+async def test_platform_affinity_switch_does_not_require_judge_credentials(
     make_client: ClientFactory,
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
@@ -169,10 +165,7 @@ async def test_unset_in_env_it_is_on_with_the_judge_model_and_off_without(
 
     affinity = (await status(client)).json()
 
-    if judge is None:
-        assert affinity is None
-    else:
-        assert affinity == {"tier": "trust", "cooldown_until": None}
+    assert affinity == {"tier": "trust", "cooldown_until": None}
 
 
 async def test_off_in_env_there_is_none_until_the_admin_turns_it_on(
@@ -214,19 +207,18 @@ async def test_off_in_env_there_is_none_until_the_admin_turns_it_on(
     assert refused.status_code == 422
 
 
-async def test_without_the_judge_model_there_is_none_and_it_cannot_be_turned_on(
+async def test_affinity_platform_switch_can_be_set_without_platform_judge(
     make_client: ClientFactory, settings: Settings, github: FakeIdentityProvider
 ):
     client = make_client(FakeLLM(), settings=replace(settings, judge=None))
 
     async with admin_beside(client, github) as admin:
         described = (await admin.get("/api/admin/config")).json()["affinity"]
-        refused = await admin.put(AFFINITY, json={"enabled": True})
+        enabled = await admin.put(AFFINITY, json={"enabled": True})
 
-    assert (await status(client)).json() is None
-    assert described == {"unavailable": UNAVAILABLE}
-    assert refused.status_code == 409
-    assert refused.json()["detail"] == UNAVAILABLE
+    assert (await status(client)).json() == {"tier": "trust", "cooldown_until": None}
+    assert described["effective"] == {"enabled": True}
+    assert enabled.status_code == 200
 
 
 async def test_deleting_the_user_deletes_it_and_deleting_memories_does_not(
