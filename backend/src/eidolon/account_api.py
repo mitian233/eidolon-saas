@@ -37,12 +37,14 @@ from eidolon.config import (
     SERVICES,
     BailianRegion,
     ChatModelSettings,
+    EmbeddingSettings,
     FishAudioModel,
     ImageFormat,
     ImageSettings,
     LLMProtocol,
     LLMSettings,
     ReasoningEffort,
+    RerankSettings,
     SttKey,
     SttProvider,
     checked_base_url,
@@ -209,6 +211,35 @@ class OwnImageInput(BaseModel):
         )
 
 
+class OwnRerankInput(BaseModel):
+    """A user's vector service, brought with each request and never stored."""
+
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: ApiKey
+    model: str = Field(min_length=1, max_length=200)
+
+    _base_url = field_validator("base_url")(checked_base_url)
+
+    @field_validator("model")
+    @classmethod
+    def _model(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("请填写模型名")
+        return value.strip()
+
+    def settings(self) -> RerankSettings:
+        return RerankSettings(self.api_key.get_secret_value(), self.model, self.base_url)
+
+
+class OwnEmbeddingInput(OwnRerankInput):
+    dimensions: int = Field(gt=0, strict=True)
+
+    def embedding_settings(self) -> EmbeddingSettings:
+        return EmbeddingSettings(
+            self.base_url, self.model, self.dimensions, self.api_key.get_secret_value(),
+        )
+
+
 class OwnKeysInput(BaseModel):
     """The user's own keys a turn or a call brings, by service; each may be left out. Their
     own model for memories (`memory_llm`) only with their own LLM."""
@@ -218,6 +249,9 @@ class OwnKeysInput(BaseModel):
     stt: OwnSTTInput | None = None
     memory_llm: OwnLLMInput | None = None
     image: OwnImageInput | None = None
+    embedding: OwnEmbeddingInput | None = None
+    rerank: OwnRerankInput | None = None
+    judge_enabled: bool = False
 
     @model_validator(mode="after")
     def _memory_llm_with_llm(self) -> "OwnKeysInput":
@@ -233,6 +267,9 @@ class OwnKeysInput(BaseModel):
             self.memory_llm.settings() if self.memory_llm else None,
             self.tts.model if self.tts else DEFAULT_FISH_AUDIO_MODEL,
             self.image.settings() if self.image else None,
+            embedding=self.embedding.embedding_settings() if self.embedding else None,
+            rerank=self.rerank.settings() if self.rerank else None,
+            judge_enabled=self.judge_enabled,
         )
 
 
