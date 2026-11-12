@@ -12,7 +12,7 @@ import pytest
 from loguru import logger
 
 from eidolon.llm import LLMError
-from eidolon.own_keys import MAX_CAUSE_LENGTH
+from eidolon.own_keys import MAX_CAUSE_LENGTH, OwnRetrievalService
 from tests.browser import Browser
 from tests.conftest import ClientFactory
 from tests.fakes import (
@@ -25,6 +25,7 @@ from tests.fakes import (
     FakeSpeech,
 )
 from tests.test_text_turn import send_turn, start_conversation
+from tests.test_own_llm import EMBEDDING
 
 KEY = "sk-CANARY-7f3a9c2e5b1d"
 PREFIX = KEY[:9]
@@ -57,6 +58,7 @@ async def test_own_keys_stay_out_of_the_logs_and_are_masked_in_what_the_user_is_
     own_llm: FakeLLMService,
     speech: FakeSpeech,
     logged: Callable[[], list[str]],
+    own_vectors: OwnRetrievalService,
 ):
     own_llm.llm = FakeLLM(
         REPLY,  # the turn goes well,
@@ -67,10 +69,12 @@ async def test_own_keys_stay_out_of_the_logs_and_are_masked_in_what_the_user_is_
     client = make_client(
         FakeLLM(), retrieval_judge=FakeJudge(), embedder=FakeEmbedder(), reranker=FakeReranker(),
         background_llm=FakeBackgroundLLM(),
+        own_retrieval_service=own_vectors,
     )
     conversation_id = await start_conversation(client)
 
-    done = await send_turn(client, conversation_id, "我家的猫叫小白哦", own_llm=LLM)
+    done = await send_turn(client, conversation_id, "我家的猫叫小白哦", own_keys={"llm": LLM, "embedding": EMBEDDING})
+    await client.get("/api/memories")  # both failed attempts finish before the next turn
     failed = await send_turn(client, conversation_id, "在吗", own_llm=LLM)
     await client.post(  # refused, its key unchecked
         f"/api/conversations/{conversation_id}/turns",
