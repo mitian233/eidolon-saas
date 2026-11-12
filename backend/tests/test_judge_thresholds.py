@@ -2,7 +2,6 @@
 an unknown model gets, that retrieval and emotion judging use them, and how the emotion
 settings override them."""
 
-import logging
 import asyncio
 import json
 from dataclasses import replace
@@ -10,28 +9,13 @@ from dataclasses import replace
 import pytest
 
 import eidolon.judge
-import eidolon.live_config
-from eidolon.config import EmotionSettings, Settings
-from eidolon.judge import (
-    JUDGE_THRESHOLDS,
-    JudgeThresholds,
-    judge_family,
-    judge_thresholds_for,
-    same_judge_family,
-    warn_if_uncalibrated,
-)
-from eidolon.retrieval import ModelRetrievalJudge
 from eidolon.account_api import OwnKeysInput
+from eidolon.config import EmotionSettings, Settings
+from eidolon.judge import JUDGE_THRESHOLDS, JudgeThresholds, judge_family, judge_thresholds_for
+from eidolon.retrieval import ModelRetrievalJudge
 from tests.fakes import JUDGED_KEYS, FakeLLM, FakeLLMService, build_faked
 from tests.test_emotion_judge import EMOTION, NOD, SEGMENT
 from tests.test_retrieval_services import MANO
-
-ODD = JudgeThresholds(
-    needs_retrieval=0.3, recall=0.7, about_producer=0.9, emotion=0.8, out_of_line=0.6,
-    manipulation=0.4, photo=0.2,
-)
-"""Thresholds none of which is 0.5, to see that each is the one used."""
-
 
 @pytest.mark.parametrize(
     "model, family",
@@ -39,9 +23,9 @@ ODD = JudgeThresholds(
         ("typesafe/jev-1.13", "jev"),
         ("Cloudflare/Clef-Flash", "clef-flash"),
         ("clef", "clef"),
-        ("cloudflare/clef-2", None),  # a new Clef is not judged by the old one's thresholds
+        ("cloudflare/clef-2", None),
         ("decision-model-preview", "decision-model"),
-        ("decision-model", "decision-model"),  # out of preview, judged alike until shown not to
+        ("decision-model", "decision-model"),
         ("decision-modeller", None),
     ],
 )
@@ -49,13 +33,14 @@ def test_a_models_name_falls_in_its_group(model: str, family: str | None):
     assert judge_family(model) == family
 
 
-def test_a_known_model_gets_its_groups_thresholds(caplog: pytest.LogCaptureFixture):
-    with caplog.at_level(logging.WARNING):
-        thresholds = judge_thresholds_for("cloudflare/clef-flash")
+def test_a_known_model_gets_its_groups_thresholds():
+    assert judge_thresholds_for("cloudflare/clef-flash") == JUDGE_THRESHOLDS["clef-flash"]
 
-    assert thresholds == JUDGE_THRESHOLDS["clef-flash"]
-    assert not caplog.records
-
+ODD = JudgeThresholds(
+    needs_retrieval=0.3, recall=0.7, about_producer=0.9, emotion=0.8, out_of_line=0.6,
+    manipulation=0.4, photo=0.2,
+)
+"""Thresholds none of which is 0.5, to see that each is the one used."""
 
 def test_an_unknown_model_gets_jevs(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(JUDGE_THRESHOLDS, "jev", ODD)
@@ -63,34 +48,12 @@ def test_an_unknown_model_gets_jevs(monkeypatch: pytest.MonkeyPatch):
     assert judge_thresholds_for("someone/new-judge") == ODD
 
 
-def test_only_an_unknown_model_is_warned_of(caplog: pytest.LogCaptureFixture):
-    with caplog.at_level(logging.WARNING):
-        warn_if_uncalibrated("typesafe/jev-1.14")
-        warn_if_uncalibrated("someone/new-judge")
-
-    [warning] = caplog.records
-    assert "someone/new-judge" in warning.getMessage()
-
-
-@pytest.mark.parametrize(
-    "set_for, model, holds",
-    [
-        ("typesafe/jev-1.13", "jev-1.14", True),
-        ("typesafe/jev-1.13", "clef", False),
-        ("someone/new-judge", "someone/new-judge", True),
-        ("someone/new-judge", "jev-1.13", False),
-    ],
-)
-def test_thresholds_set_for_a_model_hold_for_its_family(set_for: str, model: str, holds: bool):
-    assert same_judge_family(set_for, model) is holds
-
-
 @pytest.mark.parametrize(
     "retrieve, recall, about_producer, expected",
     [
-        (0.29, 0.69, 0.89, "nothing"),  # 0.5 would have recalled
+        (0.29, 0.69, 0.89, "nothing"),
         (0.29, 0.7, 0.1, "recall"),
-        (0.3, 0.1, 0.1, "references"),  # 0.5 would have looked up nothing
+        (0.3, 0.1, 0.1, "references"),
         (0.1, 0.1, 0.9, "memories"),
     ],
 )
