@@ -65,6 +65,15 @@ key 只存在浏览器里，回合/通话期间随请求带给后端、在进程
 
 用自带 LLM 的文字回合不计入限额；通话带齐了免限额密钥（`EIDOLON_EXEMPTING_LLM`/`_TTS`/`_STT`，默认三项都选）也不计入。
 
+## 回合后的任务
+
+记忆提炼和对话起标题在接下本回合的 API 进程里执行，不等它们结束就返回回复。失败后用同一个仍留在内存里的模型和 key 立即再试一次，最多共两次；服务关闭时取消的任务不重试。不启动独立 worker，也不从数据库取出旧任务补跑。
+
+`jobs` 表只保存 `id`、`turn_id`、`type`（`memory` / `title`）、`status`（`pending` / `running` / `succeeded` / `failed`）、`attempts`、`error`、`created_at` 和 `updated_at`。`turn_id` 指向角色已保存的回复 ID；同一条回复每种任务只记录一次。`error` 只写错误类型（例如 `LLMError`、`ValueError`、`CancelledError`），不保存服务商返回的错误文本、对话内容、端点或 key；成功后清空。提炼结果不是要求的 JSON、标题为空时，也记为失败并重试。记忆已写入而向量化失败时仍保留记忆，沿用下次读取时补算向量的做法。
+
+可用 `SELECT id, turn_id, type, status, attempts, error, created_at, updated_at FROM jobs WHERE status = 'failed' ORDER BY updated_at DESC;` 查看失败记录，或按 `type`、`status` 分组计数。`Store.get_job(id)` / `Store.jobs_for_turn(turn_id)` 供进程内读取。删除对话或账号时一起删除这些记录；其余记录暂不自动清理。进程被强制终止时可能留下 `pending` / `running`，因为 key 已丢失，重启后不会自动重试它们。
+
+
 ## 登录、用户与限额
 
 - 登录：GitHub 或 Google OAuth，至少配一家（`GITHUB_CLIENT_*`、`GOOGLE_CLIENT_*`，见 deploy.md）。本地开发用 `EIDOLON_DEV_LOGIN=1` 按名字登录。
