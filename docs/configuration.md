@@ -60,8 +60,10 @@ DATABASE_URL=postgresql://eidolon:password@postgres:5432/eidolon
 | TTS | 语音合成 | Fish Audio |
 | STT | 语音识别 | Soniox 或阿里云百炼 |
 | 生图 | 照片（玩法待后续里程碑） | NovelAI 或 OpenAI 图像格式 |
+| 向量化 | 长期记忆、资料召回 | 任何 OpenAI 兼容 `/embeddings` 端点 |
+| 重排 | 对召回的资料与记忆排序（可不填） | SiliconFlow `/rerank` 格式端点 |
 
-key 只存在浏览器里，回合/通话期间随请求带给后端、在进程内存里用完即弃：不落库、不进日志、后台看不到（ADR-0017）。回合结束后的记忆提炼、起标题在本进程内用同一把 key 继续做。embedding/rerank 的 BYOK 扩展在 M1。
+key 只存在浏览器里，回合/通话期间随请求带给后端、在进程内存里用完即弃：不落库、不进日志、后台看不到（ADR-0017）。回合结束后的记忆提炼、起标题在本进程内用同一把 key 继续做。
 
 用自带 LLM 的文字回合不计入限额；通话带齐了免限额密钥（`EIDOLON_EXEMPTING_LLM`/`_TTS`/`_STT`，默认三项都选）也不计入。
 
@@ -92,11 +94,15 @@ key 只存在浏览器里，回合/通话期间随请求带给后端、在进程
 
 ## 向量化、重排与判断（可选）
 
-配了才有主动资料召回和记忆；没配时角色只凭人设回复，召回退到模型自己发起的 `recall_story` 工具（需要向量化），记忆关闭。
+用户在设置页填写自己的向量与重排端点；地址、模型、维度和 key 只留在当前浏览器，每次文字回合和通话随请求带来，回合后的记忆提炼仍由同一进程使用这次带来的模型完成。服务器不保存这些设置或 key，也不为缺少的用户端点补平台凭据。
 
-- 向量化 `EMBEDDING_PROVIDER`：`siliconflow`（默认，`SILICONFLOW_API_KEY`）或 `gemini`（`GEMINI_API_KEY`，不对中国大陆开放；免费层内容会被 Google 用于改进产品，公开部署介意就开通计费并填 `GEMINI_BILLING_ENABLED=1`）。模型/维度：`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`。
-- 重排固定在硅基流动：`SILICONFLOW_API_KEY`、`RERANK_MODEL`（默认 Qwen3-Reranker-0.6B）、阈值 `RERANK_MIN_RELEVANCE`/`RERANK_MEMORY_MIN_RELEVANCE`。
-- 判断模型 `JUDGE_PROVIDER`：`jev`（默认，`JEV_API_KEY`，经 OpenRouter）、`cloudflare`（`CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID`，Workers AI 上的 Clef）、`bailian`（`BAILIAN_JUDGE_API_KEY`/`BAILIAN_JUDGE_WORKSPACE_ID`）。没配时不主动检索、好感度关闭、通话表情走默认值。
+- 向量化统一 `POST {base_url}/embeddings`，支持 OpenRouter 等 OpenAI 兼容端点。填写 base_url、模型、维度和 key。更换端点、模型或维度会重新计算记忆向量和当前角色已有资料的向量，旧向量不会参与当前模型的召回。内部标识使用地址的不可逆摘要加 `model@dimensions`，不保存原始端点；各模型的资料向量分别保存，不覆盖彼此。没有向量端点时，资料召回与记忆提炼关闭。
+- 重排可不填：按向量相似度取前几条。填写时用支持 SiliconFlow `/rerank` 格式的端点，输入 `{model, query, documents, top_n}`，输出 `results[].index/relevance_score`。OpenRouter 没有此接口。已校准模型继续使用原来的资料/记忆阈值，未知模型沿用 Qwen3-Reranker-4B 的 `0.7 / 0.005`。
+- 判断功能默认关闭。在设置页开启后，用用户对话 LLM 的同一模型与 key，以 `reasoning_effort=low` 发一次小请求，沿用召回的三个是非题与阈值；通话逐段表情也使用此模型。关闭或未配 LLM 时好感度不再更新、通话表情使用默认值，有向量端点时仍提供 `recall_story` 工具。已保存的好感度仍显示，既有冷却继续阻止新回合，不能通过关闭判断功能绕过。设置页会明确显示是否关闭及调用费用由用户承担。
+
+部署者不需要配置向量化、重排或判断模型的 key。`EMBEDDING_PROVIDER` 和 Gemini 原生向量接口已移除；旧的 `JUDGE_PROVIDER`、`JEV_*`、Cloudflare/百炼判断模型变量不再影响启动与用户请求。底层组件保留 `EMBEDDING_BASE_URL/MODEL/DIMENSIONS/API_KEY`、`RERANK_BASE_URL/MODEL/API_KEY` 读取入口，供本机直接使用；不会成为用户端点的兜底。
+
+代理新增 `own_embedding` 与 `own_rerank` 两个开关，沿用已知服务商才经代理、其他用户端点直连的规则。走用户 key 的向量化、重排与判断请求记录为用户自带服务，不计平台限额。
 
 ## 语音（可选兜底）
 
@@ -111,7 +117,7 @@ WebRTC：`EIDOLON_ICE_SERVERS`（默认 Google 公共 STUN）、`EIDOLON_TURN_UR
 | 文字对话、通话、长期记忆、资料召回、好感度 | 保留（记忆/召回/好感度按上面的配置降级） |
 | 礼物、照片、主动搭话、生理期、酒吧、朋友圈、信、日程、天气、朗读、抽奖/重置卡 | 关闭，留待 M4 之后按需改造（依赖部署者凭据或原作目录） |
 
-`EIDOLON_AFFINITY_AND_GIFTS`（默认 1）控制好感度；需要判断模型。其余关闭玩法的开关变量不再在 `.env.example` 里列出。
+`EIDOLON_AFFINITY_AND_GIFTS`（默认 1）控制平台是否启用好感度；产生新的好感度变化还需用户开启判断功能。其余关闭玩法的开关变量不再在 `.env.example` 里列出。
 
 ## 网络代理与服务状态
 
