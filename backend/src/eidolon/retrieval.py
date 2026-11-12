@@ -316,9 +316,9 @@ class _Found:
 class Retrieval:
     def __init__(
         self,
-        judge: RetrievalJudge,
+        judge: RetrievalJudge | None,
         sources: ReferenceSources,
-        reranker: Reranker,
+        reranker: Reranker | None,
         min_relevance: Callable[[], float],
     ) -> None:
         """`min_relevance` says, whenever asked, the reranker's score below which a
@@ -328,6 +328,9 @@ class Retrieval:
         self._sources = sources
         self._reranker = reranker
         self._min_relevance = min_relevance
+
+    async def aclose(self) -> None:
+        await self._sources.corpus.aclose()
 
     async def retrieve(
         self,
@@ -344,6 +347,8 @@ class Retrieval:
         telling `recalling` as it begins recalling the story for her (GLOSSARY.md「查看」);
         and judge what it does to her affinity, in her `days` if she is in them, and whether
         it asks her for a photo, if asked to."""
+        if self._judge is None:
+            return Retrieved(None)  # Explicit recall_story remains available.
         query = memory_query(history, text)
         embedding = asyncio.ensure_future(self._embed(query))
         finding = asyncio.ensure_future(self._find(character, embedding, memory))
@@ -431,6 +436,8 @@ class Retrieval:
 
     async def _references(self, query: str, candidates: Sequence[Reference]) -> list[Reference]:
         """Those of the `candidates` relevant to `query`, most relevant first."""
+        if self._reranker is None:
+            return sorted(candidates, key=lambda r: -r.similarity)[:FALLBACK_REFERENCES]
         try:
             ranked = await self._sources.rerank(self._reranker, query, candidates)
         except RerankError:
@@ -485,6 +492,8 @@ class Retrieval:
         episode of the nearest candidate and the nearest of `entries`."""
         documents = [r.text for r in story] + [e.text for e in entries]
         try:
+            if self._reranker is None:
+                raise RerankError("未配置重排")
             best = (
                 await self._reranker.rerank(query, documents, len(documents)) if documents else []
             )
