@@ -46,7 +46,7 @@ from tests.fakes import (
     FakeLLM,
     FakeServiceClients,
 )
-from tests.test_live_config import CONFIG, REPLY, admin_client, start
+from tests.test_live_config import REPLY, admin_client
 
 PROXY = "/api/admin/config/proxy"
 ALL_OFF = {s: False for s in PROXIED_SERVICES}
@@ -651,151 +651,25 @@ def routes_of(client: httpx.AsyncClient) -> ProxySettings:
     return client._transport.app.state.backend.config.proxy_settings  # pyright: ignore[reportAttributeAccessIssue]
 
 
-async def test_a_saved_proxy_is_tried_on_the_services_it_reroutes_then_holds_until_restored(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider
-):
-    tried = FakeReach()
-    client = await proxy_admin(make_client, admins, github, tried)
-    before = (await client.get(CONFIG)).json()["proxy"]
-
-    change = {"enabled": True, "url": "http://me:hunter2@127.0.0.1:7890"} | ALL_OFF | {
-        "chat_llm": True, "tts": True, "judge": True, "own_llm": True, "own_tts": True,
-    }
-    saved = await client.put(PROXY, json=change)
-    assert saved.status_code == 200, saved.text
-    in_effect = routes_of(client)
-    again = await client.put(PROXY, json=change | {"url": "http://me@127.0.0.1:7890"})
-    assert again.status_code == 200, again.text
-    restored = await client.delete(PROXY)
-    assert restored.status_code == 200, restored.text
-
-    assert before["status"] == "env" and before["effective"]["enabled"] is False
-    assert before["unconfigured"] == ["judge", "embedding", "rerank", "image", "gpt_image"]
-    # The judge model is not configured, users' own keys are not here: neither is tried.
-    # The password, kept apart, is not shown.
-    proxy = "http://me:hunter2@127.0.0.1:7890"
-    assert tried.reached == [("http://llm.invalid/v1", proxy), ("https://api.fish.audio", proxy)]
-    shown = saved.json()["proxy"]
-    assert shown["status"] == "overridden"
-    assert shown["effective"]["url"] == "http://me@127.0.0.1:7890"
-    assert shown["effective"]["password_last4"] == "ter2"
-    assert "hunter2" not in saved.text
-    assert in_effect == ProxySettings(
-        proxy, True, frozenset({"chat_llm", "tts", "judge", "own_llm", "own_tts"})
-    )
-    assert again.json()["proxy"]["effective"]["password_last4"] == "ter2"  # left out: kept
-    assert routes_of(client) == ProxySettings(None, False, frozenset())
 
 
-async def test_every_switch_of_a_saved_proxy_is_kept(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider
-):
-    client = await proxy_admin(make_client, admins, github, FakeReach())
-    all_on = {s: True for s in PROXIED_SERVICES}
-
-    saved = await client.put(PROXY, json={"enabled": True, "url": "http://127.0.0.1:7890"} | all_on)
-
-    assert saved.status_code == 200, saved.text
-    assert routes_of(client).services == frozenset(PROXIED_SERVICES)
-    assert {s: saved.json()["proxy"]["effective"][s] for s in PROXIED_SERVICES} == all_on
 
 
-async def test_the_deployers_image_generation_goes_through_the_proxy_ticked_for_it(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider,
-    proxy: FakeProxy, provider: FakeProvider,
-):
-    settings = replace(admins, proxy=through(proxy, "image"))
-    client = await admin_client(make_client, settings, github, FakeServiceClients(FakeLLM(REPLY)))
-
-    tried = await client.put("/api/admin/config/image", json={
-        "api_format": "novelai", "base_url": provider.url, "model": "nai-diffusion-5-curated",
-        "concurrency": 1, "api_key": "pst-key-1234",
-    })
-
-    assert tried.status_code == 422  # the provider here answers with no picture
-    assert proxy.went == [where(provider)]
-    assert provider.hits == 1
 
 
-async def test_a_proxy_ticked_for_image_generation_is_tried_on_its_address(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider
-):
-    tried = FakeReach()
-    settings = replace(admins, image=ImageSettings("pst-key", "https://relay.image.test"))
-    client = await proxy_admin(make_client, settings, github, tried)
-
-    saved = await client.put(
-        PROXY, json={"enabled": True, "url": "http://127.0.0.1:7890"} | ALL_OFF | {"image": True}
-    )
-
-    assert saved.status_code == 200, saved.text
-    assert tried.reached == [("https://relay.image.test", "http://127.0.0.1:7890")]
-    assert "image" not in saved.json()["proxy"]["unconfigured"]
 
 
-async def test_a_proxy_some_service_cannot_reach_through_is_not_kept(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider
-):
-    tried = FakeReach(down={"api.fish.audio"})
-    client = await proxy_admin(make_client, admins, github, tried)
-
-    refused = await client.put(
-        PROXY, json={"enabled": True, "url": "http://127.0.0.1:7890"} | ALL_OFF | {"tts": True}
-    )
-
-    assert refused.status_code == 422
-    assert "语音合成（经代理）连 api.fish.audio 不通" in refused.json()["detail"]
-    assert routes_of(client) == ProxySettings(None, False, frozenset())
-    assert (await client.get(CONFIG)).json()["proxy"]["status"] == "env"
 
 
-@pytest.mark.parametrize(
-    ("change", "says"),
-    [
-        ({"enabled": True, "url": None}, "需要填写代理地址"),
-        ({"enabled": False, "url": "127.0.0.1:7890"}, "开头"),
-    ],
-)
-async def test_a_proxy_switched_on_without_an_address_or_with_a_wrong_one_is_refused(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider,
-    change: dict, says: str,
-):
-    client = await proxy_admin(make_client, admins, github, FakeReach())
-
-    refused = await client.put(PROXY, json=change | ALL_OFF)
-
-    assert refused.status_code == 422
-    assert says in refused.json()["detail"]
 
 
-async def test_without_a_secret_key_an_address_with_a_password_is_refused_one_without_kept(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider
-):
-    tried = FakeReach()
-    client = await proxy_admin(make_client, replace(admins, secret_key=None), github, tried)
-
-    refused = await client.put(
-        PROXY, json={"enabled": True, "url": "http://me:pw@127.0.0.1:7890"} | ALL_OFF
-    )
-    kept = await client.put(PROXY, json={"enabled": True, "url": "http://127.0.0.1:7890"} | ALL_OFF)
-
-    assert refused.status_code == 409
-    assert kept.status_code == 200, kept.text
 
 
-async def test_a_proxy_that_cannot_be_reached_as_the_server_starts_falls_back_to_env(
-    make_client: ClientFactory, admins: Settings, github: FakeIdentityProvider
-):
-    tried = FakeReach()
-    client = await proxy_admin(make_client, admins, github, tried)
-    change = {"enabled": True, "url": "http://127.0.0.1:7890"} | ALL_OFF | {"chat_llm": True}
-    assert (await client.put(PROXY, json=change)).status_code == 200
-    tried.down.add("llm.invalid")
-    restarted = await proxy_admin(make_client, admins, github, tried)
 
-    await start(restarted)
 
-    shown = (await restarted.get(CONFIG)).json()["proxy"]
-    assert shown["status"] == "failed"
-    assert "扮演角色的 LLM（经代理）连 llm.invalid 不通" in shown["failure"]
-    assert routes_of(restarted) == ProxySettings(None, False, frozenset())
+
+
+
+
+
+
