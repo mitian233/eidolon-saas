@@ -90,7 +90,7 @@ async def test_in_a_cooldown_turns_and_calls_are_refused_counting_towards_nothin
     clock = FakeClock()
     clients = FakeServiceClients()
     clients.user_judge.judgings = [level(1, out_of_line=True), level(0)]
-    llm = FakeLLM(REPLY, REPLY)
+    llm = FakeLLM(REPLY, REPLY, REPLY)
     client = make_client(llm, clients=clients, clock=clock)
     conversation = await start_conversation(client)
     # Just short of the thaw line: it ends in under 15 minutes, within the hour of the limit.
@@ -107,7 +107,12 @@ async def test_in_a_cooldown_turns_and_calls_are_refused_counting_towards_nothin
         clock.advance(minutes=15)
         thawed = (await status(client)).json()
         # Had the refused turn counted, the hour's one turn would be used up.
+        counted = await send_turn(client, conversation, "冷却结束了吗")
+        exhausted = await post_turn(client, conversation)
+        assert exhausted.status_code == 429
+        assert "每小时 1 次" in exhausted.json()["detail"]
         again = await send_turn(client, conversation, "你这个废物", own_keys=JUDGED_KEYS)
+        assert counted[-1]["type"] == "done"
         clock.advance(hours=1)
         fell_again = await send_turn(client, conversation, "随便你", own_keys=JUDGED_KEYS)
         cooling_again = await post_turn(client, conversation)
@@ -121,7 +126,7 @@ async def test_in_a_cooldown_turns_and_calls_are_refused_counting_towards_nothin
     assert again[-1]["type"] == "done"
     assert fell_again[-1]["message"]["affinity"]["cooldown"] is True
     assert cooling_again.status_code == 409
-    assert len(llm.prompts) == 2
+    assert len(llm.prompts) == 3
 
 
 async def test_a_cooldown_is_hers_alone(make_client: ClientFactory, settings: Settings):
