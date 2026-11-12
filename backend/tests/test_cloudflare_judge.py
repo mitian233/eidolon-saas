@@ -8,7 +8,7 @@ import logging
 import httpx
 import pytest
 
-from eidolon.config import CloudflareJudgeSettings, JevSettings, Settings
+from eidolon.config import CloudflareJudgeSettings, JevSettings, judge_from_env
 from eidolon.judge import CloudflareJudge, JudgeError, SAID, check_judge
 from eidolon.retrieval import ModelRetrievalJudge
 from tests.test_retrieval_services import MANO, Handler, client, recording
@@ -82,17 +82,17 @@ def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     return monkeypatch
 
 
-def test_jev_judges_unless_cloudflare_is_chosen(env: pytest.MonkeyPatch):
+def test_legacy_judge_config_selects_the_requested_provider(env: pytest.MonkeyPatch):
     env.setenv("JEV_API_KEY", "or-key")
-    assert Settings.from_env().judge == JevSettings("or-key")
+    assert judge_from_env() == JevSettings("or-key")
 
     env.setenv("JUDGE_PROVIDER", "cloudflare")
     env.setenv("CLOUDFLARE_API_TOKEN", "cf-token")
     env.setenv("CLOUDFLARE_ACCOUNT_ID", "acc-id")
-    assert Settings.from_env().judge == CloudflareJudgeSettings("cf-token", "acc-id", "clef-flash")
+    assert judge_from_env() == CloudflareJudgeSettings("cf-token", "acc-id", "clef-flash")
 
     env.setenv("CLOUDFLARE_JUDGE_MODEL", "clef")
-    assert Settings.from_env().judge == CloudflareJudgeSettings("cf-token", "acc-id", "clef")
+    assert judge_from_env() == CloudflareJudgeSettings("cf-token", "acc-id", "clef")
 
 
 @pytest.mark.parametrize(
@@ -103,7 +103,7 @@ def test_jev_judges_unless_cloudflare_is_chosen(env: pytest.MonkeyPatch):
         (("CLOUDFLARE_API_TOKEN",), {}, "CLOUDFLARE_API_TOKEN"),
     ],
 )
-def test_a_judge_misconfigured_stops_the_start(
+def test_invalid_legacy_judge_config_is_refused(
     env: pytest.MonkeyPatch, unset: tuple[str, ...], overrides: dict[str, str], named: str
 ):
     configured = {"JUDGE_PROVIDER": "cloudflare", "CLOUDFLARE_API_TOKEN": "cf-token",
@@ -113,7 +113,7 @@ def test_a_judge_misconfigured_stops_the_start(
             env.setenv(name, value)
 
     with pytest.raises(RuntimeError, match=named):
-        Settings.from_env()
+        judge_from_env()
 
 
 VERIFY_URL = "https://api.cloudflare.com/client/v4/user/tokens/verify"
