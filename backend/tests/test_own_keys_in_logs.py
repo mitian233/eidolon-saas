@@ -61,6 +61,7 @@ async def test_own_keys_stay_out_of_the_logs_and_are_masked_in_what_the_user_is_
     own_llm.llm = FakeLLM(
         REPLY,  # the turn goes well,
         LLMError(echoing("401 Unauthorized")),  # writing down its memories does not;
+        LLMError(echoing("401 Unauthorized")),  # its one retry fails too;
         LLMError(echoing("402 Payment Required")),  # the next turn fails
     )
     client = make_client(
@@ -84,7 +85,7 @@ async def test_own_keys_stay_out_of_the_logs_and_are_masked_in_what_the_user_is_
     }
 
     assert done[-1]["type"] == "done"
-    assert any("writing memories failed" in line for line in logged())
+    assert any("memory job" in line and "failed: OwnKeyFailed" in line for line in logged())
     assert failed[-1]["message"].endswith("***")
     assert PREFIX not in failed[-1]["message"]
     for service, res in checks.items():
