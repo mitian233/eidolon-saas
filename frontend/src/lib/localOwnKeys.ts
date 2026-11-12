@@ -8,7 +8,7 @@ import { REASONING_EFFORTS, type JsonObject, type ReasoningEffort } from "@/lib/
 // 下面几份取值列表跟后端同步（不做代码生成）：后端改了，这里照着改。
 
 /** 能自带 key 的服务：后端 `config.Service`。 */
-export const OWN_SERVICES = ["llm", "tts", "stt", "image"] as const;
+export const OWN_SERVICES = ["llm", "tts", "stt", "image", "embedding", "rerank"] as const;
 export type OwnService = (typeof OWN_SERVICES)[number];
 
 /** 能选作免限额密钥的服务（GLOSSARY.md「免限额密钥」）：后端 `config.EXEMPTING_SERVICES`。生图从来不算，
@@ -75,6 +75,9 @@ export type LocalSttKey = { api_key: string; provider: SttProvider; region?: Bai
 /** 自带的生图（后端 `OwnImageInput`）：接口形式、地址、key、模型四项；同时生成几张和画风不归用户设。 */
 export type LocalImage = { api_format: ImageFormat; base_url: string; api_key: string; model: string };
 
+export type LocalRerank = { base_url: string; api_key: string; model: string };
+export type LocalEmbedding = LocalRerank & { dimensions: number };
+
 /** 一位用户在这个浏览器里存的自带密钥，每项都可以没有。原样就是请求里的 `own_keys`（后端 `OwnKeysInput`）。
  * `memory_llm` 是另配的后台模型：只跟着 `llm` 存在，不算一项服务（`ownServices` 不报它）。 */
 export type LocalOwnKeys = {
@@ -83,6 +86,9 @@ export type LocalOwnKeys = {
   stt?: LocalSttKey;
   memory_llm?: LocalModel;
   image?: LocalImage;
+  embedding?: LocalEmbedding;
+  rerank?: LocalRerank;
+  judge_enabled?: boolean;
 };
 
 /** 浏览器里存的一项：一项服务的 key，或者后台模型。 */
@@ -138,7 +144,24 @@ export function localOwnKeys(userId: string): LocalOwnKeys {
   ) {
     keys.image = { api_format: image.api_format, base_url: image.base_url, api_key: image.api_key, model: image.model };
   }
+  const embedding = localVectorService(stored.embedding);
+  if (embedding && isRecord(stored.embedding)) {
+    const dimensions = stored.embedding.dimensions;
+    if (typeof dimensions === "number" && Number.isInteger(dimensions) && dimensions > 0) {
+      keys.embedding = { ...embedding, dimensions };
+    }
+  }
+  const rerank = localVectorService(stored.rerank);
+  if (rerank) keys.rerank = rerank;
+  if (typeof stored.judge_enabled === "boolean") keys.judge_enabled = stored.judge_enabled;
   return keys;
+}
+
+function localVectorService(stored: unknown): LocalRerank | undefined {
+  if (!isRecord(stored)) return undefined;
+  const { base_url, api_key, model } = stored;
+  if (![base_url, api_key, model].every((value) => typeof value === "string" && value.trim())) return undefined;
+  return { base_url: base_url as string, api_key: api_key as string, model: model as string };
 }
 
 /** 存下的一个自带模型；存错了就没有。存下它以前没有、或者存错了的思考强度和额外请求参数当作不设置。 */
@@ -187,14 +210,11 @@ export function forgetOwnKeys(userId: string): void {
   changed();
 }
 
-/** 一次文字回合要带的 `own_keys`：这位用户存的 LLM（连同后台模型）和生图，文字回合用不上语音 key，不带出去；
- * 两样都没存就不带。 */
-export function turnOwnKeys(
-  userId: string,
-): Pick<LocalOwnKeys, "llm" | "memory_llm" | "image"> | undefined {
-  const { llm, memory_llm, image } = localOwnKeys(userId);
-  if (!llm && !image) return undefined;
-  return { ...(llm && { llm, ...(memory_llm && { memory_llm }) }), ...(image && { image }) };
+/** 每次文字回合现读用户服务；语音 key 不随文字请求发送。 */
+export function turnOwnKeys(userId: string): Omit<LocalOwnKeys, "tts" | "stt"> | undefined {
+  const { tts: _tts, stt: _stt, ...keys } = localOwnKeys(userId);
+  if (!keys.llm && !keys.image && !keys.embedding && !keys.rerank) return undefined;
+  return keys;
 }
 
 /** 朗读（GLOSSARY.md「朗读」）要带的 `own_keys`：只带这位用户存的语音合成那一把，没存就不带。 */
