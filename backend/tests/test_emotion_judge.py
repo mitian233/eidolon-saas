@@ -1,12 +1,12 @@
-"""Jev judging a segment's emotion: what it is asked through TypeSafe's System One endpoint,
-how its Choice answers are read, and how judging is configured."""
+"""The user's LLM judges segment emotions and nods in one request."""
 
-import httpx
 import pytest
 
 from eidolon.emotion import ModelEmotionJudge, SaidSegment, SegmentToJudge
-from eidolon.judge import JevJudge, JudgeError
-from tests.test_retrieval_services import MANO, client, recording
+from eidolon.judge import LLMJudge, JudgeError
+from eidolon.llm import LLMError
+from tests.fakes import FakeLLM
+from tests.test_retrieval_services import MANO, RecordingLLM
 
 SEGMENT = SegmentToJudge(
     MANO, "你今天很可爱",
@@ -16,14 +16,10 @@ SEGMENT = SegmentToJudge(
 
 
 def answered(requests: list[dict], answers: dict) -> ModelEmotionJudge:
-    body = {"model": "typesafe/jev-1.13-20260917", "answers": answers}
-    return ModelEmotionJudge(JevJudge(
-        "jev-key", "typesafe/jev-1.13", "http://jev.test/api/v1",
-        client(recording(requests, httpx.Response(200, json=body))),
-    ))
+    return ModelEmotionJudge(LLMJudge(RecordingLLM(requests, answers)))
 
 
-# Keys in no fixed order, as Jev sends them.
+# Options may arrive in any order.
 EMOTION = {"type": "choice", "choice": "害羞", "confidence": 0.47, "probabilities": {
     "生气": 0, "难过": 0, "平静": 0, "开心": 0.45, "害羞": 0.54, "惊讶": 0.01, "思考": 0,
 }}
@@ -38,8 +34,7 @@ async def test_jev_is_asked_both_questions_of_the_segment_at_once():
     await answered(requests, {"emotion": EMOTION, "nod": NOD}).judge_emotion(SEGMENT)
 
     [request] = requests
-    assert request["url"] == "http://jev.test/api/v1/systemone"
-    assert request["auth"] == "Bearer jev-key"
+    assert set(request) == {"state", "questions"}
     assert request["state"] == {
         "角色": "櫻木真乃",
         "用户这句话": "你今天很可爱",
@@ -96,16 +91,12 @@ async def test_jevs_answers_are_read_by_option_name():
     ids=["missing", "no known option", "not a choice"],
 )
 async def test_answers_that_cannot_be_read_are_reported(answers: dict):
-    with pytest.raises(JudgeError, match="nod|emotion"):
+    with pytest.raises(JudgeError, match="用户判断模型"):
         await answered([], answers).judge_emotion(SEGMENT)
 
 
-async def test_jev_errors_are_reported():
-    judge = ModelEmotionJudge(JevJudge(
-        "k", "typesafe/jev-1.13", "http://jev.test/api/v1",
-        client(lambda _: httpx.Response(429, text="slow down")),
-    ))
-
-    with pytest.raises(JudgeError, match="429"):
+async def test_user_model_errors_are_reported():
+    judge = ModelEmotionJudge(LLMJudge(FakeLLM(LLMError("429 slow down"))))
+    with pytest.raises(JudgeError, match="用户判断模型"):
         await judge.judge_emotion(SEGMENT)
 
