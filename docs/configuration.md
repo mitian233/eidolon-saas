@@ -4,6 +4,22 @@ Eidolon-SaaS 是公益 BYOK 服务：**平台零凭据也能启动和服务**。
 
 有后台时（设了 `EIDOLON_ADMINS`，或开着开发登录），模型、key、限额等很多项也可以在 `/admin` 后台改：后台改过的项优先于 `.env`，之后再改 `.env` 的同一项不生效，要先在后台恢复。启动日志列出被后台覆盖的项。
 
+## 数据库
+
+多个 API 实例共用 Postgres 时，给每个实例设置同一个连接地址：
+
+```sh
+DATABASE_URL=postgresql://eidolon:password@postgres:5432/eidolon
+```
+
+地址支持 `postgresql://` 和 `postgres://`；可在地址里加 `sslmode=require` 等 Postgres 参数。程序使用 psycopg 3，保留原有 `Store` 接口；读操作在只读、REPEATABLE READ 事务中完成。写操作仍按原有规则串行提交，数据库事务锁让不同 API 进程里的「先读再写」也不会互相覆盖。每个进程默认开 1 个写连接、4 个读连接。
+
+没设 `DATABASE_URL` 时，继续使用 `EIDOLON_DATABASE_PATH` 指向的 SQLite 文件，默认 `data/eidolon.db`。`DATABASE_URL` 优先于本地文件路径；代码直接传入的 Postgres URL 优先于环境变量。Postgres 地址不通时启动失败，不会改用本地文件。
+
+切换地址不会自动搬运 SQLite 里的旧数据。Postgres 的导出与导入请使用 `pg_dump` / `pg_restore`；现有 `eidolon backup` / `eidolon restore` 和 `deploy/db-*.sh` 面向 SQLite 文件，不能用于 Postgres。Postgres 删除账号后，旧行版本、WAL 和导出文件保留多久由数据库的运维设置决定，不承诺 SQLite 的文件覆写行为。
+
+后端测试用 `pgserver` 在 Linux/macOS 启动临时 Postgres，不需要 Docker 或管理员身份；`test_database.py` 的存取、事务、API 对话和统计测试同时覆盖 `[sqlite]`、`[postgres]`。数据库和服务随测试结束关闭。
+
 ## 角色
 
 角色存在数据库里，通过 API 创建和管理（M0 没有编辑界面，通用壳在 M2）。登录拿到会话 cookie 后：
