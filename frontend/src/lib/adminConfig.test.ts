@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   changeOf,
@@ -9,6 +9,7 @@ import {
   lockedOn,
   UNLIMITED,
   statusDisplay,
+  saveItem,
   TAB_ITEMS,
   tabFromQuery,
   tabHasFailure,
@@ -20,6 +21,23 @@ import {
 
 const ENV: Shown = { enabled: false };
 const OVERRIDE: Shown = { enabled: true };
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("saveItem", () => {
+  it("sends configuration changes as JSON", async () => {
+    const fetch = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({}));
+    vi.stubGlobal("fetch", fetch);
+
+    await saveItem("affinity", { enabled: true });
+
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe("/api/admin/config/affinity");
+    expect(init?.method).toBe("PUT");
+    expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
+    expect(JSON.parse(String(init?.body))).toEqual({ enabled: true });
+  });
+});
 
 function item(status: ConfigItem["status"]): ConfigItem {
   return {
