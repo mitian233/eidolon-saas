@@ -7,7 +7,6 @@ Turns and calls use a small request to the user's own LLM.
 """
 
 import json
-import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -16,7 +15,6 @@ from eidolon.characters import Character
 from eidolon.llm import ChatLLM, ChatMessage
 from eidolon.store import Message
 
-log = logging.getLogger(__name__)
 
 JUDGE_HISTORY = 4
 """How many of the latest messages the judge model sees along with what the user just said."""
@@ -117,27 +115,10 @@ def judge_family(model: str) -> JudgeFamily | None:
 
 
 def judge_thresholds_for(model: str) -> JudgeThresholds:
-    """The thresholds `model` judges by; Jev's for a model not known (see
-    `warn_if_uncalibrated`)."""
+    """The thresholds `model` judges by; unknown models use Jev's."""
     return JUDGE_THRESHOLDS[judge_family(model) or FALLBACK_FAMILY]
 
 
-def warn_if_uncalibrated(model: str) -> None:
-    """Warn that `model`, taking effect, has no thresholds of its own, if it has none."""
-    if judge_family(model) is None:
-        log.warning(
-            "judge model %s has no thresholds of its own; it judges by %s's: %s",
-            model, FALLBACK_FAMILY, JUDGE_THRESHOLDS[FALLBACK_FAMILY],
-        )
-
-
-def same_judge_family(set_for: str, model: str) -> bool:
-    """Whether thresholds set for judge model `set_for` hold for `model`: the two are of
-    one family, or, either being of none, are the one model."""
-    families = judge_family(set_for), judge_family(model)
-    if None in families:
-        return set_for == model
-    return families[0] == families[1]
 
 
 
