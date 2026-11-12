@@ -1,5 +1,4 @@
-"""The retrieval services' own protocols: SiliconFlow's rerank endpoint, and Jev through
-TypeSafe's System One endpoint (OpenRouter's by default), and how Jev is configured."""
+"""Rerank protocol and the user's LLM answering retrieval questions."""
 
 import json
 from collections.abc import Callable
@@ -8,13 +7,15 @@ import httpx
 import pytest
 
 from eidolon.characters import Character
-from eidolon.config import JevSettings, Settings
+from eidolon.config import Settings
 from eidolon.producer import Birthday
 from eidolon.rerank import RerankError, SiliconFlowReranker
-from eidolon.judge import JevJudge, JudgeError, SAID
+from eidolon.judge import LLMJudge, JudgeError, SAID
 from eidolon.retrieval import ModelRetrievalJudge
 from eidolon.store import Message
 from tests.test_embedding import HANG, Answer, scripted
+from tests.fakes import FakeLLM
+from eidolon.llm import LLMError
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -120,24 +121,26 @@ def message(role: str, text: str) -> Message:
     return Message(2, "character", None, text, "", "2026-09-25T00:00:00+00:00")
 
 
+class RecordingLLM(FakeLLM):
+    def __init__(self, requests: list[dict], answers: dict) -> None:
+        super().__init__([json.dumps(answers, ensure_ascii=False)])
+        self.requests = requests
+
+    async def stream(self, messages, tools=(), *, forbid_calls=False):
+        self.requests.append(json.loads(messages[-1].content))
+        async for chunk in super().stream(messages, tools, forbid_calls=forbid_calls):
+            yield chunk
+
+
 def judge_answering(
     requests: list[dict], retrieve: float, recall: float = 0.01, about_producer: float = 0.02
 ) -> ModelRetrievalJudge:
-    body = {
-        "id": "gen-dec-1",
-        "model": "typesafe/jev-1.13-20260917",
-        "provider": "TypeSafe",
-        "answers": {
-            "needs_retrieval": {"type": "noul", "noul": retrieve},
-            "recall": {"type": "noul", "noul": recall},
-            "about_producer": {"type": "noul", "noul": about_producer},
-        },
-        "usage": {"input_tokens": 500, "output_tokens": 0, "cost": 0.00002},
+    answers = {
+        "needs_retrieval": {"noul": retrieve},
+        "recall": {"noul": recall},
+        "about_producer": {"noul": about_producer},
     }
-    return ModelRetrievalJudge(JevJudge(
-        "jev-key", "typesafe/jev-1.13", "http://jev.test/api/v1",
-        client(recording(requests, httpx.Response(200, json=body))),
-    ))
+    return ModelRetrievalJudge(LLMJudge(RecordingLLM(requests, answers)))
 
 
 @pytest.mark.parametrize(
@@ -159,9 +162,7 @@ async def test_jev_answers_what_the_turn_needs(
     judge = judge_answering(requests, retrieve, recall, about_producer)
     assert await judge.judge(MANO, [], "那次比赛") == (expected, None, False)
     [request] = requests  # all questions in one call
-    assert request["url"] == "http://jev.test/api/v1/systemone"
-    assert request["auth"] == "Bearer jev-key"
-    assert request["model"] == "typesafe/jev-1.13"
+    assert set(request) == {"state", "questions"}
     for question in request["questions"].values():
         assert question["type"] == "noul"
         assert question["criteria"].keys() == {"true", "false"}  # System One wants both
@@ -180,44 +181,18 @@ async def test_jev_sees_the_latest_messages_and_what_was_just_said():
     assert state[SAID] == "那次比赛"
 
 
-async def test_jev_errors_are_reported():
-    judge = ModelRetrievalJudge(JevJudge(
-        "k", "typesafe/jev-1.13", "http://jev.test/api/v1",
-        client(lambda _: httpx.Response(503, text="busy")),
-    ))
-
-    with pytest.raises(JudgeError, match="503"):
+async def test_user_model_errors_are_reported():
+    judge = ModelRetrievalJudge(LLMJudge(FakeLLM(LLMError("503 busy"))))
+    with pytest.raises(JudgeError, match="用户判断模型"):
         await judge.judge(MANO, [], "在吗")
 
 
-async def test_unparsable_jev_answers_are_reported():
-    judge = ModelRetrievalJudge(JevJudge(
-        "k", "typesafe/jev-1.13", "http://jev.test/api/v1",
-        client(lambda _: httpx.Response(200, json={"answers": {}})),
-    ))
-
-    with pytest.raises(JudgeError, match="无法解析"):
+async def test_unparsable_user_model_answers_are_reported():
+    judge = ModelRetrievalJudge(LLMJudge(FakeLLM(["{}"])))
+    with pytest.raises(JudgeError, match="用户判断模型"):
         await judge.judge(MANO, [], "在吗")
 
 
-def test_jev_goes_through_openrouter_by_default(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("JEV_MODEL", raising=False)
-    monkeypatch.delenv("JEV_BASE_URL", raising=False)
-    monkeypatch.setenv("JEV_API_KEY", "or-key")
-
-    assert JevSettings.from_env() == JevSettings(
-        "or-key", "typesafe/jev-1.13", "https://openrouter.ai/api/v1"
-    )
-
-
-def test_jev_can_be_reached_elsewhere(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("JEV_API_KEY", "ts-key")
-    monkeypatch.setenv("JEV_MODEL", "jev-1.13.0")
-    monkeypatch.setenv("JEV_BASE_URL", "https://api.typesafe.ai/v1")
-
-    assert JevSettings.from_env() == JevSettings(
-        "ts-key", "jev-1.13.0", "https://api.typesafe.ai/v1"
-    )
 
 
 def test_the_old_gateway_key_does_not_require_a_platform_judge(monkeypatch: pytest.MonkeyPatch):
@@ -227,4 +202,4 @@ def test_the_old_gateway_key_does_not_require_a_platform_judge(monkeypatch: pyte
     monkeypatch.setenv("CHAT_LLM_API_KEY", "chat-key")
     monkeypatch.setenv("CHAT_LLM_MODEL", "chat-model")
 
-    assert Settings.from_env().judge is None
+    assert not hasattr(Settings.from_env(), "judge")
