@@ -88,7 +88,7 @@ export const zh = {
     optional: "可选",
   },
   /** 能自带密钥的几项服务（GLOSSARY.md「自带密钥」），列在一句话里时的名字。 */
-  ownServices: { llm: "LLM", tts: "语音合成", stt: "语音识别", image: "生图" },
+  ownServices: { llm: "LLM", tts: "语音合成", stt: "语音识别", image: "生图", embedding: "向量化", rerank: "重排" },
   /** 把几项服务列成一句：「LLM」「LLM 和语音识别」「LLM、语音合成和语音识别」。 */
   serviceList: { separator: "、", last: "和" },
   /** 思考强度（GLOSSARY.md「思考强度」）的各档：下拉框里中文名后面括号写发给服务的原值。 */
@@ -720,6 +720,16 @@ export const zh = {
         "这个浏览器无法保存自带密钥，可能开着隐私模式，或者禁止了网站保存数据。换一个浏览器，或者允许本站保存数据后再填写。",
       llmTitle: "LLM（扮演角色、记住你说的事）",
       llmHint: "小模型会降低角色扮演和记忆的质量。模型需要支持流式输出和工具调用，保存前会先试调一次。",
+      embeddingTitle: "向量化（记忆与资料召回）",
+      embeddingHint: "填写 OpenAI 兼容的向量端点、模型、维度和 key。OpenRouter、硅基流动等均可；未填写时记忆与资料召回关闭。",
+      rerankTitle: "重排（可选）",
+      rerankHint: "需要支持 SiliconFlow /rerank 格式的端点。OpenRouter 没有重排接口；未填写时按向量相似度取前几条。",
+      vectorNotSet: "未填写",
+      dimensions: "向量维度",
+      vectorSave: "保存在此浏览器",
+      judgeTitle: "判断功能",
+      judgeOff: "判断功能已关闭，好感度不会变化，通话表情使用默认值，召回靠角色自己调用工具兜底。",
+      judgeOn: "已开启：使用上面 LLM 的同一模型与 key，以低推理档判断召回和好感度；通话也会判断表情，调用费用由你承担。",
       ttsTitle: "语音合成（Fish Audio）",
       ttsModel: "模型",
       /** Fish Audio 的模型（`FISH_AUDIO_MODELS`），后台配置页的选项也用这份名字。 */
@@ -1532,6 +1542,8 @@ export const zh = {
           own_tts: "自带的语音合成走代理",
           own_stt: "自带的语音识别走代理",
           own_image: "自带的生图走代理",
+          own_embedding: "自带的向量化走代理",
+          own_rerank: "自带的重排走代理",
         },
         service_status: {
           window_minutes: "统计时段",
