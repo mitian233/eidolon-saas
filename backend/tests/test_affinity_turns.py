@@ -28,7 +28,7 @@ from eidolon.config import Settings
 from eidolon.llm import LLMError
 from tests.conftest import ClientFactory
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     FakeClock,
     FakeEmbedder,
     FakeIdentityProvider,
@@ -42,6 +42,7 @@ from tests.test_admin_users import admin_beside
 from tests.test_affinity import AFFINITY, keep, status
 from tests.test_delete_account import user_id
 from tests.test_text_turn import leave_turn, send_turn, start_conversation
+from tests.fakes import RETRIEVAL_KEYS
 
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
 TRUST = {"tier": "trust", "cooldown_until": None}
@@ -50,12 +51,7 @@ TRUST = {"tier": "trust", "cooldown_until": None}
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """With an admin, the judge model, and affinity on in `.env`."""
-    return replace(
-        settings,
-        admins=frozenset({("github", "9001")}),
-        judge=FAKE_JUDGE,
-        affinity_and_gifts=True,
-    )
+    return replace(settings, admins=frozenset({("github", "9001")}), affinity_and_gifts=True,)
 
 
 def value(database: Path, user: str = "producer", character: str = "mano") -> float | None:
@@ -79,12 +75,12 @@ def change(up: bool, tier: str, *, tier_changed: bool = False, cooldown: bool = 
 
 
 async def turns(
-    client: httpx.AsyncClient, database: Path, conversation: str, count: int
+    client: httpx.AsyncClient, database: Path, conversation: str, count: int, keys: dict = JUDGED_KEYS
 ) -> list[tuple[float | None, dict]]:
     """Take `count` turns: the value each leaves, and its `done`."""
     taken = []
     for i in range(count):
-        events = await send_turn(client, conversation, f"第{i}句")
+        events = await send_turn(client, conversation, f"第{i}句", own_keys=keys)
         taken.append((value(database), events[-1]))
     return taken
 
@@ -93,7 +89,7 @@ async def test_each_level_changes_it_by_its_step_and_two_as_likely_change_nothin
     make_client: ClientFactory, settings: Settings
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [
+    clients.user_judge.judgings = [
         level(0), level(1), level(2), level(3), level(4), Judging({1: 0.4, 3: 0.4, 2: 0.2}),
     ]
     client = make_client(FakeLLM(*[REPLY] * 6), clients=clients, clock=FakeClock())
@@ -113,8 +109,8 @@ async def test_each_level_changes_it_by_its_step_and_two_as_likely_change_nothin
     ]
     assert [m["affinity"] for m in messages if m["role"] == "user"] == [None] * 6
     # Retrieval off: each turn's questions in a request of their own, recorded as one.
-    assert [kind for _, kind in clients.judge.asked] == ["affinity"] * 6
-    assert clients.judge.affinity_asked == [f"第{i}句" for i in range(6)]
+    assert [kind for _, kind in clients.user_judge.asked] == ["affinity"] * 6
+    assert clients.user_judge.affinity_asked == [f"第{i}句" for i in range(6)]
     assert judge_calls(settings.database_path) == 6
 
 
@@ -122,7 +118,7 @@ async def test_out_of_line_lowers_it_by_ten_and_dictating_it_never_raises_it(
     make_client: ClientFactory, settings: Settings
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [
+    clients.user_judge.judgings = [
         level(4, out_of_line=True), level(4, manipulation=True), level(1, manipulation=True),
     ]
     client = make_client(FakeLLM(*[REPLY] * 3), clients=clients, clock=FakeClock())
@@ -142,7 +138,7 @@ async def test_turns_raise_it_by_0_6_a_day_at_most_the_day_in_beijing(
 ):
     clock = FakeClock()  # 12:00 UTC, 20:00 in Beijing, 21:00 in Tokyo
     clients = FakeServiceClients()
-    clients.judge.judgings = [
+    clients.user_judge.judgings = [
         level(4), level(4), level(3), level(4), level(3), level(0),
         level(4), level(4), level(4), level(4),
     ]
@@ -169,7 +165,7 @@ async def test_what_the_steps_fractions_leave_of_the_day_is_no_sliver_to_raise_i
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(3)] * 7
+    clients.user_judge.judgings = [level(3)] * 7
     client = make_client(FakeLLM(*[REPLY] * 7), clients=clients, clock=clock)
     conversation = await start_conversation(client)
     keep(settings.database_path, "producer", 63.7, clock.now)  # six 0.1s from it leave one
@@ -184,7 +180,7 @@ async def test_it_falls_no_lower_than_0_where_a_cooldown_begins(
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0)]
+    clients.user_judge.judgings = [level(0)]
     client = make_client(FakeLLM(REPLY), clients=clients, clock=clock)
     keep(settings.database_path, "producer", 1, clock.now)
     conversation = await start_conversation(client)
@@ -202,7 +198,7 @@ async def test_a_turn_the_judge_model_cannot_judge_changes_nothing_and_goes_on(
     make_client: ClientFactory, settings: Settings
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [Judging(fails=True)]
+    clients.user_judge.judgings = [Judging(fails=True)]
     client = make_client(FakeLLM(REPLY), clients=clients)
     conversation = await start_conversation(client)
 
@@ -218,20 +214,20 @@ async def test_a_turn_not_recorded_changes_nothing(
     make_client: ClientFactory, settings: Settings
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0), level(0)]
+    clients.user_judge.judgings = [level(0), level(0)]
     client = make_client(
         FakeLLM(LLMError("model is down"), ["<ja>は", "い</ja><zh>好的</zh>"], delay=0.05),
         clients=clients,
     )
     conversation = await start_conversation(client)
 
-    failed = await send_turn(client, conversation, "你好")
-    left = await leave_turn(client, conversation, "你好", after="delta")
-    rejected = await send_turn(client, conversation, " ")
+    failed = await send_turn(client, conversation, "你好", own_keys=JUDGED_KEYS)
+    left = await leave_turn(client, conversation, "你好", after="delta", own_keys=JUDGED_KEYS)
+    rejected = await send_turn(client, conversation, " ", own_keys=JUDGED_KEYS)
 
     assert [failed[-1]["type"], rejected[-1]["type"]] == ["error", "error"]
     assert left[-1]["type"] == "delta"
-    assert clients.judge.affinity_asked == ["你好", "你好"]  # judged, never changed
+    assert clients.user_judge.affinity_asked == ["你好", "你好"]  # judged, never changed
     assert value(settings.database_path) is None
     assert (await status(client)).json() == TRUST
 
@@ -240,18 +236,18 @@ async def test_with_retrieval_on_the_questions_go_in_its_request_and_fail_with_i
     make_client: ClientFactory, settings: Settings
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(4), Judging(fails=True)]
+    clients.user_judge.judgings = [level(4), Judging(fails=True)]
     client = make_client(
         FakeLLM(REPLY, REPLY), clients=clients, embedder=FakeEmbedder(),
         reranker=FakeReranker(), clock=FakeClock(),
     )
     conversation = await start_conversation(client)
 
-    taken = await turns(client, settings.database_path, conversation, 2)
+    taken = await turns(client, settings.database_path, conversation, 2, RETRIEVAL_KEYS)
 
     assert [v for v, _ in taken] == pytest.approx([50.2, 50.2])
     assert taken[1][1]["type"] == "done"
-    assert [kind for _, kind in clients.judge.asked] == ["turn", "turn"]
+    assert [kind for _, kind in clients.user_judge.asked] == ["turn", "turn"]
     assert judge_calls(settings.database_path) == 2
 
 
@@ -259,7 +255,7 @@ async def test_off_the_judge_model_is_never_asked_and_on_again_it_is_from_the_ne
     make_client: ClientFactory, settings: Settings, github: FakeIdentityProvider
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0)]
+    clients.user_judge.judgings = [level(0)]
     client = make_client(
         FakeLLM(REPLY, REPLY),
         clients=clients,
@@ -276,6 +272,6 @@ async def test_off_the_judge_model_is_never_asked_and_on_again_it_is_from_the_ne
     assert off is None
     assert done_off["affinity"] is None
     assert done_off["message"]["affinity"] is None
-    assert len(clients.judge.affinity_asked) == 1  # only once on
+    assert len(clients.user_judge.affinity_asked) == 1  # only once on
     assert on == 48.5
     assert done_on["affinity"] == TRUST
