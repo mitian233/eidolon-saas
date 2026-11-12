@@ -7,23 +7,21 @@ model that turn began with (`TurnLLMs.background`: the deployer's, or the user's
 names it, in the background like writing down memories, so it never holds up the reply;
 but apart from memory, which may be off. It reads the record up to then, events and all but
 her reach-outs and her being unwell, her name, and nothing else: no memories, nor who she
-is. What it answers is cut down to a title (`title_from`). It is named once: a
-conversation the model failed to name, or named with nothing, is never named again, and the
-user is not told. The log says what kind of failure it was, or how long the answer was,
-never what was asked or answered, as that is about the user; nor the title.
+is. What it answers is cut down to a title (`title_from`). A failed attempt is retried once
+with the same in-memory model; `jobs` records the outcome without its inputs or key.
+The log only names the failure type, never what was asked or answered, nor the title.
 
 The title is for the user alone: she is never told it, nor is the admin shown it. It is
 kept on the conversation, and deleted with it.
 """
 
 import asyncio
-import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 
-from eidolon.activity import detached
 from eidolon.characters import Character
 from eidolon.gift_catalog import Gift
+from eidolon.jobs import JobRunner
 from eidolon.llm import ChatLLM, ChatMessage
 from eidolon.store import (
     Conversation,
@@ -33,8 +31,6 @@ from eidolon.store import (
     Store,
     told_her,
 )
-
-log = logging.getLogger(__name__)
 
 TITLED_AT = 3
 """The turn after which a conversation is named, counting from 1."""
@@ -71,24 +67,23 @@ class Titles:
         self._characters = characters
         self._gift_catalog = gift_catalog
         self._pending: dict[str, set[asyncio.Task[None]]] = {}  # user id → naming
+        self._jobs = JobRunner(store)
 
     def after_turn(
         self,
         conversation: Conversation,
         turn: int,
+        turn_id: int,
         llm: ChatLLM,
         hold: Callable[[], Callable[[], None]],
     ) -> None:
-        """Once the conversation's `turn`th turn is recorded: if it is the `TITLED_AT`th,
-        start naming the conversation with `llm`, held on to with `hold` (see
-        `TurnLLMs.hold_background`) until it is named."""
+        """Once the conversation's `turn`th turn is recorded as reply `turn_id`: if it is
+        the `TITLED_AT`th, start naming with `llm`, held on to with `hold` (see
+        `TurnLLMs.hold_background`) through both attempts."""
         if turn != TITLED_AT:
             return
         release = hold()
-        task = asyncio.create_task(
-            self._name(conversation, llm),
-            context=detached(),  # after the turn, not part of it (see `activity`)
-        )
+        task = self._jobs.submit(turn_id, "title", lambda: self._name(conversation, llm))
         pending = self._pending.setdefault(conversation.user_id, set())
         pending.add(task)
 
@@ -115,30 +110,21 @@ class Titles:
             await asyncio.gather(*unfinished, return_exceptions=True)
 
     async def _name(self, conversation: Conversation, llm: ChatLLM) -> None:
-        try:
-            current = await self._store.get_conversation(conversation.id)
-            if current is None or current.title is not None:
-                return
-            # Her reach-outs are no part of what the conversation is about, nor her being
-            # unwell, which she is never told of.
-            record = [
-                entry for entry in await self._store.record(conversation.id)
-                if not isinstance(entry, ReachOut) and told_her(entry)
-            ]
-            character = self._characters[conversation.character_id]
-            prompt = _naming_prompt(character, _first_turns(record), self._gift_catalog)
-            answer = "".join([chunk async for chunk in llm.stream(prompt) if isinstance(chunk, str)])
-        except Exception as e:
-            # Not logged with what was raised: a service's error may repeat what it was asked.
-            log.warning("naming conversation %s failed: %s", conversation.id, type(e).__name__)
+        current = await self._store.get_conversation(conversation.id)
+        if current is None or current.title is not None:
             return
+        # Her reach-outs are no part of what the conversation is about, nor her being
+        # unwell, which she is never told of.
+        record = [
+            entry for entry in await self._store.record(conversation.id)
+            if not isinstance(entry, ReachOut) and told_her(entry)
+        ]
+        character = self._characters[conversation.character_id]
+        prompt = _naming_prompt(character, _first_turns(record), self._gift_catalog)
+        answer = "".join([chunk async for chunk in llm.stream(prompt) if isinstance(chunk, str)])
         title = title_from(answer)
         if title is None:
-            log.warning(  # its length only: the answer is about the user
-                "background model named conversation %s with nothing (%d characters)",
-                conversation.id, len(answer),
-            )
-            return
+            raise ValueError("title generation returned no title")
         await self._store.name_conversation(conversation.id, title)
 
 
