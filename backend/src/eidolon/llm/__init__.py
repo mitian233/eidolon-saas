@@ -3,7 +3,12 @@ per protocol."""
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
+
+if TYPE_CHECKING:
+    from eidolon.embedding import Embedder
+    from eidolon.judge import JudgeModel, JudgeThresholds
+    from eidolon.rerank import Reranker, RerankThresholds
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,17 @@ def _let_go() -> None:
 
 
 @dataclass(frozen=True)
+class TurnServices:
+    """Services brought by one turn or call, held in memory for its background work."""
+
+    embedder: "Embedder | None" = None
+    reranker: "Reranker | None" = None
+    judge: "JudgeModel | None" = None
+    judge_thresholds: "JudgeThresholds | None" = None
+    rerank_thresholds: "RerankThresholds | None" = None
+
+
+@dataclass(frozen=True)
 class TurnLLMs:
     """The models one turn runs on: `chat` plays the character; `background`, the
     background model, writes down what the user revealed in it and, after the
@@ -128,3 +144,5 @@ class TurnLLMs:
     """Holds on to `background` past the end of the turn, for what it does after it (writing
     down memories, naming the conversation), until the function it returns is called: the
     deployer's model may be replaced meanwhile (see `service_clients.Swappable`)."""
+    services: TurnServices | None = None
+    """None for explicitly injected services; user requests always provide a value."""
