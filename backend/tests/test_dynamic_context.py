@@ -25,6 +25,7 @@ from tests.fakes import (
 from tests.test_affinity_prompt import LAST_TALKED
 from tests.test_call_turns import MANO_REPLY, CallUnderTest, spoken
 from tests.test_text_turn import send_turn, start_conversation
+from tests.fakes import RETRIEVAL_KEYS
 
 
 def last_contact(database: Path, conversation: str, at: datetime) -> None:
@@ -98,7 +99,7 @@ async def test_a_turn_opens_as_the_turn_before_it_did(make_client: ClientFactory
     conversation = await start_conversation(client)
 
     for n in range(1, 4):
-        await send_turn(client, conversation, f"第{n}句")
+        await send_turn(client, conversation, f"第{n}句", own_keys=RETRIEVAL_KEYS)
         clock.advance(minutes=3)
 
     assert "制作人养了一只猫" in context_of(llm.prompts[1])  # what changes does change
