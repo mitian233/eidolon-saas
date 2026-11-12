@@ -1,25 +1,29 @@
-"""The database: one SQLite file holding the users and their conversations, memories and
-usage, next to the story corpus and the embedded text set.
+"""Connections and SQL for the users' data, with a shared Postgres database in
+production and SQLite files for local use.
 
-The data access layer (`data_access`, ADR-0028) is the only way into it, but for the
-health check (`readable`), on a read-only connection of its own, and for the backup, which
-copies it (`VACUUM INTO`), and restoring one in its place (`restore`), each on a
-connection of its own opened by `connect`, the same way as the layer's. Each module that
-keeps tables in it creates its own tables; which tables hold a user's data, and which rows
-of them are the user's, is listed here (`USER_DATA`), and so is every other table
-(`NOT_USER_DATA`), so a table cannot be added without being one or the other. A table of a user's data may instead be kept when the user is deleted, but no
-longer say whose it is (`ANONYMIZED_USER_DATA`), as activity records are, so that the
-numbers they add up to do not change.
+`data_access.Database` runs storage callbacks on worker threads. Postgres retains
+their DB-API contract and translates their SQLite dialect here, so storage modules
+keep one set of queries. Each module creates its own tables. `USER_DATA` and
+`ANONYMIZED_USER_DATA` list what is deleted or anonymized when a user leaves;
+`NOT_USER_DATA` lists the rest.
 
-Deleting a user (`delete_user_data`) is for good (ADR-0006): what is deleted is
-overwritten, not just freed, and the write-ahead log is then emptied
-(`Database.checkpoint`), so none of it is left in the files. Deleting a memory, or clearing them all, or a past conversation
-(`delete_conversation_data`), overwrites it in the database too, but earlier frames of the write-ahead log may still hold it until a later checkpoint or
-the user is deleted."""
+SQLite uses secure deletion and truncates its WAL after account deletion.
+Postgres commits deletions normally: its WAL, old row versions and external dumps
+follow the database operator's retention policy. SQLite file exports and restores
+do not apply to Postgres; use Postgres's own tools.
+"""
 
+import os
+import re
 import secrets
 import sqlite3
 from pathlib import Path
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, LiteralString, cast
+
+import psycopg
+from psycopg.pq import TransactionStatus
+from sqlglot import exp, parse_one
 
 USER_DATA = [
     ("memory_vectors", "user_id = ?"),
@@ -123,9 +127,15 @@ HEALTH_READ_TIMEOUT = 2.0
 """How long, in seconds, the health check waits to read the database."""
 
 
-def connect(path: Path) -> sqlite3.Connection:
-    """A connection to the database at `path`, making the directory it is in if need be,
-    usable from any thread and waiting up to 30 seconds for another writer."""
+def connect(path: Path | str) -> sqlite3.Connection:
+    """Open the configured Postgres database, or a local SQLite file.
+
+    The connection keeps the synchronous callback contract used by `data_access`;
+    that layer runs every callback on a worker thread.
+    """
+    if url := postgres_url(path):
+        return cast(sqlite3.Connection, _PostgresConnection(url))
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, check_same_thread=False, timeout=30)
     try:
@@ -145,14 +155,17 @@ def connect(path: Path) -> sqlite3.Connection:
     return db
 
 
-def read_only(path: Path, timeout: float = 5.0) -> sqlite3.Connection:
-    """A read-only connection of its own to the database at `path`, outside the data
-    access layer so as to wait on no write task, making no database where there is none;
-    raises sqlite3.Error if it cannot be opened."""
+def read_only(path: Path | str, timeout: float = 5.0) -> sqlite3.Connection:
+    """A separate read-only connection for the health endpoint."""
+    if url := postgres_url(path):
+        conn = _PostgresConnection(url, timeout=timeout)
+        conn.execute("PRAGMA query_only = ON")
+        return cast(sqlite3.Connection, conn)
+    path = Path(path)
     return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=timeout)
 
 
-def readable(path: Path) -> bool:
+def readable(path: Path | str) -> bool:
     """Whether the database at `path` can be read now, on a `read_only` connection; for
     the health check."""
     try:
@@ -206,3 +219,356 @@ def by_name(db: sqlite3.Connection) -> sqlite3.Cursor:
 def tables(db: sqlite3.Connection) -> set[str]:
     """The tables in the database, whichever module made them."""
     return {name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def postgres_url(path: Path | str) -> str | None:
+    """An explicit URL takes precedence; DATABASE_URL routes existing path callers."""
+    supplied = str(path)
+    if supplied.startswith(("postgres://", "postgresql://")):
+        return supplied
+    url = os.environ.get("DATABASE_URL")
+    if url and not url.startswith(("postgres://", "postgresql://")):
+        raise ValueError("DATABASE_URL must be a postgres:// or postgresql:// URL")
+    return url or None
+
+
+class _Row(tuple):
+    """The tuple-and-name access existing callbacks use from sqlite3.Row."""
+
+    names: list[str]
+
+    def __new__(cls, values, names):
+        row = super().__new__(cls, values)
+        row.names = names
+        return row
+
+    def keys(self):
+        return self.names
+
+    def __getitem__(self, key):
+        return super().__getitem__(self.names.index(key) if isinstance(key, str) else key)
+
+
+class _PostgresCursor:
+    def __init__(self, connection: "_PostgresConnection") -> None:
+        self.connection = connection
+        self.row_factory = None
+        self.lastrowid: int | None = None
+        self.rowcount = -1
+        self._rows = iter(())
+        self.description = None
+
+    def execute(self, statement: str, parameters=()):
+        rows, names, self.rowcount, self.lastrowid = self.connection._execute(statement, parameters)
+        self._rows = iter(rows)
+        self.description = [(name, None, None, None, None, None, None) for name in names]
+        self._names = names
+        return self
+
+    def executemany(self, statement: str, parameters: Iterable[Sequence[Any]]):
+        count = 0
+        for values in parameters:
+            self.execute(statement, values)
+            count += self.rowcount
+        self.rowcount = count
+        return self
+
+    def executescript(self, script: str):
+        for statement in _statements(script):
+            self.execute(statement)
+        return self
+
+    def fetchone(self):
+        row = next(self._rows, None)
+        return _Row(row, self._names) if row is not None and self.row_factory else row
+
+    def fetchall(self):
+        return list(self)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        row = self.fetchone()
+        if row is None:
+            raise StopIteration
+        return row
+
+    def close(self):
+        self._rows = iter(())
+
+
+def _statements(script: str) -> Iterable[str]:
+    """Split scripts with SQLite's parser, including a trigger's BEGIN/END body."""
+    pending = ""
+    for character in script:
+        pending += character
+        if character == ";" and sqlite3.complete_statement(pending):
+            yield pending.strip()
+            pending = ""
+    if pending.strip():
+        yield pending.strip()
+
+
+class _PostgresConnection:
+    """Postgres behind the existing thread-owned DB-API callback contract.
+
+    SQLite SQL is translated at this one boundary so every storage module retains
+    one query and local SQLite databases remain usable. Values are always bound by
+    psycopg, never interpolated into the translated SQL.
+    """
+
+    def __init__(self, url: str, timeout: float = 30) -> None:
+        try:
+            self._conn = psycopg.connect(url, autocommit=True, connect_timeout=max(1, int(timeout)))
+            self._conn.execute("SELECT set_config('statement_timeout', %s, false)", (str(int(timeout * 1000)),))
+        except psycopg.Error as error:
+            raise sqlite3.OperationalError(str(error)) from error
+        self._read_only = False
+        self._columns: dict[str, list[tuple]] = {}
+        self._translated: dict[str, tuple[str, str | None]] = {}
+
+    def cursor(self):
+        return _PostgresCursor(self)
+
+    def execute(self, statement: str, parameters=()):
+        return self.cursor().execute(statement, parameters)
+
+    def executemany(self, statement: str, parameters):
+        return self.cursor().executemany(statement, parameters)
+
+    def executescript(self, script: str):
+        return self.cursor().executescript(script)
+
+    def __enter__(self):
+        if self._conn.info.transaction_status == TransactionStatus.IDLE:
+            self.execute("BEGIN IMMEDIATE")
+        return self
+
+    def __exit__(self, kind, value, traceback):
+        if kind is None:
+            self._conn.commit()
+        else:
+            self._conn.rollback()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+    def create_function(self, name, arity, implementation, *, deterministic=False):
+        # These are the only Python SQL functions in the running SaaS backend.
+        # Postgres runs the equivalent expression itself, on every connection.
+        if name != "spread_bucket" or arity != 1:
+            raise NotImplementedError(f"Postgres SQL function {name}/{arity}")
+        if self._read_only:
+            return  # The writer installed it in the database, visible to all readers.
+        self._conn.execute("""
+            CREATE OR REPLACE FUNCTION spread_bucket(double precision) RETURNS integer
+            LANGUAGE SQL IMMUTABLE STRICT AS $$
+                SELECT CASE WHEN $1 > 0 THEN floor(ln($1) / ln(2.0) * 16)::integer
+                            ELSE -2147483648 END
+            $$
+        """)
+
+    def _metadata(self, table: str) -> list[tuple]:
+        if table not in self._columns:
+            self._columns[table] = self._conn.execute("""
+                SELECT a.attnum - 1, a.attname, format_type(a.atttypid, a.atttypmod),
+                       a.attnotnull::integer, pg_get_expr(d.adbin, d.adrelid),
+                       COALESCE(array_position(i.indkey::smallint[], a.attnum), -1) + 1
+                FROM pg_attribute a
+                JOIN pg_class c ON c.oid = a.attrelid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+                LEFT JOIN pg_index i ON i.indrelid = c.oid AND i.indisprimary
+                WHERE n.nspname = current_schema() AND c.relname = %s
+                      AND a.attnum > 0 AND NOT a.attisdropped
+                      AND a.attname <> '_eidolon_rowid'
+                ORDER BY a.attnum
+            """, (table,)).fetchall()
+        return self._columns[table]
+
+    def _execute(self, statement: str, parameters):
+        raw = statement.strip().rstrip(";")
+        upper = raw.upper()
+        try:
+            if upper == "BEGIN IMMEDIATE":
+                self._conn.execute("BEGIN")
+                # Preserve callbacks' read-then-write atomicity across API processes.
+                self._conn.execute("SELECT pg_advisory_xact_lock(1936287820)")
+                return [], [], -1, None
+            if upper == "BEGIN":
+                self._conn.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                return [], [], -1, None
+            if upper == "PRAGMA QUERY_ONLY = ON":
+                self._conn.execute("SET default_transaction_read_only = on")
+                self._read_only = True
+                return [], [], -1, None
+            if match := re.fullmatch(r"PRAGMA table_info\((\w+)\)", raw, re.I):
+                return self._metadata(match[1]), ["cid", "name", "type", "notnull", "dflt_value", "pk"], -1, None
+            if upper.startswith("CREATE TRIGGER"):
+                self._trigger(raw)
+                return [], [], -1, None
+            if upper.startswith("VACUUM"):
+                raise sqlite3.OperationalError("Postgres exports require pg_dump; SQLite VACUUM INTO is unavailable")
+            if upper.startswith("PRAGMA"):
+                raise sqlite3.OperationalError(f"Unsupported Postgres statement: {raw}")
+            translated, returning = self._translate(raw)
+            bound = parameters if isinstance(parameters, Mapping) else tuple(
+                int(value) if isinstance(value, bool) else value.isoformat() if hasattr(value, "isoformat") else value
+                for value in parameters
+            )
+            # SQLite permits catching an INSERT error and continuing the write. A
+            # savepoint gives Postgres that same behavior without aborting the transaction.
+            with self._conn.transaction():
+                cursor = self._conn.execute(cast(LiteralString, translated), bound or None)
+                names = [c.name for c in cursor.description] if cursor.description else []
+                rows = cursor.fetchall() if cursor.description else []
+                count = cursor.rowcount
+            inserted = rows[0][0] if returning and rows else None
+            if returning:
+                rows, names = [], []
+            if "_eidolon_rowid" in names:
+                kept = [i for i, name in enumerate(names) if name != "_eidolon_rowid"]
+                rows = [tuple(row[i] for i in kept) for row in rows]
+                names = [names[i] for i in kept]
+            if upper.startswith(("CREATE", "ALTER", "DROP")):
+                self._columns.clear()
+                self._translated.clear()
+            return rows, names, count, inserted
+        except psycopg.IntegrityError as error:
+            raise sqlite3.IntegrityError(str(error)) from error
+        except psycopg.Error as error:
+            raise sqlite3.OperationalError(str(error)) from error
+
+    def _translate(self, statement: str) -> tuple[str, str | None]:
+        if statement in self._translated:
+            return self._translated[statement]
+        tree = parse_one(statement, read="sqlite")
+        if isinstance(tree, exp.Create) and tree.args.get("kind") == "TABLE":
+            schema = tree.this
+            tree.set("properties", None)  # SQLite's WITHOUT ROWID has no Postgres clause.
+            # An insertion-order id survives updates, unlike Postgres's physical ctid.
+            schema.append("expressions", parse_one(
+                "CREATE TABLE t (_eidolon_rowid BIGINT GENERATED BY DEFAULT AS IDENTITY)",
+                read="postgres",
+            ).this.expressions[0])
+            for column in schema.find_all(exp.ColumnDef):
+                if column.kind.this == exp.DataType.Type.INT and any(
+                    isinstance(c.kind, exp.PrimaryKeyColumnConstraint) for c in column.constraints
+                ) and not any(isinstance(c.kind, exp.AutoIncrementColumnConstraint) for c in column.constraints):
+                    column.append("constraints", exp.ColumnConstraint(kind=exp.AutoIncrementColumnConstraint()))
+        for table in list(tree.find_all(exp.Table)):
+            if table.name == "sqlite_master":
+                view = parse_one("SELECT tablename AS name, 'table' AS type FROM pg_tables WHERE schemaname = current_schema()", read="postgres")
+                table.replace(exp.Subquery(this=view, alias=exp.TableAlias(this=exp.to_identifier("sqlite_master"))))
+        for column in tree.find_all(exp.Column):
+            if column.name.lower() == "rowid":
+                column.set("this", exp.to_identifier("_eidolon_rowid"))
+        returning = None
+        if isinstance(tree, exp.Insert):
+            destination = tree.this
+            table = destination.this if isinstance(destination, exp.Schema) else destination
+            metadata = self._metadata(table.name)
+            columns = [row[1] for row in metadata]
+            keys = [row[1] for row in sorted(metadata, key=lambda r: r[5]) if row[5]]
+            if not isinstance(destination, exp.Schema):
+                tree.set("this", exp.Schema(this=destination, expressions=[exp.to_identifier(c) for c in columns]))
+                destination = tree.this
+            alternative = tree.args.get("alternative")
+            if alternative in ("REPLACE", "IGNORE"):
+                tree.set("alternative", None)
+                if alternative == "IGNORE":
+                    conflict = exp.OnConflict(action=exp.Var(this="DO NOTHING"))
+                else:
+                    updates = [exp.EQ(this=exp.column(c.name), expression=exp.column(c.name, table="excluded"))
+                               for c in destination.expressions if c.name not in keys]
+                    conflict = exp.OnConflict(action=exp.Var(this="DO UPDATE"), expressions=updates,
+                                              conflict_keys=[exp.to_identifier(k) for k in keys])
+                tree.set("conflict", conflict)
+            conflict = tree.args.get("conflict")
+            if conflict and conflict.args["action"].name == "DO UPDATE":
+                if not conflict.args.get("conflict_keys"):
+                    conflict.set("conflict_keys", [exp.to_identifier(k) for k in keys])
+                for assignment in conflict.expressions:
+                    for column in assignment.expression.find_all(exp.Column):
+                        if not column.table:
+                            column.set("table", exp.to_identifier(table.name))
+            if not tree.args.get("returning"):
+                integer_key = next((r[1] for r in metadata if r[5] and r[2] in ("integer", "bigint")), None)
+                returning = integer_key if len(keys) == 1 and integer_key else "_eidolon_rowid"
+                tree.set("returning", exp.Returning(expressions=[exp.column(returning)]))
+        for select in tree.find_all(exp.Select):
+            group = select.args.get("group")
+            extrema = [item for item in select.expressions if isinstance(item, (exp.Max, exp.Min))]
+            if group and len(extrema) == 1:
+                grouped = {item.sql() for item in group.expressions}
+                for position, item in enumerate(list(select.expressions), 1):
+                    if isinstance(item, exp.Column) and item.sql() not in grouped and str(position) not in grouped:
+                        extreme = extrema[0]
+                        order = "DESC" if isinstance(extreme, exp.Max) else "ASC"
+                        # SQLite's bare column accompanies its one MIN/MAX row.
+                        item.replace(parse_one(
+                            f"(ARRAY_AGG({item.sql(dialect='postgres')} ORDER BY "
+                            f"{extreme.this.sql(dialect='postgres')} {order}))[1]",
+                            read="postgres",
+                        ))
+        for converted in list(tree.find_all(exp.Cast)):
+            if converted.to.this in (exp.DataType.Type.INT, exp.DataType.Type.BIGINT):
+                converted.set("this", exp.Anonymous(this="TRUNC", expressions=[converted.this]))
+        for rounded in tree.find_all(exp.Round):
+            if rounded.args.get("decimals"):
+                rounded.set("this", exp.Cast(this=rounded.this, to=exp.DataType.build("NUMERIC")))
+        self._boolean_values(tree)
+        if tree.find(exp.Placeholder):
+            for literal in tree.find_all(exp.Literal):
+                if literal.is_string:
+                    literal.set("this", literal.this.replace("%", "%%"))
+        result = tree.sql(dialect="postgres")
+        self._translated[statement] = (result, returning)
+        return result, returning
+
+    @staticmethod
+    def _boolean_values(tree):
+        # SQLite uses 0/1 both for stored flags and selected predicates. Postgres
+        # distinguishes integers and booleans, including SUM/MAX of a predicate.
+        boolean = (exp.Predicate, exp.And, exp.Or, exp.Not)
+        for node in list(tree.walk()):
+            if isinstance(node, exp.Not) and isinstance(node.this, exp.Column):
+                node.set("this", exp.NEQ(this=node.this, expression=exp.Literal.number(0)))
+            if isinstance(node, (exp.Where, exp.Having, exp.If)) and isinstance(node.this, exp.Column):
+                node.set("this", exp.NEQ(this=node.this, expression=exp.Literal.number(0)))
+            if isinstance(node, boolean):
+                parent = node.parent
+                while isinstance(parent, (exp.Paren, exp.Alias)):
+                    parent = parent.parent
+                if isinstance(parent, (exp.Select, exp.Tuple, exp.Sum, exp.Max, exp.Min,
+                                       exp.EQ, exp.NEQ, exp.GT, exp.GTE, exp.LT, exp.LTE)):
+                    node.replace(exp.Cast(this=node.copy(), to=exp.DataType.build("INT")))
+
+    def _trigger(self, statement):
+        match = re.fullmatch(
+            r"CREATE TRIGGER IF NOT EXISTS (\w+) AFTER UPDATE OF (\w+) ON (\w+) WHEN (.+?) BEGIN (.*) END",
+            statement, re.I | re.S,
+        )
+        if match is None:
+            raise sqlite3.OperationalError("Unsupported Postgres trigger")
+        name, column, table, condition, body = match.groups()
+        translated = []
+        for part in _statements(body):
+            sql, _ = self._translate(part.rstrip(";"))
+            # Trigger INSERTs have no consumer for their generated id.
+            translated.append(sql.split(" RETURNING ")[0] + ";")
+        condition = re.sub(r"\bIS NOT\b", "IS DISTINCT FROM", condition, flags=re.I)
+        function = (f"CREATE OR REPLACE FUNCTION {name}_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+                    + " ".join(translated) + " RETURN NEW; END $$")
+        self._conn.execute(cast(LiteralString, function))
+        self._conn.execute(cast(LiteralString, f"DROP TRIGGER IF EXISTS {name} ON {table}"))
+        trigger = (f"CREATE TRIGGER {name} AFTER UPDATE OF {column} ON {table} FOR EACH ROW "
+                   f"WHEN ({condition}) EXECUTE FUNCTION {name}_fn()")
+        self._conn.execute(cast(LiteralString, trigger))
