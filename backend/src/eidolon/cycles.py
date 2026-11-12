@@ -142,7 +142,7 @@ class Cycles:
         once, such as each gift given in a conversation."""
         character = self._characters.get(character_id)
         if (
-            not self._on() or character is None
+            not self._on() or character is None or character.age is None
             or not await self._db.read(_switched_on, user_id)
         ):
             return always_neither

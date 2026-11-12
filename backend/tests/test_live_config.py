@@ -11,16 +11,21 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 
 import httpx
 import pytest
 
+from eidolon.activity import ActivityLog
 from eidolon.assembly import Backend
 from eidolon.config import LLMSettings, Settings
+from eidolon.data_access import Database
+from eidolon.live_config import LiveConfig
 from tests.browser import Browser, open_browser, until_gone
 from tests.conftest import ClientFactory, agree_to_terms, github_identity, sign_in_with
 from tests.fakes import (
     DEPLOYER_KEY,
+    FakeClock,
     FakeIdentityProvider,
     FakeLLM,
     FakeServiceClients,
@@ -419,3 +424,24 @@ async def test_no_one_but_admins_finds_the_configuration(
         assert (await client.get(CONFIG)).status_code == 404
         assert (await client.put(CHAT_LLM, json=NEW)).status_code == 404
         assert (await client.delete(CHAT_LLM)).status_code == 404
+
+
+async def test_a_zero_key_deployment_starts_without_models(tmp_path: Path):
+    """The platform configures no models: the live configuration starts, leases none,
+    and makes no clients; the admin console may still set a model later."""
+    settings = Settings(database_path=tmp_path / "eidolon.db")
+    db = Database(settings.database_path)
+    clients = FakeServiceClients()
+    config = LiveConfig(
+        settings, clients, FakeClock(), db=db, activity=ActivityLog(db, FakeClock())
+    )
+    try:
+        assert config.chat_model is None and config.memory_llm is None
+        assert not config.has_service("chat_llm") and not config.has_service("memory_llm")
+        lease = config.lease()
+        assert lease.keys.chat_llm is None and lease.keys.memory_llm is None
+        lease.release()
+        assert clients.opened == []
+    finally:
+        await config.aclose()
+        await db.close()

@@ -633,9 +633,10 @@ class Catalog:
         return response.content
 
     async def aclose(self) -> None:
-        """Let a fetch under way finish, then close."""
+        """Cancel an optional download in progress, then close the HTTP client."""
         self._closed = True
         if self._fetching is not None:
+            self._fetching.cancel()
             await asyncio.gather(self._fetching, return_exceptions=True)
         await self._http.aclose()
 

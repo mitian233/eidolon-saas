@@ -781,7 +781,7 @@ class DataPackages:
                 raise
 
         await asyncio.to_thread(
-            self._export, categories, profile, conversations, memories, cycles, letters,
+            self._export, user_id, categories, profile, conversations, memories, cycles, letters,
             picture_of, to,
         )
 
@@ -807,6 +807,7 @@ class DataPackages:
 
     def _export(
         self,
+        user_id: str,
         categories: list[Category],
         profile: ProducerProfile | None,
         conversations: list[WholeConversation],
@@ -823,7 +824,7 @@ class DataPackages:
             counts["profile"] = 1
         if "conversations" in categories:
             data.conversations = [
-                PackagedConversation.of(c, self._name(c.character_id), "photos" in categories)
+                PackagedConversation.of(c, self._name(c.character_id, user_id), "photos" in categories)
                 for c in conversations
             ]
             counts["conversations"] = len(data.conversations)
@@ -840,7 +841,7 @@ class DataPackages:
             counts["cycles"] = len(data.cycles)
         if "letters" in categories:
             data.letters = [
-                PackagedLetter.of(letter, self._name(letter.character_id)) for letter in letters
+                PackagedLetter.of(letter, self._name(letter.character_id, user_id)) for letter in letters
             ]
             counts["letters"] = len(data.letters)
         now = self._clock()
@@ -900,7 +901,7 @@ class DataPackages:
         written in one write task, all at once or not at all. The memories it adds are
         embedded afterwards, in the background. Whether the user has imports left today is
         for the caller to check first (`check_imports_left`), while it holds `one_at_a_time`."""
-        unpacked = await asyncio.to_thread(self._unpack, package, include)
+        unpacked = await asyncio.to_thread(self._unpack, package, include, user_id)
         imported = await self._db.write(
             _write_import, user_id, unpacked, device_timezone, self._clock()
         )
@@ -908,7 +909,7 @@ class DataPackages:
             self._memories.embed_carried(user_id)
         return imported
 
-    def _unpack(self, package: Path, include: Iterable[Category]) -> "_Unpacked":
+    def _unpack(self, package: Path, include: Iterable[Category], user_id: str) -> "_Unpacked":
         try:
             zipped = zipfile.ZipFile(package)
         except (zipfile.BadZipFile, ValueError) as e:
@@ -921,31 +922,32 @@ class DataPackages:
             unpacked.profile = data.profile.profile()
         if "conversations" in categories and data.conversations is not None:
             self._unpack_conversations(
-                data.conversations, unpacked, with_photos="photos" in categories
+                data.conversations, unpacked, with_photos="photos" in categories, user_id=user_id
             )
         if "memories" in categories and data.memories is not None:
             unpacked.memories = data.memories
         if "cycles" in categories and data.cycles is not None:
             unpacked.cycles = [
-                c.carried() for c in data.cycles if c.character_id in self._characters
+                c.carried() for c in data.cycles if self._owns(c.character_id, user_id)
             ]
             unpacked.cycles_skipped = len(data.cycles) - len(unpacked.cycles)
         if "letters" in categories and data.letters is not None:
             unpacked.letters = [
                 letter.carried() for letter in data.letters
-                if letter.character_id in self._characters
+                if self._owns(letter.character_id, user_id)
             ]
             unpacked.letters_skipped = len(data.letters) - len(unpacked.letters)
         return unpacked
 
     def _unpack_conversations(
-        self, packaged: list[PackagedConversation], unpacked: "_Unpacked", with_photos: bool
+        self, packaged: list[PackagedConversation], unpacked: "_Unpacked", with_photos: bool,
+        user_id: str,
     ) -> None:
         """Put into `unpacked` the package's conversations to add, with their photos if
-        `with_photos`; and those skipped, she not being here."""
+        `with_photos`; and those skipped, her not being the user's own."""
         skipped: dict[str, int] = {}
         for conversation in packaged:
-            if conversation.character_id not in self._characters:
+            if not self._owns(conversation.character_id, user_id):
                 name = conversation.character_name or conversation.character_id
                 skipped[name] = skipped.get(name, 0) + 1
                 continue
@@ -956,9 +958,15 @@ class DataPackages:
             ))
         unpacked.skipped = [Skipped(name, count) for name, count in skipped.items()]
 
-    def _name(self, character_id: str) -> str | None:
+    def _owns(self, character_id: str, user_id: str) -> bool:
+        """Whether the character is the user's own: a reference to anyone else's, or to one
+        no longer here, is not imported, and tells neither that she exists nor her name."""
         character = self._characters.get(character_id)
-        return character.name if character else None
+        return character is not None and character.owner_id == user_id
+
+    def _name(self, character_id: str, user_id: str) -> str | None:
+        character = self._characters.get(character_id)
+        return character.name if character is not None and character.owner_id == user_id else None
 
 
 @dataclass

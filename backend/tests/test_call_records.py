@@ -24,7 +24,7 @@ from pipecat.tests.utils import SleepFrame
 import eidolon.call
 from eidolon.config import Settings
 from tests.browser import TIMEOUT, Browser, open_browser
-from tests.conftest import ClientFactory, store_in
+from tests.conftest import ClientFactory, character_id, store_in
 from tests.fakes import (
     START,
     FakeClock,
@@ -80,7 +80,7 @@ async def test_a_call_ended_by_the_user_is_a_success_and_no_longer_in_progress(
 ):
     """Hanging up says so before the connection closes; leaving the page just closes it."""
     admin = await admin_client(make_client, github, FakeClock(), FakeLLM(REPLY))
-    conversation_id = await start_conversation(admin, "kogane")
+    conversation_id = await start_conversation(admin, character_id("kogane", "octo"))
     assert await in_progress(admin) == 0
 
     await browser.call(admin, conversation_id=conversation_id)
@@ -103,7 +103,7 @@ async def test_a_call_ended_by_the_user_is_a_success_and_no_longer_in_progress(
     assert calls["durations"][0]["calls"] == 1  # well under a minute
     assert calls["duration_s"]["p50"] is not None
     assert [(c["character_id"], c["turns"], c["calls"]) for c in board["characters"]] == [
-        ("kogane", 1, 1)
+        ("kogane-octo", 1, 1)
     ]
     assert sum(point["calls"] for point in board["trend"]) == 1
     assert (board["turns"]["total"], board["turns"]["in_calls"]) == (1, 1)
@@ -129,7 +129,7 @@ async def test_drama_3_is_billed_for_the_characters_it_is_given(
         make_client, github, FakeClock(), FakeLLM(["<ja>[sigh] はいっ</ja><zh>好的</zh>"]),
         settings=replace(settings, fish_audio_model="drama-3"),
     )
-    await browser.call(admin, conversation_id=await start_conversation(admin))
+    await browser.call(admin, conversation_id=await start_conversation(admin, character_id("mano", "octo")))
     await browser.connect()
     await speech.stts[-1].hear("你好")
     await browser.turn()
@@ -206,7 +206,7 @@ async def test_a_database_from_before_calls_were_recorded_keeps_its_records_and_
             (START.timestamp(),),
         )
     admin = await admin_client(make_client, github, FakeClock(), FakeLLM())
-    await browser.call(admin, conversation_id=await start_conversation(admin))
+    await browser.call(admin, conversation_id=await start_conversation(admin, character_id("mano", "octo")))
     await browser.connect()
 
     await browser.hang_up()

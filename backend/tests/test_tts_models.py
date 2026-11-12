@@ -4,9 +4,8 @@ chose another. Fish Audio voices a model it does not know with its paid S2.1 Pro
 nothing, so only those there are are taken. A paid one needs API credit: a key without any
 is turned down as it is tried, rather than in a call. A call voiced with Drama 3 has her
 direct her voice as it reads (`reply_format.DIRECTED_FORMAT_INSTRUCTIONS`), and is billed
-for the characters it is given (see test_call_records); a text turn, as the model it would be
-read aloud with reads (GLOSSARY.md「朗读」): that of the user's own key, which their browser
-names, else the deployer's."""
+for the characters it is given (see test_call_records); a typed turn's prompt is never
+directed."""
 
 from dataclasses import replace
 
@@ -16,12 +15,16 @@ import pytest
 from eidolon.call import SpeechServices
 from eidolon.config import DEFAULT_FISH_AUDIO_MODEL, Settings, fish_audio_model_from_env
 from eidolon.own_keys import OwnKeyRejected
-from eidolon.reply_format import DIRECTED_FORMAT_INSTRUCTIONS, FORMAT_INSTRUCTIONS
+from eidolon.reply_format import format_instructions
 from tests.browser import Browser
 from tests.conftest import ClientFactory
 from tests.fakes import DEPLOYER_FISH_KEY, FakeLLM, FakeSpeech, system_of
 from tests.test_own_speech_keys import MY_FISH
 from tests.test_text_turn import send_turn, start_conversation
+
+# The bilingual fixture characters' instructions: a non-director model's and Drama 3's.
+FORMAT_INSTRUCTIONS = format_instructions(None, bilingual=True)
+DIRECTED_FORMAT_INSTRUCTIONS = format_instructions("drama-3", bilingual=True)
 
 CHECK = "/api/account/keys/tts/check"
 
@@ -68,7 +71,7 @@ async def test_the_deployers_fish_key_speaks_with_the_deployers_model(
     assert [(tts.api_key, tts.model) for tts in speech.ttss] == [(DEPLOYER_FISH_KEY, "s2.1-pro")]
 
 
-async def test_a_call_voiced_with_drama_3_has_her_direct_her_voice_and_a_text_turn_read_aloud_with_another_not(
+async def test_a_call_voiced_with_drama_3_has_her_direct_her_voice_and_a_typed_turn_not(
     make_client: ClientFactory, speech: FakeSpeech, browser: Browser
 ):
     llm = FakeLLM(
@@ -91,21 +94,6 @@ async def test_a_call_voiced_with_drama_3_has_her_direct_her_voice_and_a_text_tu
     typed, called = (system_of(prompt) for prompt in llm.prompts)
     assert FORMAT_INSTRUCTIONS in typed and DIRECTED_FORMAT_INSTRUCTIONS not in typed
     assert DIRECTED_FORMAT_INSTRUCTIONS in called
-
-
-async def test_a_text_turn_has_her_write_cues_as_its_reply_would_be_read_aloud(
-    make_client: ClientFactory, settings: Settings
-):
-    llm = FakeLLM(["<ja>うん</ja><zh>嗯</zh>"], ["<ja>うん</ja><zh>嗯</zh>"])
-    client = make_client(llm, settings=replace(settings, fish_audio_model="drama-3"))
-    conversation_id = await start_conversation(client)
-
-    await send_turn(client, conversation_id, "嗯")
-    await send_turn(client, conversation_id, "嗯", read_aloud_model=DEFAULT_FISH_AUDIO_MODEL)
-
-    deployers, own = (system_of(prompt) for prompt in llm.prompts)
-    assert DIRECTED_FORMAT_INSTRUCTIONS in deployers
-    assert FORMAT_INSTRUCTIONS in own and DIRECTED_FORMAT_INSTRUCTIONS not in own
 
 
 async def test_an_own_fish_key_is_tried_with_the_model_chosen(

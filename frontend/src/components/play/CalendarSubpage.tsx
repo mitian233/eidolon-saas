@@ -48,7 +48,6 @@ import {
   pastWeeksIn,
   returnedNote,
   saveSchedule,
-  shortName,
   startedNote,
   weekPage,
 } from "@/lib/schedule";
@@ -187,7 +186,7 @@ export function CalendarSubpage({ who }: { who: string | null }) {
       onNext: () => setChosenWeek(page.next),
       onThisWeek: page.hasBackToThisWeek ? () => setChosenWeek(null) : null,
     };
-    const characterOf: CharacterOf = (id) => byId.get(id) ?? { id, name: id, short_name: null, avatar_url: null, color: null };
+    const characterOf: CharacterOf = (id) => byId.get(id) ?? { id, name: id, avatar_url: null, color: null };
     const nameOf = (id: string) => characterOf(id).name;
 
     const save = async (saving: Placement[], started: Placement[]) => {
@@ -572,7 +571,7 @@ function EventRow({ event }: { event: CalendarEvent<Character> }) {
     return (
       <>
         <MarkedAvatar name={job.character.name} src={job.character.avatar_url} size="sm" />
-        <span className="shrink-0">{shortName(job.character)}</span>
+        <span className="shrink-0">{job.character.name}</span>
         <span className="truncate">{job.name}</span>
         <span className="shrink-0 text-meta text-muted-foreground">
           {[job.slotsText, job.isSaved ? copy.play.schedule.states.saved : copy.play.schedule.states.draft].join(

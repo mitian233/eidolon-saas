@@ -460,7 +460,7 @@ class Bar:
         today = day_of(now)
         now_known = await self._her_now.read(user_id, character.id, device_timezone, "visit")
         hers = await self._db.read(_hers, user_id, character.id)
-        reason = self._reason(character, now_known.done_today, hers.reasons)
+        reason = self._reason(character, None, hers.reasons)
         topic = self._topic(character, hers.topics)
         with admission.recording.current():
             facts = await self._facts.about(character, topic) if self._facts is not None else []

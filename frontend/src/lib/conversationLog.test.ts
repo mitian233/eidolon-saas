@@ -26,7 +26,7 @@ function message(id: number, role: Message["role"], text: string): Message {
 /** When the user's words were sent or heard, as LiveConversation stamps them. */
 const NOW = "2026-09-28T08:49:00.000Z";
 
-function delta(segment: number, lang: "ja" | "zh", text: string): LogAction {
+function delta(segment: number, lang: "ja" | "zh" | "text", text: string): LogAction {
   return { type: "delta", segment, lang, text };
 }
 
@@ -137,6 +137,21 @@ describe("conversationLog", () => {
         { ja: "いるよ", zh: "在哦" },
         { ja: "どうした", zh: "怎么了" },
       ],
+      pending: true,
+    });
+  });
+
+  it("merges plain-language deltas into the primary text, subtitle empty", () => {
+    const log = play(
+      [
+        { type: "user", text: "你好", at: NOW },
+        delta(0, "text", "你好，"),
+        delta(0, "text", "今天过得怎么样？"),
+      ],
+      history,
+    );
+    expect(log.entries[3]).toMatchObject({
+      segments: [{ ja: "你好，今天过得怎么样？", zh: "" }],
       pending: true,
     });
   });

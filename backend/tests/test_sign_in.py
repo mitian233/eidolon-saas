@@ -17,6 +17,7 @@ from tests.conftest import (
     COOKIE_DOMAIN,
     ClientFactory,
     agree_to_terms,
+    character_id,
     github_identity,
     google_identity,
     sign_in_with,
@@ -27,10 +28,11 @@ from tests.test_text_turn import send_turn, start_conversation
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
 
 
-async def conversations(client: httpx.AsyncClient) -> list[str]:
-    """The user's conversations with Mano, once they have agreed to the terms."""
+async def conversations(client: httpx.AsyncClient, character: str = "mano") -> list[str]:
+    """The user's conversations with the character `character` (their own Mano by default),
+    once they have agreed to the terms."""
     await agree_to_terms(client)
-    res = await client.get("/api/conversations", params={"character_id": "mano"})
+    res = await client.get("/api/conversations", params={"character_id": character})
     assert res.status_code == 200, res.text
     return [c["id"] for c in res.json()]
 
@@ -102,7 +104,7 @@ async def test_two_identities_are_two_users(
 
     await sign_in_with(theirs, github, github_identity("2002", "friend"))
 
-    assert await conversations(theirs) == []
+    assert await conversations(theirs, character_id("mano", "friend")) == []
     assert await account_id(theirs) != await account_id(mine)
 
 
@@ -253,4 +255,4 @@ async def test_the_same_email_at_google_and_github_is_two_users(
     await sign_in_with(at_google, google, google_identity(email="same@example.com"))
 
     assert await signed_in(at_google)
-    assert await conversations(at_google) == []
+    assert await conversations(at_google, character_id("mano", "Producer")) == []

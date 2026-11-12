@@ -13,10 +13,9 @@ import pytest
 from eidolon.backup import Source, abandon_unfinished
 from eidolon.config import Settings
 from tests.conftest import ClientFactory
-from tests.fakes import START, FakeClock, FakeIdentityProvider, FakeLLM
+from tests.fakes import START, FakeBucket, FakeClock, FakeIdentityProvider, FakeLLM
 from tests.test_activity_records import admin_client, settings  # noqa: F401  (with an admin)
 from tests.test_backup import BACKUP_ENV, backup_env, begun_in, records_in  # noqa: F401
-from tests.test_stand_upload import FakeBucket
 
 
 @pytest.fixture

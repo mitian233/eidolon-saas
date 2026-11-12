@@ -95,27 +95,6 @@ async def test_a_turn_bringing_an_own_llm_plays_on_it_and_one_bringing_none_on_t
     assert own_llm.llm.keys == [MINE]
 
 
-async def test_a_turn_from_a_page_from_before_bringing_own_llm_is_told_to_refresh(
-    make_client: ClientFactory, own_llm: FakeLLMService, settings: Settings
-):
-    own_llm.llm = FakeLLM(REPLY)
-    deployers = FakeLLM(REPLY)
-    one_turn = replace(settings, usage_limits=UsageLimits(turns_per_hour=1))
-    client = make_client(deployers, settings=one_turn)
-    conversation_id = await start_conversation(client)
-
-    refused = await client.post(
-        f"/api/conversations/{conversation_id}/turns", json={"text": "在吗", "own_llm": LLM}
-    )
-
-    assert refused.status_code == 422
-    assert "刷新" in refused.json()["detail"]
-    assert MINE not in refused.text
-    assert own_llm.llm.keys == [] and deployers.keys == []
-    # Not counted: the one turn the limit allows is still there.
-    assert (await send_turn(client, conversation_id, "在吗"))[-1]["type"] == "done"
-
-
 async def test_the_users_own_llm_writes_down_their_memories(
     make_client: ClientFactory, own_llm: FakeLLMService
 ):

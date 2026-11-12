@@ -36,7 +36,7 @@ const SettingsValuesContext = createContext<CurrentSettings | null>(null);
  * 二级页面改了值就告诉这里，摘要马上跟着变（登录方式从外壳持有的登录的用户读，解绑后由登录与数据页换掉）。档案的草稿也在这里，在设置各类别之间切换时留着；离开设置 layout 卸载，草稿就丢了。
  */
 export function SettingsValuesProvider({ children }: { children: ReactNode }) {
-  const { account, appearance } = useDirectory();
+  const { account } = useDirectory();
   const userId = account?.id ?? null;
   const [profile, setProfile] = useState<ProfileEdit | null>(null);
   const [profileFailure, setProfileFailure] = useState<Failure | null>(null);
@@ -85,8 +85,6 @@ export function SettingsValuesProvider({ children }: { children: ReactNode }) {
         memoryCount,
         daysKnown,
         call,
-        // 外观和角色一起由外壳读出；登录的用户读到之前还是默认值，不算读到。
-        appearance: account ? appearance : null,
         ...settingsSwitches(account),
         ownServices: ownedServices,
         signInMethods: account?.sign_in_methods.map((method) => method.provider) ?? null,
@@ -102,7 +100,7 @@ export function SettingsValuesProvider({ children }: { children: ReactNode }) {
       memoryCountChanged: setMemoryCount,
       callChanged: setCall,
     }),
-    [profile, profileFailure, detectedTimezone, memoryCount, daysKnown, call, appearance, ownedServices, account],
+    [profile, profileFailure, detectedTimezone, memoryCount, daysKnown, call, ownedServices, account],
   );
 
   return <SettingsValuesContext.Provider value={values}>{children}</SettingsValuesContext.Provider>;

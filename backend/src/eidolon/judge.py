@@ -42,7 +42,7 @@ _CHECK_QUESTION = {"type": "noul", "instructions": "这是一条测试消息吗�
 JUDGE_HISTORY = 4
 """How many of the latest messages the judge model sees along with what the user just said."""
 
-SAID = "制作人最新的一句话"
+SAID = "用户最新的一句话"
 """What the user just said, as the judge model is told it about a turn (`turn_state`)."""
 
 
@@ -52,9 +52,9 @@ def turn_state(character: Character, history: Sequence[Message], text: str) -> d
     recent = []
     for message in history[-JUDGE_HISTORY:]:
         if message.role == "user":
-            recent.append(f"制作人：{message.text}")
+            recent.append(f"用户：{message.text}")
         else:
-            recent.append(f"{character.name}：{message.without_cues().ja}")
+            recent.append(f"{character.name}：{message.without_cues().ja or ''}")
     return {"角色": character.name, "上文": recent or "（对话刚开始）", SAID: text}
 
 

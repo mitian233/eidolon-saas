@@ -481,6 +481,7 @@ class Letters:
             "letter", due.user_id, due.character_id, own_llm=False, exempt=False
         )
         lease = self._config.lease()
+        assert lease.keys.chat_llm is not None  # letters run on the deployer's chat model
         voices = None
         try:
             with recording.current():
@@ -600,7 +601,7 @@ class Letters:
                 if status.cooling or status.tier in BELOW_TRUST:
                     continue
                 tier = status.tier
-                if _RANKS[tier] >= _RANKS["close"] and is_birthday(character.birthday, day):
+                if character.birthday is not None and _RANKS[tier] >= _RANKS["close"] and is_birthday(character.birthday, day):
                     occasions.append((character_id, "her_birthday"))
             if character_id not in had:
                 continue

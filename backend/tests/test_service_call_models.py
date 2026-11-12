@@ -40,6 +40,8 @@ async def test_a_lease_taken_before_the_chat_model_changes_is_recorded_as_the_mo
     assert (await client.put(CHAT_LLM, json=NEW)).status_code == 200
     after = config.lease()
     for lease in (before, after):
+        assert lease.keys.chat_llm is not None
+        assert lease.keys.memory_llm is not None
         await ask(lease.keys.chat_llm)
         await ask(lease.keys.memory_llm)
         lease.release()

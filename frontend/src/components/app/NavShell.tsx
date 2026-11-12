@@ -8,10 +8,9 @@ import { CallBar } from "@/components/conversations/CallBar";
 import { LiveCallLayer } from "@/components/conversations/CallLayer";
 import { useDirectory, useWide } from "@/components/conversations/ConversationDirectory";
 import { useFocusBack } from "@/components/conversations/useFocusBack";
-import { useStandOutfits } from "@/components/conversations/useStandOutfits";
 import type { Character } from "@/lib/api";
 import { NOT_OPEN, type LiveConversation } from "@/lib/liveConversation";
-import { showsNav, showsShellCallBar } from "@/lib/navShell";
+import { showsShellCallBar } from "@/lib/navShell";
 import { herVars } from "@/theme/herVars";
 
 const notOpen = () => NOT_OPEN;
@@ -27,7 +26,6 @@ const noSubscription = () => () => {};
  *   导航栏没被盖住，照样能点，点了先收起（AppNav）。收起后还在原来的页面。她的对话页上的通话层由那一页画，
  *   手机上同样盖住 dock，dock 也 inert。
  * 下面的页面占满导航栏、dock、通话条以外的那一块（PageShell 的 `isInShell`）。
- * - 酒吧（`/play/bar`）这一页不画导航栏和 dock，画面铺满通话条下面整块（lib/navShell 的 `showsNav`）。
  */
 export function NavShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -40,11 +38,10 @@ export function NavShell({ children }: { children: ReactNode }) {
   const isCovered = layer !== null && isLayerOpen;
   const barShown = call !== null && layer?.collapsed === true && showsShellCallBar(pathname, call.characterId);
   const focus = useFocusBack({ layerOpen: isCovered, noteShown: barShown });
-  const isNavShown = showsNav(pathname);
 
   return (
     <div className="flex h-dvh flex-col md:flex-row">
-      {isNavShown && <NavRail />}
+      <NavRail />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {barShown && character && held && (
           <div style={herVars(character.color)} className="shrink-0">
@@ -64,7 +61,7 @@ export function NavShell({ children }: { children: ReactNode }) {
           {character && held && <HeldLayer live={held} character={character} layerRef={focus.layer} />}
         </div>
       </div>
-      {isNavShown && <NavDock isInert={isLayerOpen} />}
+      <NavDock isInert={isLayerOpen} />
     </div>
   );
 }
@@ -80,14 +77,12 @@ function HeldLayer({
   layerRef: ReturnType<typeof useFocusBack>["layer"];
 }) {
   const { go, account } = useDirectory();
-  const outfits = useStandOutfits(character);
   const isFullScreen = !useWide();
   return (
     <div style={herVars(character.color)} className="contents">
       <LiveCallLayer
         live={live}
         character={character}
-        standOutfits={outfits?.toTry ?? []}
         layerRef={layerRef}
         isFullScreen={isFullScreen}
         go={go}

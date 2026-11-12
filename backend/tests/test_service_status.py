@@ -127,6 +127,7 @@ async def test_a_service_without_calls_is_tried_twice_before_it_is_down_and_once
     assert again == {"chat_llm": "down", "memory_llm": "ok", "tts": "down", "stt": "ok"} | working
     assert len(llm.prompts) == 3  # one probe, then two the script had nothing for
     # Tried without thinking, writing next to nothing.
+    assert settings.chat_llm is not None
     trial = replace(settings.chat_llm, max_tokens=TRIAL_MAX_TOKENS, reasoning_effort=None)
     assert clients.opened.count(trial) == 3
     assert clients.memory_opened.count(trial) == 1  # the memory model is the chat model

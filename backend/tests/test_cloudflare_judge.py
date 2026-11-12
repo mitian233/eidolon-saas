@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from eidolon.config import CloudflareJudgeSettings, JevSettings, Settings
-from eidolon.judge import CloudflareJudge, JudgeError, check_judge
+from eidolon.judge import CloudflareJudge, JudgeError, SAID, check_judge
 from eidolon.retrieval import ModelRetrievalJudge
 from tests.test_retrieval_services import MANO, Handler, client, recording
 
@@ -50,7 +50,7 @@ async def test_clef_is_asked_by_its_bare_name_and_answers_from_the_envelope():
     assert request["url"] == URL
     assert request["auth"] == "Bearer cf-token"
     assert request["model"] == "clef-flash"
-    assert request["state"]["制作人最新的一句话"] == "我家的猫今天生病了"
+    assert request["state"][SAID] == "我家的猫今天生病了"
     assert request["questions"].keys() == answers.keys()
 
 

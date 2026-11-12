@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 
 import { AboutSettings } from "@/components/AboutSettings";
 import { AdminEntry } from "@/components/AdminEntry";
-import { AppearanceSettings } from "@/components/AppearanceSettings";
 import { CallSettings } from "@/components/CallSettings";
 import { CyclesSettings } from "@/components/CyclesSettings";
 import { DataPackageSettings } from "@/components/DataPackageSettings";
@@ -25,7 +24,6 @@ const PANELS: Record<Exclude<SettingsCategory, "memories" | "stats">, ReactNode>
   "reach-outs": <ReachOutsSettings />,
   moments: <MomentsSettings />,
   cycles: <CyclesSettings />,
-  appearance: <AppearanceSettings />,
   "own-keys": <OwnKeysSettings />,
   "sign-in": (
     <>

@@ -23,8 +23,8 @@ const reasoningEffortProblems = {
 
 export const zh = {
   app: {
-    name: "Eidolon-SC",
-    description: "和 283 事务所的偶像说说话",
+    name: "Eidolon-SaaS",
+    description: "和角色说说话",
     /** 链到项目仓库的那个链接：落地页右上角的字，导航栏底部（电脑）图标键的读屏名字。 */
     repositoryLabel: "GitHub",
   },
@@ -77,8 +77,8 @@ export const zh = {
   },
   /** 落地页的链接贴到聊天软件、社交网站时预览卡片上的文字（Open Graph、Twitter 卡片）。页面上不显示，不进字体子集。 */
   share: {
-    title: "Eidolon-SC · 和 283 事务所的偶像说说话",
-    description: "她们用自己的声音说日语，配中文字幕；可以给她打电话，她还会记得你说过的事。非官方粉丝作品，角色由 AI 扮演。",
+    title: "Eidolon-SaaS · 和角色说说话",
+    description: "登录后和自己的角色说话。角色由 AI 扮演。",
   },
   common: {
     back: "返回",
@@ -133,11 +133,11 @@ export const zh = {
   },
   conversationList: {
     title: "对话",
-    noneSelected: "选一位偶像开始对话",
+    noneSelected: "选一位角色开始对话",
     resize: "调整对话列表宽度",
-    /** 列表顶上的搜索框：按名字（原名、中文译名、假名、罗马字）或组合找偶像。 */
-    search: "搜索名字或组合",
-    noMatch: "没有找到这位偶像",
+    /** 列表顶上的搜索框：按名字或简介找角色。 */
+    search: "搜索角色",
+    noMatch: "没有找到这位角色",
     /** 最后一句是制作人自己说的。 */
     you: (text: string) => `你：${text}`,
     /** 最后一句前的相机图标（她最后发来了照片），给读屏读的。 */
@@ -162,11 +162,9 @@ export const zh = {
     /** 搜索框右边的筛选按钮；有人被隐藏时读出人数。 */
     filter: "筛选列表",
     filterHidden: (count: string) => `筛选列表，已隐藏 ${count} 位`,
-    /** 筛选面板：按组合分组的勾选清单。 */
+    /** 筛选面板：勾选清单。 */
     filterTitle: "列表里显示谁",
     showAll: "全部显示",
-    /** 没有组合的角色（事务员はづき）放在最后这一组。 */
-    noUnit: "283プロ",
     /** 列表底部、免责声明上面那一行，点了打开筛选面板。 */
     hiddenCount: (count: string) => `已隐藏 ${count} 位`,
     allHidden: "所有角色都隐藏了",
@@ -209,7 +207,7 @@ export const zh = {
     herSchedule: "她的日程",
     call: (name: string) => `和${name}通话`,
     callTooltip: "语音通话",
-    placeholder: "用中文或日语说点什么",
+    placeholder: "说点什么",
     send: "发送",
     /** 消息区里跨天处的日期条；昨天、更早的写法和列表一样（conversationList）。 */
     today: "今天",
@@ -340,27 +338,6 @@ export const zh = {
         /** 送礼让她解除了冷却。 */
         thawed: (name: string) => `${name}愿意和你说话了`,
       },
-    },
-    /** 页首的「换衣装」和它打开的面板（spec「衣装与换衣装」）。 */
-    outfits: {
-      open: "换衣装",
-      title: "换衣装",
-      hint: "打电话时她会穿这一套；只存在这台设备上。",
-      loading: "正在读取衣装",
-      loadFailed: "衣装没能读取",
-      retry: "再试一次",
-      /** 卡片下面的切换：私服 / 演出。 */
-      lookLabel: (card: string) => `${card}的私服或演出服`,
-      looks: { everyday: "私服", stage: "演出" },
-      only: "只有一套",
-      /** 大预览下面：卡名，「私服/演出服 · 稀有度 · 正在穿」。 */
-      cardName: (card: string) => `【${card}】`,
-      lookNames: { everyday: "私服", stage: "演出服" },
-      wearing: "正在穿",
-      separator: " · ",
-      notLoaded: "这套没能载入",
-      wear: "穿这套",
-      preview: (card: string) => `预览${card}`,
     },
   },
   /** 通话层、收起后的通话条、列表里的通话状态（spec「通话层」「通话状态」）；换一位角色、离开导航外壳前的确认框。 */
@@ -514,10 +491,10 @@ export const zh = {
 
   /** 全站都要说清的声明（PRODUCT.md「Brand Commitments」）。 */
   legal: {
-    disclaimer: "非官方的粉丝作品，与版权方无关。角色由 AI 扮演。",
+    disclaimer: "角色由 AI 扮演。",
     privacy: "隐私政策",
     terms: "使用条款",
-    pageTitle: (page: string) => `${page} · Eidolon-SC`,
+    pageTitle: (page: string) => `${page} · Eidolon-SaaS`,
   },
   failure: {
     signIn: "去登录",
@@ -525,7 +502,7 @@ export const zh = {
     toOwnKeys: "去设置自带密钥",
   },
   login: {
-    lede: "和《偶像大师 闪耀色彩》283 事务所的偶像们打电话、说话。她们会用自己的声音回答你，记得原作里和制作人一起走过的事，也会记住你告诉她们的事。",
+    lede: "登录后和自己的角色说话。",
     signInRegion: "登录",
     signInWith: (provider: string) => `用 ${provider} 登录`,
     noProviders: "部署者还没有配置登录方式。",
@@ -535,113 +512,12 @@ export const zh = {
     devHint: "后端打开了 EIDOLON_DEV_LOGIN，可以直接以这个名字的用户登录。",
     devName: "用户名",
     devSubmit: "登录",
-    castTitle: "可以说话的偶像",
   },
-  /** 落地页（ADR-0016）。各幕的文案由后续的 ticket 补上，都要交用户审。 */
+  /** 落地页（M0 占位版）：只说这是什么、怎么登录，不展示默认角色。 */
   landing: {
-    disclaimer: "非官方粉丝作品，角色由 AI 扮演。",
+    disclaimer: "角色由 AI 扮演。",
     signIn: "登录",
     continue: "继续",
-    panelTitle: "登录",
-    devSignIn: "开发登录",
-    /**
-     * 第 1 幕「プリズム」：白光射进棱镜，散成她们的颜色（画面上仍是分光，文字只说这是什么）。name 是竖排的
-     * 日文幕名，纯装饰，和幕名轨那一格同步改。title 的人数按名单算。
-     */
-    act1: {
-      name: "プリズム",
-      title: (count: string) => `一个电话，${count} 个角色。`,
-      body: "每个偶像有自己的人设，用各自的语气和你聊天。",
-    },
-    /** 左侧竖排的日文幕名轨，按幕的编号；还没做的幕不显示。纯装饰，读屏读 label 和各幕自己的标题。 */
-    rail: {
-      label: "进度",
-      acts: ["序", "プリズム", "光譜", "ことば", "着信", "記憶", "ことわり", "はじまり"],
-    },
-    /** 第 2 幕「光谱」：按组合排开的名牌。组合名用原作的写法，不翻译。 */
-    act2: {
-      label: "光谱：按组合排开的偶像",
-      jump: "按组合跳转",
-      jumpTo: (unit: string) => `跳到 ${unit}`,
-      /** 没有组合的那一段（事务员はづき），排在最后。 */
-      others: "283プロ",
-      /** 声音开关：第一次点偶像、听到招呼以后出现在右上角，关掉以后点偶像只显示字幕。 */
-      sound: "声音",
-      soundOn: "开",
-      soundOff: "关",
-    },
-    /**
-     * 第 3 幕「她说日语」：她说几句日语，竖排的原文一列列出来，中文字幕一句句被光扫出来。台词是演示用的，
-     * 照她的人设写，不引用剧情原文和歌词。`speaker` 是说话的那一位（角色标识），第 4 幕打来电话的也是她；
-     * 她不在名单里时换成光谱里的第一位，台词就和人对不上了，换人要连台词一起换。句数是落地页模型的 TALK_LINES。
-     */
-    act3: {
-      title: "日语语音，中文字幕。",
-      body: "小偶像说的是日语语音，口癖和语气词都原样保留；对应的中文字幕会附在下面。",
-      speaker: "mano",
-      lines: [
-        { ja: "えっと……プロデューサーさん。", zh: "那个……制作人。" },
-        { ja: "今日の空、すっごく青いですっ", zh: "今天的天空，好蓝好蓝呀。" },
-        { ja: "ほわっ……一緒にお散歩、しませんか？", zh: "呼哇……要不要一起去散散步？" },
-      ],
-    },
-    /** 第 4 幕「来电」：模拟一次她打来的电话。只有访客接听时才响起铃声和接通音。 */
-    act4: {
-      title: "也可以和她通电话。",
-      body: "和她实时语音通话：你开口说话，她用日语回答。",
-      ringing: "来电",
-      connected: "通话中",
-      ended: "通话结束",
-      answer: "接听",
-      /** 来电画面底部滑块上的字；读屏器念的是 answer。 */
-      slide: "滑动接听",
-      hangUp: "挂断",
-    },
-    /**
-     * 第 5 幕「记忆」：一件事被一位偶像收进记忆、传给另一位，再从她那里传开。不出现任何剧情原文、台词或歌词。
-     * `cast` 是演员（角色标识），按顺序：发送的人、接收并传开的人、再传到的两位，各站在一座浮岛上；
-     * 某位不在名单里时她的岛上没有人、她的话不出现。几句话是气泡里的字，不出声；照 cast 的这几位写，换人要连这几句话一起换。
-     */
-    act5: {
-      cast: ["mano", "kaho", "fuyuko", "kiriko"],
-      title: "你对她说的事，她们都会记得。",
-      body: "告诉一位偶像的近况，别的偶像之后也会知道，提起时会说是听谁讲的。她们也记得原作里和你一起走过的那些日子。",
-      /** 制作人发给发送的那一位的一句（深蓝气泡）；`name` 是读屏器念的说话的人。 */
-      producer: { name: "制作人", line: "下周要考试了，有点紧张。" },
-      /** 发送的那一位收进记忆以前，头上冒出的气泡。 */
-      thinking: "思考中…",
-      /** 演员说的话，和 cast 一一对应：日语原文在上，中文字幕在下。 */
-      lines: [
-        { ja: "うん、覚えておきますね", zh: "我记住了。" },
-        { ja: "真乃さんから聞きました！ファイトです！", zh: "听真乃说你要考试了，加油！" },
-        { ja: "テストでしょ？真乃から聞いたわよ", zh: "考试？真乃跟我说了。" },
-        { ja: "真乃ちゃんから……聞きました……", zh: "听真乃说了……别太勉强……" },
-      ],
-      /** 收到的几位的记忆柱上冒出的标签：她想起了谁告诉她的事（来源角色）。`from` 是发送那一位的称呼，和台词里一样。 */
-      recalled: (from: string) => `想起 1 条记忆 · 来自${from}`,
-      from: "真乃",
-      /** 最后的全景下面的一句。 */
-      closing: "她们会记住你的事情，然后在所有人之间传开。",
-    },
-    /** 第 6 幕「诚实事项」：安静、居中的短文。限额不写具体数字；登录方式从后端读取。 */
-    act6: {
-      title: "使用须知",
-      unofficial: "非官方粉丝作品，和原作版权方无关。角色完全由 AI 驱动。",
-      // 下面两句不论免限额密钥是哪几项都要对（落地页静态渲染，不随开关变化），不点名哪几项。
-      limits: "部署服务不向你收费，但每人可能存在使用限额。",
-      ownKey: "支持 BYOK（自带密钥），密钥只保存于本地",
-      memories: "记忆可查看&删除，管理者无法查看",
-      affinity: "你的话语会影响她们对你的态度，切勿过于冒犯……",
-      signIn: (providers: string) => `现支持 ${providers} 登录`,
-      noSignIn: "暂时还不能登录。",
-      /** 几种登录方式之间的连接词。 */
-      or: "/",
-    },
-    /** 第 7 幕「开始」：每位角色一道光，收拢成一块手机屏幕的白光，出现行动按钮。 */
-    act7: {
-      title: "她们在屏幕的另一边。",
-      body: "登录以后，挑一位偶像，和她说说话。",
-    },
   },
   consent: {
     title: "开始之前",
@@ -664,7 +540,6 @@ export const zh = {
       "reach-outs": "搭话",
       moments: "朋友圈",
       cycles: "周期",
-      appearance: "外观",
       "own-keys": "自带密钥",
       "sign-in": "登录与数据",
       "data-package": "数据包",
@@ -679,8 +554,6 @@ export const zh = {
       daysKnown: (days: number) => `已认识 ${days} 天`,
       phoneTextureOn: "电话质感开",
       phoneTextureOff: "电话质感关",
-      scspAvatarsOn: "SCSP 头像开",
-      scspAvatarsOff: "SCSP 头像关",
       /** 搭话、周期这类只有一个开关的。 */
       switchOn: "开",
       switchOff: "关",
@@ -754,7 +627,7 @@ export const zh = {
     },
     /** 「关于」的四行和最下面的免责声明（应用里只留这一处）。 */
     about: {
-      site: "关于 Eidolon-SC",
+      site: "关于 Eidolon-SaaS",
       repository: "GitHub 仓库",
       privacy: "隐私政策",
       terms: "使用条款",
@@ -804,9 +677,6 @@ export const zh = {
     cycles: {
       on: "她们的周期",
       hint: "关掉后她不受周期影响，玩法里不显示周期；记录会留着。",
-    },
-    appearance: {
-      scspAvatars: "SCSP 头像",
     },
     call: {
       mic: "默认麦克风",
@@ -2055,15 +1925,6 @@ export const zh = {
         /** 「记过 3 位 · 最近 円香 10月31日」：推算的下一次经期离今天最近的那位。 */
         status: (n: number, name: string, date: string) => `记过 ${n} 位 · 最近 ${name} ${date}`,
       },
-      bar: {
-        name: "VA-283",
-        /** 今天还没玩完过光顾，玩完有奖励。 */
-        rewardToday: "今天第一次光顾有奖励",
-        /** 好感度和礼物开着，今天已经玩完过。 */
-        rewarded: "今天的奖励领过了",
-        /** 好感度和礼物关着：光顾什么都不给。 */
-        unrewarded: "调一杯给来店的她",
-      },
     },
     /** 周期子页（`/play/cycles`，GLOSSARY.md「周期」「推算」）。 */
     cycles: {
@@ -2266,99 +2127,6 @@ export const zh = {
       whose: (name: string, job: string) => `${name}的${job}`,
       startedBack: (jobs: string) => `${jobs}：已经开始了，不保存，退回待排。`,
       returnedBack: (jobs: string, reason: string) => `${jobs}：${reason}，不保存，退回待排。`,
-    },
-  },
-  /** 酒吧（`/play/bar`，GLOSSARY.md「酒吧」）：画面里的字都是像素字，这里是它们写什么。 */
-  bar: {
-    /** 电视，读屏读的名字。 */
-    tv: "换台",
-    /** 侧边菜单下排，原版「退出」的位置：回玩法页。 */
-    leave: "离开",
-    /** 店门口和侧边菜单上排原版「读取」的位置：没全屏时进全屏，全屏时退出。 */
-    screen: { full: "全屏", window: "窗口" },
-    /** 侧边菜单上排原版的「设置」，和它弹出的设置框（「声音」「图像」两个标题和字图是原版的图，这里是读屏读的）。 */
-    settings: {
-      name: "设置",
-      close: "关上设置",
-      music: "背景音乐",
-      sfx: "音效",
-      quieter: (what: string) => `${what}调小`,
-      louder: (what: string) => `${what}调大`,
-      volume: (what: string, percent: number) => `${what}音量，${percent}%`,
-      scanlines: "扫描线",
-    },
-    /** 点唱机：侧边菜单下排原版的位置那一格、选曲界面、店里的小播放器。曲名用原版的英文名，不在这里。 */
-    jukebox: {
-      name: "点唱机",
-      title: "请选择一首曲子",
-      add: "点击左侧的曲名来添加曲目。",
-      /** 选曲界面左下的说明：电脑（细指针）和手机各一句。 */
-      howTo: {
-        fine: "悬停在曲名上试听，右键点击右侧曲目移除，点两首曲目可替换顺序。",
-        coarse: "长按左侧曲名试听，长按右侧曲目移除，点两首曲目可替换顺序。",
-      },
-      /** 右边的槽，读屏读的。 */
-      slot: (n: number, title: string | null) => (title === null ? `第 ${n} 首，空` : `第 ${n} 首，${title}`),
-      prevPage: "上一页",
-      nextPage: "下一页",
-      ready: "Ready!",
-      player: { previous: "上一首", pause: "暂停", play: "播放", next: "下一首", shuffle: "随机", loop: "单曲循环" },
-    },
-    /** 手机竖着时盖住整层的提醒。 */
-    portrait: "请横过来",
-    /** 安卓上提醒下面的按钮：进全屏、锁成横屏。 */
-    fullscreen: "全屏横过来",
-    /** 店门口：点一下进门；进不了时写为什么。 */
-    door: {
-      enter: "点一下进门",
-      /** 店门口的小按钮：从头再看一遍教程。 */
-      tutorial: "教程",
-      overLimit: (time: string) => `这一小时的光顾次数用完了，${time} 以后再来`,
-      failed: "没能进门，再点一下试试",
-    },
-    /** 文本框，读屏读的名字：点了打完这句或翻页。 */
-    next: "继续",
-    /** 文本框里制作人的名字。 */
-    producer: "制作人",
-    /** 教程期间侧边菜单「点唱机」那一格换成它：跳过教程，直接去选曲界面。 */
-    skip: "跳过",
-    /** 调酒台：开关、按钮上的字，和读屏读的材料份数。 */
-    counter: {
-      ice: "加冰",
-      aged: "陈化",
-      on: "，开着",
-      off: "，关着",
-      reset: "重做",
-      mix: "调制",
-      stop: "停止",
-      serve: "上酒",
-      parts: (name: string, n: number) => `${name}，${n} 份`,
-    },
-    /** 配方书：四个标签、每栏的标题、口味和种类的菜单分类名，翻页的读屏。饮品名用英文原名，不在这里。 */
-    book: {
-      tabs: { name: "按名称", flavor: "按口味", kind: "按种类", bottle: "瓶装饮品" },
-      search: { name: "按名称搜索", flavor: "按口味搜索", kind: "按种类搜索", bottle: "瓶装饮品" },
-      flavors: { sweet: "甜味", bitter: "苦味", sour: "酸味", spicy: "辛辣", bubbly: "发泡" },
-      kinds: { girly: "女性化", manly: "男性化", classic: "经典", classy: "时尚", promo: "宣传" },
-      /** 口味、种类的分类和它列出饮品时的标题，如「甜味饮品」。 */
-      category: (name: string) => `${name}饮品`,
-      prev: "上一页",
-      next: "下一页",
-      /** 瓶装的图，读屏读的：拖进摇酒器。 */
-      bottle: (name: string) => `${name}，拖进摇酒器`,
-    },
-    /** 光顾没了（请求得 410、调用中途断了）时店门口写的。 */
-    visitGone: "这次光顾已经结束了",
-    /** 模型出错时文本框里的按钮。 */
-    retry: "再试一次",
-    /** 她告别以后的结束卡：当天第一次写得到了什么，之后只写她走了。 */
-    end: {
-      draws: "抽奖 +1",
-      heart: "♥ ",
-      affinityUp: "好感度上升",
-      /** 什么都没给时；没读到她是谁时写「她」。 */
-      left: (name: string | null) => `${name ?? "她"}走了`,
-      again: "再营业",
     },
   },
   /** 礼物子页（`/play/gifts`，GLOSSARY.md「礼物」「抽奖」，DESIGN.md「玩法页」）：抽奖台、重置卡条、我的礼物，和送礼面板、抽奖弹窗里的字。 */
@@ -2590,7 +2358,7 @@ export const zh = {
   terms: {
     title: "使用条款",
     items: [
-      { term: "非官方的粉丝作品", text: "与《偶像大师 闪耀色彩》的版权方和官方没有任何关系。" },
+      { term: "角色由用户创建", text: "角色的人设、头像和背景资料由创建它的用户提供；平台只保存文本和地址，不托管素材文件。" },
       { term: "角色由 AI 扮演", text: "和你说话、在朋友圈发动态和评论的角色不是真人，也不代表官方设定。她们说的话可能出错，请不要当真，也不要依赖她们做重要的决定。" },
       { term: "不保证一直可用", text: "服务由个人部署和负担费用，可能随时调整限额、暂停或关闭，数据也可能因故丢失。" },
       { term: "年满 13 岁", text: "你需要年满 13 岁才能使用。" },

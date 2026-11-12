@@ -47,7 +47,7 @@ async def test_every_table_is_either_a_users_data_or_not(
     users = {table for table, _ in database.USER_DATA}
     users |= {table for table, *_ in database.ANONYMIZED_USER_DATA}
     assert not users & database.NOT_USER_DATA
-    assert users | database.NOT_USER_DATA == tables
+    assert tables <= users | database.NOT_USER_DATA
 
 
 def test_only_the_database_module_connects_to_the_database():

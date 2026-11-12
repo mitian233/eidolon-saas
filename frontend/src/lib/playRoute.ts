@@ -6,7 +6,7 @@
 // addresses, lib/settingsCategory).
 
 /** The subpages, one for each card of the first level. */
-export const PLAY_SUBPAGES = ["gifts", "achievements", "calendar", "cycles", "bar"] as const;
+export const PLAY_SUBPAGES = ["gifts", "achievements", "calendar", "cycles"] as const;
 
 export type PlaySubpage = (typeof PLAY_SUBPAGES)[number];
 

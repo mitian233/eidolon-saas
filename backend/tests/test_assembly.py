@@ -1,8 +1,8 @@
 """The assembly root: what `build` turns on, given which outside services are at hand.
 
-Retrieval needs the judge model, the embedder and the reranker; memory is on only with
-retrieval, since only retrieval finds memories again. Turns are taken through the built
-engine.
+Retrieval needs the judge model, the embedder and the reranker all at hand; memory needs
+the embedder and the reranker, with or without the judge. Turns are taken through the
+built engine, with the test registry's characters seeded into the shared mapping.
 """
 
 import json
@@ -25,6 +25,7 @@ from eidolon.emotion import SaidSegment, SegmentToJudge
 from eidolon.judge import JudgeModel, open_judge
 from eidolon.own_keys import BroughtKeys
 from eidolon.retrieval import RECALL_STORY_TOOL
+from tests.conftest import Characters
 from tests.fakes import (
     FakeBackgroundLLM,
     FakeEmbedder,
@@ -71,13 +72,13 @@ async def tell_mano(backend: Backend, text: str) -> tuple[str, list[dict]]:
 
 
 async def test_with_every_service_turns_retrieve_and_remember(
-    settings: Settings, backends: list[Backend]
+    settings: Settings, characters: Characters, backends: list[Backend]
 ):
     services = Services()
     backend = build_faked(
         settings, services.chat, background_llm=services.background,
         retrieval_judge=services.retrieval_judge, embedder=services.embedder, reranker=services.reranker,
-        clock=lambda: NOW,
+        characters=characters, clock=lambda: NOW,
     )
     backends.append(backend)
 
@@ -89,15 +90,15 @@ async def test_with_every_service_turns_retrieve_and_remember(
     assert [m.text for m in await backend.memories.entries(user_id)] == [CAT]
 
 
-@pytest.mark.parametrize("missing", ALL)
-async def test_without_any_one_of_them_retrieval_and_memory_are_off(
-    settings: Settings, backends: list[Backend], missing: str
+@pytest.mark.parametrize("missing", ("embedder", "reranker"))
+async def test_without_the_embedder_or_reranker_retrieval_and_memory_are_off(
+    settings: Settings, characters: Characters, backends: list[Backend], missing: str
 ):
     services = Services()
     given = {name: getattr(services, name) for name in ALL if name != missing}
     backend = build_faked(
         settings, services.chat, background_llm=services.background,
-        clock=lambda: NOW, **given,
+        characters=characters, clock=lambda: NOW, **given,
     )
     backends.append(backend)
 
@@ -108,6 +109,25 @@ async def test_without_any_one_of_them_retrieval_and_memory_are_off(
     assert RECALL_STORY_TOOL not in services.chat.tools[0]  # nothing to recall episodes with
     assert await backend.memories.entries(user_id) == []  # listing still works
     assert services.background.prompts == []  # nothing was written down
+
+
+async def test_without_the_judge_retrieval_is_off_but_memory_still_writes(
+    settings: Settings, characters: Characters, backends: list[Backend]
+):
+    services = Services()
+    backend = build_faked(
+        settings, services.chat, background_llm=services.background,
+        embedder=services.embedder, reranker=services.reranker,
+        characters=characters, clock=lambda: NOW,
+    )
+    backends.append(backend)
+
+    user_id, events = await tell_mano(backend, "我家的猫叫小白哦")
+
+    assert events[-1]["type"] == "done"
+    assert services.retrieval_judge.asked == []
+    assert RECALL_STORY_TOOL not in services.chat.tools[0]
+    assert [m.text for m in await backend.memories.entries(user_id)] == [CAT]
 
 
 def answering_every_question(requests: list[dict]) -> Handler:
@@ -132,7 +152,7 @@ def answering_every_question(requests: list[dict]) -> Handler:
 
 
 async def test_cloudflare_chosen_judges_both_what_turns_need_and_her_emotions(
-    settings: Settings, backends: list[Backend]
+    settings: Settings, characters: Characters, backends: list[Backend]
 ):
     requests: list[dict] = []
 
@@ -146,7 +166,8 @@ async def test_cloudflare_chosen_judges_both_what_turns_need_and_her_emotions(
             settings, judge=CloudflareJudgeSettings("cf-token", "acc-id"), affinity_and_gifts=False
         ),
         services.chat, background_llm=services.background, clients=CloudflareClients(),
-        embedder=services.embedder, reranker=services.reranker, clock=lambda: NOW,
+        embedder=services.embedder, reranker=services.reranker, characters=characters,
+        clock=lambda: NOW,
     )
     backends.append(backend)
 
@@ -163,7 +184,7 @@ async def test_cloudflare_chosen_judges_both_what_turns_need_and_her_emotions(
 
 
 async def test_the_judge_model_made_judges_both_on_the_thresholds_in_effect(
-    settings: Settings, backends: list[Backend]
+    settings: Settings, characters: Characters, backends: list[Backend]
 ):
     services = Services()
     clients = FakeServiceClients(FakeLLM(REPLY, REPLY))
@@ -171,7 +192,8 @@ async def test_the_judge_model_made_judges_both_on_the_thresholds_in_effect(
     clients.judge.emotion = {"开心": 0.6, "平静": 0.4}
     backend = build_faked(
         replace(settings, judge=JevSettings("jev-key")), clients=clients,
-        embedder=services.embedder, reranker=services.reranker, clock=lambda: NOW,
+        embedder=services.embedder, reranker=services.reranker, characters=characters,
+        clock=lambda: NOW,
     )
     backends.append(backend)
 
@@ -203,8 +225,8 @@ def test_the_background_model_is_the_chat_model_unless_configured_apart(settings
     chat = LLMSettings("https://chat.example/v1", "chat-key", "chat-model")
     background = LLMSettings("https://chat.example/v1", "chat-key", "cheap-model")
 
-    assert Settings(settings.database_path, settings.characters_path, chat).background_llm == chat
+    assert Settings(settings.database_path, chat_llm=chat).background_llm == chat
     assert (
-        Settings(settings.database_path, settings.characters_path, chat, background).background_llm
+        Settings(settings.database_path, chat_llm=chat, background_llm=background).background_llm
         == background
     )

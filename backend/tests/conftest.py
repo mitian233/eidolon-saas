@@ -1,14 +1,12 @@
 import asyncio
-import json
-import re
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import httpx
 import pytest
@@ -19,17 +17,13 @@ from eidolon.__main__ import main
 from eidolon.activity import ActivityLog
 from eidolon.app import create_app
 from eidolon.assembly import Backend
-from eidolon.bar_lines import BAR_LINES_FILE
-from eidolon.bar_visits import BAR_VISITS_FILE
+from eidolon.characters import CallOpener, Character, Greeting, parse_facts
+from eidolon.character_repository import CharacterRepository
 from eidolon.clock import Clock
 from eidolon.config import LLMSettings, Settings
 from eidolon.data_access import Database
-from eidolon.drink_catalog import DRINKS_FILE
-from eidolon.gift_catalog import GIFTS_FILE
-from eidolon.letter_music import LETTER_MUSIC_FILE
 from eidolon.identity import Identity
-from eidolon.job_list import JOBS_FILE
-from eidolon.place_pool import PLACES_FILE
+from eidolon.producer import Birthday
 from eidolon.sessions import SESSION_COOKIE
 from eidolon.store import Store
 from tests.browser import Browser, open_browser
@@ -38,7 +32,6 @@ from tests.fakes import (
     DEPLOYER_SONIOX_KEY,
     START,
     FakeCatalog,
-    FakeWeather,
     FakeClock,
     FakeDashScope,
     FakeIdentityProvider,
@@ -46,6 +39,7 @@ from tests.fakes import (
     FakeLLMService,
     FakeSpeech,
     build_faked,
+    registry_of,
 )
 from tests.stories import write_sample_stories
 
@@ -129,180 +123,201 @@ ClientFactory = Callable[..., httpx.AsyncClient]
 
 MANO_SHEET = "# 人设\n你是櫻木真乃。口癖是「ほわっ」。"
 KOGANE_SHEET = "# 人设\n你是月岡恋鐘。说长崎方言。"
-MANO_PHOTO = ("sakuragi mano", "brown hair, medium hair, brown eyes")
-"""Mano's `photo_tag` and `photo_appearance`."""
-AVATAR = b"\x89PNG\r\n\x1a\n fake avatar"
-SCSP_AVATAR = b"\xff\xd8\xff fake SCSP avatar"
-BACKGROUND = b"\xff\xd8\xff fake background"
-SIGNATURE = b"RIFF\x00\x00\x00\x00WEBP fake signature"
-REPO_GIFTS = Path(__file__).parents[2] / "characters" / GIFTS_FILE
-REPO_LETTER_MUSIC = Path(__file__).parents[2] / "characters" / LETTER_MUSIC_FILE
-REPO_JOBS = Path(__file__).parents[2] / "characters" / JOBS_FILE
-REPO_DRINKS = Path(__file__).parents[2] / "characters" / DRINKS_FILE
-REPO_BAR_VISITS = Path(__file__).parents[2] / "characters" / BAR_VISITS_FILE
-REPO_BAR_LINES = Path(__file__).parents[2] / "characters" / BAR_LINES_FILE
-REPO_PLACES = Path(__file__).parents[2] / "characters" / PLACES_FILE
-BAR_TASTE: dict[str, object] = {
-    "bar_flavors": ["sweet"], "bar_favorites": ["sugar-rush"], "bar_tolerance": "strong",
-}
-"""Her bar tastes, the fields required and no more, as `CharacterConfig.add` writes them
-unless a test gives others: holding her drink well, so that no chance is taken on her
-wanting one without alcohol."""
 
 
-class CharacterConfig:
-    """Writes a character configuration directory, the way an administrator would, with the
-    repository's gift catalog, job list, drink catalog, bar reasons and topics, bar lines,
-    place pool and letters' music list beside it unless a test writes its own (`gifts.toml`,
-    `jobs.toml`, `drinks.toml`, `bar_visits.toml`, `bar_lines.toml`, `places.toml`,
-    `letter_music.toml`). The reasons and
-    topics are written for every character, none left out (`not_for`), and the places for
-    no one (`idols`), as the repository's name characters a test may not have."""
+class Characters(Mapping[str, Character]):
+    """The test characters, defined in memory as the engine sees them: no configuration
+    directory, no asset files. `build_faked` seeds them into the backend's shared mapping;
+    `make_client` and `sign_in_with` also keep them in the database as the signed-in user's
+    own, so the private-character API finds them (`seed_characters`). Legacy tests speak
+    paired Japanese and Chinese, so `add` defaults to `language_mode="bilingual"`;
+    characters created through the API default to single language as production does."""
 
-    def __init__(self, directory: Path) -> None:
-        self.directory = directory
-        self.path = directory / "characters.toml"
-        self._entries: list[str] = []
+    def __init__(self) -> None:
+        self._by_id: dict[str, Character] = {}
 
     def add(
         self,
         id: str,
         name: str,
-        sheet: str | None,
+        sheet: str,
         *,
         intro: str = "",
         voice_id: str = "voice",
-        avatar: bytes | None = None,
-        scsp_avatar: bytes | None = None,
         color: str | None = "#ffbad6",
         birthday: str | None = "07-07",
-        age: int | str | None = 20,
-        background: bytes | None = None,
-        signature: bytes | None = None,
+        age: int | None = 20,
         speakers: list[str] | None = None,
         facts: str | None = None,
         idol_id: int | None = None,
-        default_outfit: str | None = None,
         greeting: tuple[str, str] | None = None,
         call_opener: tuple[str, str] | None = None,
         other_names: tuple[str, str, str] | None = None,
-        liked_gifts: tuple[str, ...] | None = ("cake",),
-        photo: tuple[str, str] | None = None,
-        bar: dict[str, object] | None = BAR_TASTE,
-        place_likes: tuple[str, ...] | None = None,
         short_name: str | None = None,
-    ) -> "CharacterConfig":
-        """`greeting` is her greeting in Japanese, delivery cues and all, and its subtitle;
+        avatar_url: str | None = None,
+        user_address: str = "你",
+        language_mode: Literal["single", "bilingual"] = "bilingual",
+    ) -> "Characters":
+        """`greeting` is her greeting, delivery cues and all, and its subtitle;
         `call_opener` her call opener, likewise; `other_names` her `name_zh`, `name_kana`
-        and `name_romaji`; `liked_gifts` her liked gifts (None leaves them out), cake by
-        default as every catalog the tests write has it; `photo` her `photo_tag` and
-        `photo_appearance`; `bar` her bar tastes, field by field (None leaves them all out);
-        `place_likes` the kinds of place she likes (None leaves them out); `short_name` her
-        short name; `birthday` her `"MM-DD"`, a day on which tests' clocks fall on no one's
-        birthday unless they set one (None leaves it out); `age` her age, as
-        TOML writes it, or None to leave it out."""
-        entry = f'[[characters]]\nid = "{id}"\nname = "{name}"\nintro = "{intro}"\n'
-        entry += f'voice_id = "{voice_id}"\nsheet = "sheets/{id}.md"\n'
-        if sheet is not None:
-            self.write(f"sheets/{id}.md", sheet)
-        if avatar is not None:
-            self.write(f"avatars/{id}.png", avatar)
-            entry += f'avatar = "avatars/{id}.png"\n'
-        if scsp_avatar is not None:
-            self.write(f"avatars-scsp/{id}.jpg", scsp_avatar)
-            entry += f'scsp_avatar = "avatars-scsp/{id}.jpg"\n'
-        if color is not None:
-            entry += f'color = "{color}"\n'
-        if birthday is not None:
-            entry += f'birthday = "{birthday}"\n'
-        if age is not None:
-            entry += f"age = {age}\n"
-        if background is not None:
-            self.write(f"backgrounds/{id}.jpg", background)
-            entry += f'background = "backgrounds/{id}.jpg"\n'
-        if signature is not None:
-            self.write(f"signatures/{id}.webp", signature)
-            entry += f'signature = "signatures/{id}.webp"\n'
-        if facts is not None:
-            self.write(f"facts/{id}.md", facts)
-            entry += f'facts = "facts/{id}.md"\n'
-        if speakers is not None:
-            entry += f"speakers = {json.dumps(speakers, ensure_ascii=False)}\n"
-        if idol_id is not None:
-            entry += f"idol_id = {idol_id}\n"
-        if default_outfit is not None:
-            entry += f'default_outfit = "{default_outfit}"\n'
-        if greeting is not None:
-            text, subtitle = greeting
-            entry += f"greeting = {json.dumps(text, ensure_ascii=False)}\n"
-            entry += f"greeting_subtitle = {json.dumps(subtitle, ensure_ascii=False)}\n"
-        if call_opener is not None:
-            text, subtitle = call_opener
-            entry += f"call_opener = {json.dumps(text, ensure_ascii=False)}\n"
-            entry += f"call_opener_subtitle = {json.dumps(subtitle, ensure_ascii=False)}\n"
-        if short_name is not None:
-            entry += f"short_name = {json.dumps(short_name, ensure_ascii=False)}\n"
-        if other_names is not None:
-            for field, value in zip(("name_zh", "name_kana", "name_romaji"), other_names):
-                entry += f"{field} = {json.dumps(value, ensure_ascii=False)}\n"
-        if liked_gifts is not None:
-            entry += f"liked_gifts = {json.dumps(list(liked_gifts))}\n"
-        if photo is not None:
-            entry += f"photo_tag = {json.dumps(photo[0])}\n"
-            entry += f"photo_appearance = {json.dumps(photo[1])}\n"
-        for field, value in (bar or {}).items():
-            entry += f"{field} = {json.dumps(value)}\n"
-        if place_likes is not None:
-            entry += f"place_likes = {json.dumps(list(place_likes))}\n"
-        self._entries.append(entry)
-        self.directory.mkdir(parents=True, exist_ok=True)
-        self.path.write_text("\n".join(self._entries), encoding="utf-8")
-        if not (gifts := self.directory / GIFTS_FILE).exists():
-            gifts.write_bytes(REPO_GIFTS.read_bytes())
-        if not (jobs := self.directory / JOBS_FILE).exists():
-            jobs.write_bytes(REPO_JOBS.read_bytes())
-        if not (drinks := self.directory / DRINKS_FILE).exists():
-            drinks.write_bytes(REPO_DRINKS.read_bytes())
-        if not (visits := self.directory / BAR_VISITS_FILE).exists():
-            repository = REPO_BAR_VISITS.read_text(encoding="utf-8")
-            everyones = re.sub(r"^not_for = \[[^]]*\]\n", "", repository, flags=re.M)
-            visits.write_text(everyones, encoding="utf-8")
-        if not (bar_lines := self.directory / BAR_LINES_FILE).exists():
-            bar_lines.write_bytes(REPO_BAR_LINES.read_bytes())
-        if not (places := self.directory / PLACES_FILE).exists():
-            repository = REPO_PLACES.read_text(encoding="utf-8")
-            anyones = re.sub(r"^idols = \[[^]]*\]\n", "", repository, flags=re.M)
-            places.write_text(anyones, encoding="utf-8")
-        if not (music := self.directory / LETTER_MUSIC_FILE).exists():
-            music.write_bytes(REPO_LETTER_MUSIC.read_bytes())
+        and `name_romaji`; `facts` her character facts as Markdown, split by heading;
+        `birthday` her `"MM-DD"` (None leaves it out); `age` her age (None leaves it out);
+        `speakers` the names her lines carry in story scripts."""
+        month, day = (int(part) for part in birthday.split("-")) if birthday else (None, None)
+        self._by_id[id] = Character(
+            id=id,
+            name=name,
+            intro=intro,
+            voice_id=voice_id,
+            sheet=sheet,
+            color=color or "#64748b",
+            birthday=Birthday(month, day) if month is not None and day is not None else None,
+            age=age,
+            speakers=tuple(speakers) if speakers is not None else (),
+            facts=parse_facts(facts) if facts is not None else (),
+            idol_id=idol_id,
+            greeting=Greeting(*greeting) if greeting is not None else None,
+            call_opener=CallOpener(*call_opener) if call_opener is not None else None,
+            short_name=short_name,
+            name_zh=other_names[0] if other_names is not None else None,
+            name_kana=other_names[1] if other_names is not None else None,
+            name_romaji=other_names[2] if other_names is not None else None,
+            avatar_url=avatar_url,
+            user_address=user_address,
+            language_mode=language_mode,
+        )
         return self
 
-    def write(self, relative: str, content: str | bytes) -> None:
-        target = self.directory / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(content, bytes):
-            target.write_bytes(content)
+    def __getitem__(self, id: str) -> Character:
+        return self._by_id[id]
+
+    def __iter__(self):
+        return iter(self._by_id)
+
+    def __len__(self) -> int:
+        return len(self._by_id)
+
+
+def _settings_of(character: Character) -> dict[str, Any]:
+    """The settings of hers the database keeps, as `CharacterRepository` takes them."""
+    return dict(
+        name=character.name, sheet=character.sheet, intro=character.intro,
+        avatar_url=character.avatar_url,
+        greeting=character.greeting.text if character.greeting is not None else "",
+        voice_id=character.voice_id, color=character.color,
+        user_address=character.user_address, language_mode=character.language_mode,
+        birthday=character.birthday, age=character.age,
+    )
+
+
+def _rename_character(conn, old_id: str, new_id: str) -> None:
+    conn.execute("UPDATE characters SET id = ? WHERE id = ?", (new_id, old_id))
+
+
+def character_id(id: str, user: str = "producer") -> str:
+    """The id the registry's character `id` is kept under for the user named `user`: the
+    producer's under its own name, everyone else's with the user's name after it, as each
+    user's characters are their own rows (`seed_characters`)."""
+    return id if user == "producer" else f"{id}-{user}"
+
+
+class _SeededRepository(CharacterRepository):
+    """The repository of a backend whose characters were seeded (`seed_characters`): the
+    database keeps their settings, the registry's view what it has no column for (her
+    speakers, facts and other names). Each read that refreshes the shared mapping keeps
+    those on it, so a turn looking its character up does not drop what the engine and the
+    corpus read. Ownership stays the database's: a read finds only the owner's character."""
+
+    def __init__(self, repository: CharacterRepository) -> None:
+        self._db = repository._db
+        self._characters = repository._characters
+        self._views: dict[str, Character] = {}
+
+    def keep(self, seeded: Mapping[str, Character]) -> None:
+        """Remember the registry's view of each seeded character, by the id it is kept under."""
+        self._views.update(seeded)
+
+    async def load(self) -> None:
+        await super().load()
+        for id, character in self._characters.items():
+            if (view := self._views.get(id)) is not None:
+                self._characters[id] = _with_view(character, view)
+
+    async def get(self, owner_id: str, character_id: str) -> Character | None:
+        return self._kept(await super().get(owner_id, character_id))
+
+    async def update(
+        self, owner_id: str, character_id: str, **settings: object
+    ) -> Character | None:
+        return self._kept(await super().update(owner_id, character_id, **settings))
+
+    def _kept(self, character: Character | None) -> Character | None:
+        if character is None or (view := self._views.get(character.id)) is None:
+            return character
+        kept = _with_view(character, view)
+        self._characters[kept.id] = kept
+        return kept
+
+
+def _with_view(character: Character, view: Character) -> Character:
+    """The database's character with what only the registry keeps (`Characters.add`)."""
+    return replace(
+        character,
+        speakers=view.speakers, facts=view.facts, idol_id=view.idol_id,
+        call_opener=view.call_opener, short_name=view.short_name,
+        name_zh=view.name_zh, name_kana=view.name_kana, name_romaji=view.name_romaji,
+    )
+
+
+async def seed_characters(
+    backend: Backend, owner_id: str, characters: Mapping[str, Character], *, suffix: str = ""
+) -> None:
+    """Keep the registry's characters in the database as `owner_id`'s own, under the ids
+    the tests know them by with `suffix` after each, and refresh the shared mapping with
+    them: the real repository writes them (a fresh id renamed to the test's, once), so the
+    private-character API finds them as the owner's. What the database does not keep (her
+    speakers, facts and other names) stays on the mapping's view, for the engine and the
+    corpus to read; every later read of the database keeps it there (`_SeededRepository`).
+    Seeding again updates what is already there, leaving conversations
+    alone; an id another user already owns is left to them, as names are not unique and two
+    users may be called the same."""
+    await backend.character_repository.load()
+    seeded: dict[str, Character] = {}
+    for definition in characters.values():
+        id = definition.id + suffix
+        held = backend.characters.get(id)
+        if held is not None and held.owner_id != owner_id:
+            continue
+        settings = _settings_of(definition)
+        if held is None:
+            made = await backend.character_repository.create(owner_id, **settings)
+            await backend.database.write(_rename_character, made.id, id)
         else:
-            target.write_text(content, encoding="utf-8")
+            await backend.character_repository.update(owner_id, id, **settings)
+        seeded[id] = replace(definition, id=id, owner_id=owner_id)
+    repository = backend.character_repository
+    if not isinstance(repository, _SeededRepository):
+        repository = _SeededRepository(repository)
+        backend.character_repository = repository
+    repository.keep(seeded)
+    await repository.load()
+    backend.characters.update(seeded)
 
 
 @pytest.fixture
-def characters(tmp_path: Path) -> CharacterConfig:
-    """Mano (with both avatars, a background, a signature, a stand and her photo tags) and
-    Kogane (with none of them)."""
+def characters() -> Characters:
+    """Mano and Kogane, bilingual as the legacy tests' replies are."""
     return (
-        CharacterConfig(tmp_path / "characters")
+        Characters()
         .add(
-            "mano", "櫻木真乃", MANO_SHEET, intro="illumination STARS 的中心", avatar=AVATAR,
-            scsp_avatar=SCSP_AVATAR, color="#ffbad6", background=BACKGROUND, signature=SIGNATURE,
-            speakers=["真乃"],
-            voice_id="mano-voice", idol_id=1, default_outfit="stand/1030010010", photo=MANO_PHOTO,
-            birthday="04-25", age=16,
+            "mano", "櫻木真乃", MANO_SHEET, intro="illumination STARS 的中心",
+            color="#ffbad6", speakers=["真乃"], voice_id="mano-voice", idol_id=1,
+            birthday="04-25", age=16, language_mode="bilingual",
         )
         .add(
             "kogane", "月岡恋鐘", KOGANE_SHEET, intro="L'Antica 的偶像", color="#f84cad",
-            speakers=["恋鐘"], voice_id="kogane-voice", birthday="02-25",
-            age=19,
+            speakers=["恋鐘"], voice_id="kogane-voice", birthday="02-25", age=19,
+            language_mode="bilingual",
         )
     )
 
@@ -315,28 +330,20 @@ def story(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def settings(tmp_path: Path, characters: CharacterConfig) -> Settings:
+def settings(tmp_path: Path) -> Settings:
     return Settings(
         database_path=tmp_path / "eidolon.db",
-        characters_path=characters.path,
         chat_llm=LLMSettings("http://llm.invalid/v1", "test-key", "test-model"),
         ice_servers=[],  # tests run offline: gather host candidates only
         dev_login=True,
         secret_key="test-secret-key",
         soniox_api_key=DEPLOYER_SONIOX_KEY,
         fish_audio_api_key=DEPLOYER_FISH_KEY,
-        # Off, so that no test's clock lands in her period or the days before by chance;
-        # those of her cycle turn it on (`test_her_days`).
-        cycles=False,
     )
 
 
 @pytest.fixture
-def admin(
-    settings: Settings, capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> Admin:
-    # Not the game catalog a `game:catalog` run may have left in this checkout's corpus.
-    monkeypatch.setenv("EIDOLON_GAME_CATALOG_PATH", str(tmp_path / "game" / "catalog.json"))
+def admin(settings: Settings, capsys: pytest.CaptureFixture[str]) -> Admin:
     return Admin(settings.database_path, capsys)
 
 
@@ -361,6 +368,21 @@ async def _signed_in(store: Store, name: str, now: datetime) -> httpx.Cookies:
         await store.consent(user.id, now)
     cookies = httpx.Cookies()
     cookies.set(SESSION_COOKIE, await store.create_session(user.id, now), domain=COOKIE_DOMAIN)
+    return cookies
+
+
+async def _signed_in_with_characters(
+    backend: Backend, name: str, characters: Mapping[str, Character], suffix: str
+) -> httpx.Cookies:
+    now = backend.clock()
+    user = await backend.store.first_user_named(name) or await backend.store.create_user(name)
+    if user.consented_at is None:
+        await backend.store.consent(user.id, now)
+    await seed_characters(backend, user.id, characters, suffix=suffix)
+    cookies = httpx.Cookies()
+    cookies.set(
+        SESSION_COOKIE, await backend.store.create_session(user.id, now), domain=COOKIE_DOMAIN
+    )
     return cookies
 
 
@@ -394,15 +416,27 @@ async def sign_in_with(
 ) -> httpx.Response:
     """Go through signing in at `provider` as `identity`, through the invite link with the
     code `invite` if given, or with `link`, linking it to the signed-in user; the response
-    to the callback."""
+    to the callback. A sign-in (not a link) also keeps the registry's characters in the
+    database as the signed-in user's own, under the ids `character_id` gives them, as
+    `make_client` does for the users it signs in."""
     params = {"link": "1"} if link else {"invite": invite} if invite is not None else None
     start = await client.get(f"/api/auth/{provider.name}/start", params=params)
     assert start.status_code == 302, start.text
     [state] = parse_qs(urlsplit(start.headers["location"]).query)["state"]
     code = provider.will_identify(identity)
-    return await client.get(
+    res = await client.get(
         f"/api/auth/{provider.name}/callback", params={"code": code, "state": state}
     )
+    if not link and res.headers.get("location") == "/conversations":
+        backend: Backend = client._transport.app.state.backend  # pyright: ignore[reportAttributeAccessIssue]
+        user_id = await backend.store.user_signing_in_with(identity.provider, identity.subject)
+        assert user_id is not None
+        user = await backend.store.get_user(user_id)
+        await seed_characters(
+            backend, user.id, registry_of(backend),
+            suffix="" if user.name == "producer" else f"-{user.name}",
+        )
+    return res
 
 
 async def agree_to_terms(client: httpx.AsyncClient) -> None:
@@ -460,6 +494,7 @@ async def browser() -> AsyncIterator[Browser]:
 @pytest.fixture
 async def make_client(
     settings: Settings,
+    characters: Characters,
     speech: FakeSpeech,
     github: FakeIdentityProvider,
     google: FakeIdentityProvider,
@@ -467,14 +502,16 @@ async def make_client(
 ) -> AsyncIterator[ClientFactory]:
     """Makes API clients, the deployer's chat model playing from `llm`'s script; each is
     signed in as the user with the given name, by default the producer, who has agreed to
-    the terms (None for a client not signed in). Any other keyword is a script for the
+    the terms (None for a client not signed in) and owns the registry's characters, kept
+    in the database as theirs: the producer's under their own ids, everyone else's with
+    the user's name after each (`character_id`). Any other keyword is a script for the
     deployer's models (`background_llm`, `retrieval_judge`, `emotion_judge`), the
     `FakeServiceClients` that make them (`clients`), or an outside service to use instead
     of the one the settings describe (see `fakes.build_faked`); speech, the identity
     providers (the `github` and `google` fixtures), the LLM services users bring their
-    own keys to (`own_llm`), the price catalogs online (an empty `FakeCatalog`) and Tokyo's
-    weather (a `FakeWeather` failing, so that moments go without it) are fakes by default,
-    and `voice_configured=False` leaves the deployer without speech keys."""
+    own keys to (`own_llm`) and the price catalogs online (an empty `FakeCatalog`) are
+    fakes by default, and `voice_configured=False` leaves the deployer without speech
+    keys."""
     backends: list[Backend] = []
     clients: list[httpx.AsyncClient] = []
 
@@ -490,16 +527,20 @@ async def make_client(
         services.setdefault("own_llm_service", own_llm)
         services.setdefault("speech", speech)
         services.setdefault("catalog_transport", FakeCatalog().transport())
-        services.setdefault("weather_transport", FakeWeather(failing=True).transport())
         if not voice_configured:
             settings = replace(settings, soniox_api_key=None, fish_audio_api_key=None)
-        backend = build_faked(settings, llm, **services)
+        backend = build_faked(settings, llm, characters=characters, **services)
         backends.append(backend)
         client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=create_app(backend)),
             base_url="http://test",
             headers=SITE,
-            cookies=sign_in(backend.store, user, backend.clock()) if user is not None else None,
+            cookies=(
+                aside(_signed_in_with_characters(
+                    backend, user, characters, "" if user == "producer" else f"-{user}"
+                ))
+                if user is not None else None
+            ),
         )
         clients.append(client)
         return client

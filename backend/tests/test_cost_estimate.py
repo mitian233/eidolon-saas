@@ -13,7 +13,7 @@ from eidolon.activity import OWN
 from eidolon.config import LLMSettings, Settings
 from eidolon.llm import Reasoning
 from eidolon.prices import Price
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, character_id
 from tests.fakes import FakeClock, FakeIdentityProvider, FakeLLM, FakeLLMService
 from tests.test_activity_records import REPLY, admin_client, dashboard
 from tests.test_own_llm import LLM
@@ -70,11 +70,13 @@ async def test_the_deployers_usage_is_priced_and_summed_by_currency(
     unpriced = make_client(FakeLLM(REPLY, tokens=(100, 50)), "d", clock=clock)
     admin = await admin_client(make_client, github, clock)
 
-    conversation_id = await start_conversation(dollars)
+    conversation_id = await start_conversation(dollars, character_id("mano", "a"))
     await send_turn(dollars, conversation_id, "在吗")
     await send_turn(dollars, conversation_id, "在吗")
-    for client in [untold, yuan, unpriced]:
-        await send_turn(client, await start_conversation(client), "在吗")
+    for client, user in [(untold, "b"), (yuan, "c"), (unpriced, "d")]:
+        await send_turn(
+            client, await start_conversation(client, character_id("mano", user)), "在吗"
+        )
     cost = (await dashboard(admin))["cost"]
 
     # 2000 input and 1000 output tokens at $2 and $8 a million; 3000 and 1000 at ¥1 and ¥4.
@@ -148,7 +150,7 @@ async def test_a_reply_the_model_thought_through_is_billed_as_any_other(
     )
     own_llm.llm = FakeLLM([thought, *REPLY], tokens=(1000, 500))
     admin = await admin_client(make_client, github, clock)
-    conversation_id = await start_conversation(client)
+    conversation_id = await start_conversation(client, character_id("mano", "a"))
 
     deployers = await send_turn(client, conversation_id, "在吗")
     own = await send_turn(client, conversation_id, "在吗", own_llm=LLM)
@@ -179,8 +181,10 @@ async def test_an_admins_price_holds_over_the_preset_and_prices_a_model_without_
     )
     unpriced = make_client(FakeLLM(REPLY, tokens=(2000, 0)), "b", clock=clock)
     admin = await admin_client(make_client, github, clock)
-    for client in [dollars, unpriced]:
-        await send_turn(client, await start_conversation(client), "在吗")
+    for client, user in [(dollars, "a"), (unpriced, "b")]:
+        await send_turn(
+            client, await start_conversation(client, character_id("mano", user)), "在吗"
+        )
     before = await admin.get("/api/admin/prices")
     assert before.status_code == 200
     # The model used without a price is offered to be priced, under the names recorded.
@@ -254,8 +258,10 @@ async def test_the_input_read_from_the_cache_is_priced_at_the_cache_price_where_
         settings=on(settings, "https://llm.example/v1", "m-usd"), clock=clock,
     )
     admin = await admin_client(make_client, github, clock)
-    for client in [cached, untold, no_cache_price]:
-        await send_turn(client, await start_conversation(client), "在吗")
+    for client, user in [(cached, "a"), (untold, "b"), (no_cache_price, "c")]:
+        await send_turn(
+            client, await start_conversation(client, character_id("mano", user)), "在吗"
+        )
 
     cost = (await dashboard(admin))["cost"]
     with_price = row({"cost": cost}, "llm.example", "m-cached")

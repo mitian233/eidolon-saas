@@ -1,13 +1,13 @@
 /**
  * 生成落地页的字体子集（ADR-0016 修订）：Shippori Mincho B1（日文、拉丁字母）、Noto Serif SC（中文大标题）、
  * Noto Sans SC（中文正文），按落地页实际用到的字做成 woff2，每种另有一份只含第 0 幕文字的小子集给首屏预载，
- * 连同清单 subset.json 写进 src/app/(landing)/fonts/，一起提交。前端的 Docker 构建拿不到角色配置，所以子集不在构建时生成。
+ * 连同清单 subset.json 写进 src/app/(landing)/fonts/，一起提交。子集不在构建时生成，维护者在本地重新生成。
  *
  * 用法（在 frontend 目录）：
  *
  *     node scripts/landing-fonts.mts
  *
- * 什么时候跑：新增或改名角色、改了组合、改了招呼或开场白，或者改了落地页、登录组件的文案之后。忘了跑的话，
+ * 什么时候跑：改了落地页或登录组件的文案之后。忘了跑的话，
  * 覆盖契约测试（src/app/(landing)/fonts/coverage.test.ts）会失败，并列出缺的字。
  *
  * 要的字由 fontText.ts 收集（和覆盖契约测试同一份）。源字体第一次运行时从 GitHub 下载（google/fonts、

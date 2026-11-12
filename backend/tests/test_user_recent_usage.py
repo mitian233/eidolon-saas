@@ -13,7 +13,7 @@ import pytest
 
 from eidolon.config import Settings, UsageLimits
 from tests.browser import TIMEOUT, open_browser
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, character_id
 from tests.fakes import FakeClock, FakeIdentityProvider, FakeLLM, FakeLLMService, FakeSpeech
 from tests.test_admin_users import ADMIN, admin_client, details, find, users
 from tests.test_own_speech_keys import MY_LLM, own_keys
@@ -98,8 +98,8 @@ async def test_the_users_turns_calls_and_rejections_in_each_range_on_whose_keys(
     assert (await find(admin, "producer"))["usage_24h"] == {"turns": 2, "calls": 1}
 
 
-async def take_turns(client: httpx.AsyncClient, turns: int) -> None:
-    conversation_id = await start_conversation(client)
+async def take_turns(client: httpx.AsyncClient, turns: int, character: str) -> None:
+    conversation_id = await start_conversation(client, character)
     for _ in range(turns):
         await send_turn(client, conversation_id, "在吗")
 
@@ -113,11 +113,11 @@ async def test_the_list_is_sorted_by_the_last_24_hours_turns_or_calls_before_its
     mano = make_client(FakeLLM(REPLY), "mano-fan", clock=clock)
     kogane = make_client(FakeLLM(REPLY, REPLY), "kogane-fan", clock=clock)
     caller = make_client(FakeLLM(REPLY), "caller", clock=clock)
-    await take_turns(busy, 2)
+    await take_turns(busy, 2, character_id("mano", "busy-yesterday"))
     clock.advance(hours=25)
-    await take_turns(mano, 1)
-    await take_turns(kogane, 2)
-    assert await call(caller, await start_conversation(caller), speech) == 200
+    await take_turns(mano, 1, character_id("mano", "mano-fan"))
+    await take_turns(kogane, 2, character_id("mano", "kogane-fan"))
+    assert await call(caller, await start_conversation(caller, character_id("mano", "caller")), speech) == 200
     await calls_recorded(admin, (await find(admin, "caller"))["id"], 1)
 
     def named(page: dict) -> list[str]:

@@ -29,7 +29,7 @@ body:
         - 记忆
         - 登录与用户（OAuth、限流、删除数据）
         - 自带密钥
-        - 剧情库 / 世界设定同步（eidolon story sync、world sync）
+        - 角色与资料（API 建角色、背景资料导入）
         - 部署（Docker Compose、Caddy、coturn、备份）
         - 其他
     validations:

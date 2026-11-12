@@ -1,6 +1,6 @@
 # Eidolon-SaaS（工作名）公益 BYOK 版改造设计
 
-日期：2026-11-12　状态：待确认（第二轮，含实现者检查修订）
+日期：2026-11-12　状态：已确认；M0 实现中（第二轮，含实现者检查修订）
 代码位置：fork `mitian233/eidolon-saas`，本地 worktree `/home/leonid/myproj/eidolon-saas`，分支 `saas/main`（起点 `5875cdff`，与上游 main 一致）。
 
 ## 1. 意图与缘由

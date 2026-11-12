@@ -1,12 +1,12 @@
-"""Sample story files: SCTranslationData CSVs written the way the upstream repository lays
-them out, and the game's own script JSON."""
+"""Sample stories: the CSV rows the upstream import was written against, and the episodes
+they make, seeded straight into the corpus (the import itself is gone with the bundled
+content)."""
 
-import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from eidolon.corpus import StoryCorpus
+from eidolon.corpus import Episode, Line, StoryCorpus
 from eidolon.data_access import Database
 from eidolon.embedding import Embedder
 
@@ -82,90 +82,45 @@ def write_sample_stories(root: Path) -> Path:
     return root
 
 
-# The game's own scripts: an array of frames, as served under `assets/json/<script>.json`.
-# Mano's first W.I.N.G. episode with a choice: each option jumps to its own reaction, and
-# both reactions rejoin the story afterwards. Frames without text are stage directions.
-PARK_SCRIPT = [
-    {"bg": "park_day", "bgm": "bgm_0001"},
-    {"id": "0000000000000", "speaker": "プロデューサー", "text": "（いよいよ俺が、アイドルを\nプロデュースする時が来た）"},
-    {"id": "1001001010110", "speaker": "真乃", "text": "公園で鳩と一緒に歌っていました", "voice": "produce_events/1001001010110"},
-    {"select": "歌が好きなのか？", "nextLabel": "song"},
-    {"select": "鳩が好きなのか？", "nextLabel": "dove"},
-    {"label": "song", "id": "1001001010120", "speaker": "真乃", "text": "はい、歌うのが大好きです", "nextLabel": "join"},
-    {"label": "dove", "id": "1001001010130", "speaker": "真乃", "text": "ほわっ……鳩さん、かわいいですよね", "nextLabel": "join"},
-    {"label": "join", "id": "1001001010140", "speaker": "真乃", "text": "また、公園に来てくれますか？"},
-    {"text": "", "speaker": "真乃"},
-    {"text": "（夕日が公園を照らしている）"},
-]
-# The same script SCTranslationData already has, translated (see `WON`).
-WON_SCRIPT = [
-    {"id": "6001001060050", "speaker": "真乃", "text": "……ゆ、優勝、したんですねっ"},
-    {"id": "0000000000000", "speaker": "プロデューサー", "text": "……ああ、夢なんかじゃないぞ"},
-]
-KNOCKED_OUT_SCRIPT = [
-    {"id": "6001001020010", "speaker": "真乃", "text": "私……負けちゃいました……"},
-]
-# A card of Kogane's that SCTranslationData has not translated.
-KOGANE_SCRIPT = [
-    {"id": "2011005010010", "speaker": "恋鐘", "text": "ちゃんぽんば作ったけん、食べてみて！"},
-    {"select": "いただきます", "nextLabel": "a"},
-    {"select": "あとでもらうよ", "nextLabel": "b"},
-    {"label": "a", "id": "2011005010020", "speaker": "恋鐘", "text": "どげん？ばりうまかやろ？"},
-    {"label": "b", "id": "2011005010030", "speaker": "恋鐘", "text": "えー、冷めてしまうばい"},
-    {"id": "2011005010040", "speaker": "真乃＆恋鐘", "text": "ごちそうさまでした！"},
-    {"id": "2011005010050", "speaker": "恋鐘の母", "text": "また来んしゃい"},
-]
+def sample_episodes(speakers: dict[str, str]) -> list[Episode]:
+    """The sample stories as the corpus holds them: what the old CSV import made of the
+    files `write_sample_stories` writes. `speakers` maps each display name to the character
+    it casts ("真乃" → "mano"), joint speakers split; the failure endings among the samples
+    are left out, as the import left them out, and the event no configured character speaks
+    in is kept with an empty cast."""
 
+    def lines(rows: list[tuple[str, str, str, str]]) -> tuple[Line, ...]:
+        return tuple(
+            Line(name or None, ja.replace("\\n", "\n"), zh.replace("\\n", "\n") or None)
+            for line_id, name, ja, zh in rows
+            if line_id not in ("id", "select", "译者") and ja
+        )
 
-def write_script(root: Path, relative: str, frames: object) -> None:
-    path = root / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(frames, ensure_ascii=False), encoding="utf-8")
+    def cast(rows: list[tuple[str, str, str, str]]) -> frozenset[str]:
+        return frozenset(
+            speakers[name.strip()]
+            for _, speaker, _, _ in rows
+            for name in speaker.replace("&", "＆").split("＆")
+            if name.strip() in speakers
+        )
 
-
-# The ShinyColorsDB mirror (see `FakeShinyColorsDB`): cards as its API lists them, and
-# scripts as its viewer serves them, which is how the game does, with CRLF line breaks
-# and numeric line ids.
-MANO_CARD = "【ほわっとスマイル】櫻木真乃"
-MANO_CARD_SCRIPT = [
-    {"textFrame": "002", "speaker": "プロデューサー", "text": "真乃、ここにいたのか\r\n探したぞ", "bgm": "002"},
-    {"textFrame": "off"},
-    {"movie": "1040010010"},
-    {"id": 2001004010010, "speaker": "真乃", "text": "ほわ……\r\n鳩さんたちと公園で遊んでいました", "charLabel": "mano"},
-    {"select": "鳩が好きなんだな", "nextLabel": "a"},
-    {"select": "レッスンの時間だぞ", "nextLabel": "b"},
-    {"label": "a", "id": 2001004010020, "speaker": "真乃", "text": "はいっ、鳩さんは友達です", "nextLabel": "c"},
-    {"label": "b", "id": 2001004010030, "speaker": "真乃", "text": "あっ！　すみません……", "nextLabel": "c"},
-    {"label": "c", "id": 2001004010040, "speaker": "真乃", "text": "むんっ、がんばります！"},
-]
-# The same episode as SCTranslationData would file it, once translated.
-MANO_CARD_TRANSLATED = [
-    ("2001004010010", "真乃", "ほわ……\\n鳩さんたちと公園で遊んでいました", "呼哇……\\n我在公园和鸽子们玩"),
-    ("2001004010040", "真乃", "むんっ、がんばります！", "嗯！我会加油的！"),
-]
-MANO_CARD_SECOND_SCRIPT = [
-    {"id": 2001004020010, "speaker": "真乃", "text": "ステージ、こわいです……"},
-    {"textFrame": "002", "speaker": "プロデューサー", "text": "真乃ならできる"},
-]
-# A support card of Mano's that Hiori and Meguru speak in too.
-MANO_SUPPORT_SCRIPT = [
-    {"id": 3001004010010, "speaker": "灯織", "text": "３人で写真を撮りましょう"},
-    {"id": 3001004010020, "speaker": "めぐる", "text": "公園がいいな！"},
-    {"id": 3001004010030, "speaker": "真乃", "text": "ほわっ、楽しみです"},
-]
-
-
-# Event episodes on the mirror (`game_event_communications/4001EEEHH`, event EEE, episode HH),
-# which Mano speaks in so she is cast.
-def event_frames(event: int, episode: int) -> list[dict]:
     return [
-        {"id": 4001000000000 + event * 100000 + episode * 1000 + 10, "speaker": "真乃",
-         "text": f"イベント{event}の第{episode}話です\r\nほわっ"},
-        {"textFrame": "002", "speaker": "プロデューサー", "text": "がんばろうな"},
+        Episode(
+            "produce_events/100100101", "培育剧情", "W.I.N.G.編", "公園の歌声",
+            cast(PARK), lines(PARK),
+        ),
+        Episode(
+            "produce_events/600100106", "培育剧情", "W.I.N.G.編", "決勝後コミュ",
+            cast(WON), lines(WON),
+        ),
+        Episode(
+            "produce_events/201100401", "P卡剧情", "【ばりうまかブルース】月岡恋鐘", "長崎の味",
+            cast(KOGANE_CARD), lines(KOGANE_CARD),
+        ),
+        Episode(
+            "game_event_communications/400100401", "活动剧情", "Light up the illumination", "第1話",
+            cast(HIORI_EVENT), lines(HIORI_EVENT),
+        ),
     ]
 
 
-# The first episode of event 002 as SCTranslationData would file it, once translated.
-EVENT_TRANSLATED = [
-    ("4001002010010", "真乃", "イベント2の第1話です\\nほわっ", "这是活动2的第1话\\n呼哇"),
-]

@@ -27,7 +27,7 @@ updates:
       # 类型的大版本跟着实际运行的 Node.js（22）走，和 Dockerfile 的 node 一起手动升
       - dependency-name: "@types/node"
         update-types: [version-update:semver-major]
-      # TypeScript 7 是 Go 重写的版本，还没有 JS API（scripts/stand-thumbnails.mts 用 ts.transpileModule），等它有了再手动升
+      # TypeScript 7 是 Go 重写的版本，还没有 JS API（frontend/scripts 里有脚本用 ts.transpileModule），等它有了再手动升
       - dependency-name: typescript
         update-types: [version-update:semver-major]
 
@@ -39,7 +39,7 @@ updates:
     cooldown:
       default-days: 7
     ignore:
-      # Python、Node.js 的版本和 .python-version、pyproject.toml、stand-sync 的要求一起手动升
+      # Python、Node.js 的版本和 .python-version、pyproject.toml 的要求一起手动升
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]
       - dependency-name: node

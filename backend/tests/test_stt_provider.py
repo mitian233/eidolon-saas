@@ -20,7 +20,6 @@ from eidolon.bailian import BailianSTTService
 from eidolon.call import SpeechServices
 from eidolon.config import DEFAULT_BAILIAN_STT_MODEL, Settings, SttKey
 from eidolon.own_keys import BroughtKeys, OwnKeyRejected
-from tests.conftest import CharacterConfig
 from tests.fakes import FakeDashScope
 
 ENV = (
@@ -30,14 +29,13 @@ ENV = (
 
 
 @pytest.fixture(autouse=True)
-def environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, characters: CharacterConfig):
+def environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     for name in ENV:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("CHAT_LLM_BASE_URL", "http://127.0.0.1:9/v1")
     monkeypatch.setenv("CHAT_LLM_API_KEY", "chat-key")
     monkeypatch.setenv("CHAT_LLM_MODEL", "chat-model")
     monkeypatch.setenv("EIDOLON_DATABASE_PATH", str(tmp_path / "eidolon.db"))
-    monkeypatch.setenv("EIDOLON_CHARACTERS_PATH", str(characters.path))
 
 
 def test_soniox_hears_calls_unless_the_deployer_chooses_otherwise(

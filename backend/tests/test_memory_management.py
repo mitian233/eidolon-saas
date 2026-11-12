@@ -16,6 +16,7 @@ from tests.test_shared_memory import (
 )
 from tests.test_memories import OSAKA, TOKYO, superseding
 from tests.test_text_turn import start_conversation
+from tests.conftest import character_id
 
 
 def memory_client(
@@ -71,7 +72,7 @@ async def test_users_see_and_touch_only_their_own_memories(
     producer = memory_client(make_client, FakeLLM(REPLY), CAT)
     friend = memory_client(make_client, FakeLLM(REPLY), "制作人喜欢狗", user="friend")
     await turn(producer, await start_conversation(producer, "mano"), "我家的猫叫小白")
-    await turn(friend, await start_conversation(friend, "mano"), "我喜欢狗")
+    await turn(friend, await start_conversation(friend, character_id("mano", "friend")), "我喜欢狗")
     [cat] = await memories(producer)
 
     assert [m["text"] for m in await memories(friend)] == ["制作人喜欢狗"]

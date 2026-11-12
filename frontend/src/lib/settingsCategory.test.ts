@@ -28,13 +28,12 @@ describe("路径和类别互转", () => {
 });
 
 describe("一级列表有哪几类", () => {
-  it("搭话放在通话和外观之间，朋友圈紧跟在搭话后面，再是周期", () => {
+  it("搭话放在通话和周期之间，朋友圈紧跟在搭话后面", () => {
     expect(settingsGroups({ reachOuts: false, moments: false, cycles: false })[1]).toEqual([
       "call",
       "reach-outs",
       "moments",
       "cycles",
-      "appearance",
       "own-keys",
     ]);
   });
@@ -42,7 +41,7 @@ describe("一级列表有哪几类", () => {
   it("账号里没有搭话、朋友圈、周期（部署者没开）时没有这几类，别的照旧", () => {
     expect(settingsGroups({ reachOuts: null, moments: null, cycles: null })).toEqual([
       ["profile", "memories", "stats"],
-      ["call", "appearance", "own-keys"],
+      ["call", "own-keys"],
       ["sign-in", "data-package"],
       ["about"],
     ]);
@@ -52,7 +51,6 @@ describe("一级列表有哪几类", () => {
     expect(settingsGroups({ reachOuts: null, moments: null, cycles: true })[1]).toEqual([
       "call",
       "cycles",
-      "appearance",
       "own-keys",
     ]);
   });
@@ -61,7 +59,6 @@ describe("一级列表有哪几类", () => {
     expect(settingsGroups({ reachOuts: null, moments: false, cycles: null })[1]).toEqual([
       "call",
       "moments",
-      "appearance",
       "own-keys",
     ]);
   });
@@ -104,7 +101,6 @@ describe("一级列表上的摘要", () => {
     memoryCount: null,
     daysKnown: null,
     call: null,
-    appearance: null,
     reachOuts: null,
     moments: null,
     cycles: null,
@@ -146,10 +142,6 @@ describe("一级列表上的摘要", () => {
     expect(settingsSummaries({ ...loading, call: { ...call, phoneTexture: false } }).call).toBe("高保真 · 电话质感关");
   });
 
-  it("外观是 SCSP 头像开／关", () => {
-    expect(settingsSummaries({ ...loading, appearance: { scspAvatars: true } }).appearance).toBe("SCSP 头像开");
-    expect(settingsSummaries({ ...loading, appearance: { scspAvatars: false } }).appearance).toBe("SCSP 头像关");
-  });
 
   it("搭话是开／关", () => {
     expect(settingsSummaries({ ...loading, reachOuts: true })["reach-outs"]).toBe("开");

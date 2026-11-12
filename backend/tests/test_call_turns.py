@@ -160,6 +160,7 @@ class CallUnderTest:
             settings, llm, clients=clients, clock=lambda: NOW, emotion_judge=judge,
             **remembering,
         )
+        await backend.character_repository.load()
         try:
             mano = backend.characters["mano"]
             admission = await backend.admissions.call(
@@ -168,10 +169,7 @@ class CallUnderTest:
             call = Call(self.conversation, mano, admission.llms, muted, "standard")
             outcome = CallOutcome(
                 admission, limits, backend.clock,
-                partial(
-                    backend.happenings.call_ended,
-                    self.conversation.id, self.conversation.user_id, "mano",
-                ),
+                partial(backend.store.keep_call, self.conversation.id),
             )
             turns = CallTurns(
                 backend.engine, backend.store, call, outcome, follow_on_timeout,
@@ -198,6 +196,7 @@ class CallUnderTest:
         upstream of `CallTurns` holds the cancelling up past `cancel_timeout` seconds, so
         the call is settled before the turn is over."""
         backend = build_faked(self._settings, llm, clock=lambda: NOW)
+        await backend.character_repository.load()
         try:
             mano = backend.characters["mano"]
             admission = await backend.admissions.call(
@@ -206,10 +205,7 @@ class CallUnderTest:
             call = Call(self.conversation, mano, admission.llms, False, "standard")
             outcome = CallOutcome(
                 admission, CallLimits(), backend.clock,
-                partial(
-                    backend.happenings.call_ended,
-                    self.conversation.id, self.conversation.user_id, "mano",
-                ),
+                partial(backend.store.keep_call, self.conversation.id),
             )
             turns = CallTurns(
                 backend.engine, backend.store, call, outcome, SONIOX_FOLLOW_ON_TIMEOUT
@@ -269,6 +265,26 @@ class HoldsUpCancelling(FrameProcessor):
 @pytest.fixture
 async def mano_call(make_client: ClientFactory, settings: Settings):
     client = make_client(FakeLLM())
+    return await CallUnderTest.of(settings, client, await start_conversation(client, "mano"))
+
+
+@pytest.fixture
+async def single_call(make_client: ClientFactory, settings: Settings):
+    """A call to Mano writing plain text in one language, her settings changed through the
+    API as a producer would (`language_mode="single"`, the default for new characters)."""
+    client = make_client(FakeLLM())
+    shown = (await client.get("/api/characters/mano")).json()
+    body = {
+        key: shown[key]
+        for key in ("name", "sheet", "intro", "avatar_url", "greeting", "voice_id",
+                    "color", "user_address", "age")
+    }
+    body["language_mode"] = "single"
+    birthday = shown["birthday"]
+    body["birthday"] = (
+        {"month": int(birthday[:2]), "day": int(birthday[3:])} if birthday else None
+    )
+    assert (await client.put("/api/characters/mano", json=body)).status_code == 200
     return await CallUnderTest.of(settings, client, await start_conversation(client, "mano"))
 
 
@@ -449,6 +465,24 @@ async def test_what_interrupts_the_character_is_taken_up_at_once(mano_call: Call
 
     assert said(messages) == ["早上好", "在吗"]
     assert await mano_call.said() == ["早上好", None, "在吗", None]
+
+
+async def test_a_spoken_interruption_keeps_the_plain_replys_complete_sentence(
+    single_call: CallUnderTest,
+):
+    llm = FakeLLM(["第一句。", "未完", HANG], ["在的。"], delay=0.3)
+
+    _, messages = await single_call.run(
+        llm, [spoken("早上好"), *INTERRUPTING, SleepFrame(0.1), spoken("在吗")]
+    )
+
+    assert said(messages) == ["早上好", "在吗"]  # the interruption is a turn of its own
+    assert await single_call.record() == [
+        ("user", "早上好", None, None),
+        ("character", "第一句。", "第一句。", ""),
+        ("user", "在吗", None, None),
+        ("character", "在的。", "在的。", ""),
+    ]
 
 
 async def test_what_is_typed_once_the_reply_can_be_interrupted_interrupts_the_character(

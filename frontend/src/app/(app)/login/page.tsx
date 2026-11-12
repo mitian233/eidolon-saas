@@ -3,7 +3,6 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { FailureNotice } from "@/components/app/FailureNotice";
-import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { PageShell } from "@/components/app/PageShell";
 import { SignInChoices } from "@/components/app/SignInChoices";
 import { SectionHeading } from "@/components/app/SubpageHeader";
@@ -12,14 +11,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { copy } from "@/i18n";
-import {
-  devLogin,
-  getSignInOptions,
-  isSignedInHere,
-  listCharacters,
-  type Character,
-  type SignInOptions,
-} from "@/lib/api";
+import { devLogin, getSignInOptions, isSignedInHere, type SignInOptions } from "@/lib/api";
 import { toFailure, type Failure } from "@/lib/failure";
 import { signInFailure } from "@/lib/signIn";
 import { FailureIcon } from "@/theme/icons";
@@ -32,7 +24,6 @@ const t = copy.login;
  */
 export default function LoginPage() {
   const [options, setOptions] = useState<SignInOptions | null>(null);
-  const [characters, setCharacters] = useState<Character[]>([]);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [invite, setInvite] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -46,8 +37,6 @@ export default function LoginPage() {
     // 已经登录的人打开邀请链接，用不上它，照常进对话列表。
     if (code) isSignedInHere().then((yes) => yes && window.location.replace("/conversations"), () => {});
     getSignInOptions().then(setOptions, (e) => setFailure(toFailure(e)));
-    // 角色名单随 characters.toml 变化，从后端取；取不到只是少了展示，不算失败。
-    listCharacters().then(setCharacters, () => {});
   }, []);
 
   async function submit(event: FormEvent) {
@@ -99,23 +88,6 @@ export default function LoginPage() {
 
         {failure && <FailureNotice failure={failure} />}
 
-        {characters.length > 0 && (
-          <section className="flex flex-col gap-2">
-            <SectionHeading>{t.castTitle}</SectionHeading>
-            {/* 偶像名单是行，不套卡片（DESIGN.md「Conversation list」）。 */}
-            <ul className="flex flex-col">
-              {characters.map((character) => (
-                <li key={character.id} className="flex items-center gap-3 py-3">
-                  <MarkedAvatar name={character.name} src={character.avatar_url} />
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <span className="text-row-name">{character.name}</span>
-                    <span className="text-sm text-muted-foreground">{character.intro}</span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
       </div>
     </PageShell>
   );

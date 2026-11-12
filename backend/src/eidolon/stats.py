@@ -41,10 +41,9 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, Query
 from starlette.concurrency import run_in_threadpool
 
-from eidolon.achievements import Tally
 from eidolon.affinity import TIERS, Tier
 from eidolon.assembly import Backend
-from eidolon.characters import in_idol_order
+from eidolon.characters import Character
 from eidolon.producer import effective_timezone
 from eidolon.sessions import UserId
 from eidolon.store import Contact, KeptCall
@@ -73,15 +72,14 @@ def add_stats_routes(app: FastAPI, backend: Backend) -> None:
         contacts = await store.contacts(user_id)
         first = await store.first_records(user_id)
         calls = await store.kept_calls(user_id)
-        idols = in_idol_order(backend.characters.values())
+        idols = await backend.character_repository.list(user_id)
         tiers = (
             await backend.affinities.tiers(user_id, [c.id for c in idols])
             if backend.config.affinity_on else None
         )
-        tally = await backend.happenings.tally(user_id)
         # Counting goes over every contact kept: on a thread.
         return await run_in_threadpool(
-            summed_up, span, zone, signed_up, contacts, first, calls, tiers, tally
+            summed_up, span, zone, signed_up, contacts, first, calls, tiers, idols
         )
 
     def summed_up(
@@ -92,7 +90,7 @@ def add_stats_routes(app: FastAPI, backend: Backend) -> None:
         first: dict[str, datetime],
         calls: list[KeptCall],
         tiers: list[Tier] | None,
-        tally: Tally | None,
+        idols: list[Character],
     ) -> dict:
         """What the stats show, from what was read: `tiers`, each of the idols' in their
         order, None where affinity is off, as `tally` is."""
@@ -107,7 +105,6 @@ def add_stats_routes(app: FastAPI, backend: Backend) -> None:
 
         days = RANGE_DAYS[span]
         since = None if days is None else today - timedelta(days=days - 1)
-        idols = in_idol_order(backend.characters.values())
         return {
             # Since signing up, or since the first thing kept if earlier: conversations imported
             # in a data package from another deployment (GLOSSARY.md「统计」).
@@ -123,7 +120,7 @@ def add_stats_routes(app: FastAPI, backend: Backend) -> None:
             "affinity": by_tier(
                 (c.id, tier) for c, tier in zip(idols, tiers)
             ) if tiers is not None else None,
-            "achievements": tally and tally.shown(),
+            "achievements": None,
             "range": in_range(
                 span,
                 [(c, at) for c, at in contacts if since is None or at.date() >= since],
@@ -133,7 +130,7 @@ def add_stats_routes(app: FastAPI, backend: Backend) -> None:
                     if since is None or call.connected_at.astimezone(zone).date() >= since
                 ],
                 {c.id: days_since(first[c.id]) for c in idols if c.id in first},
-                gifts_on=tiers is not None,
+                gifts_on=False,
             ),
         }
 

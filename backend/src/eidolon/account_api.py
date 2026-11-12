@@ -26,7 +26,7 @@ from typing import Annotated, Any
 from fastapi import FastAPI, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import (
-    BaseModel, Field, Secret, StrictBool, StringConstraints, field_validator, model_validator,
+    BaseModel, Field, Secret, StringConstraints, field_validator, model_validator,
 )
 
 from eidolon.accounts import SignInRefused, signs_in_as_admin
@@ -49,12 +49,9 @@ from eidolon.config import (
     checked_extra_body,
     effort_problem,
 )
-from eidolon.cycles import CyclesOff
 from eidolon.identity import PROVIDER_NAMES, IdentityError
-from eidolon.moments import MomentsOff
-from eidolon.own_keys import NO_PHOTOS, BroughtKeys, OwnKeyRejected, named_services
+from eidolon.own_keys import BroughtKeys, OwnKeyRejected, named_services
 from eidolon.price_catalog import describe_offer, describe_provider, describe_thinking
-from eidolon.reach_outs import ReachOutsOff
 from eidolon.store import LastSignInMethod
 from eidolon.throttle import Throttle
 from eidolon.sessions import (
@@ -239,23 +236,6 @@ class OwnKeysInput(BaseModel):
         )
 
 
-class ReachOutSwitch(BaseModel):
-    """The user's own switch for reach-outs (GLOSSARY.md「搭话」)."""
-
-    on: StrictBool
-
-
-class MomentSwitch(BaseModel):
-    """The user's own switch for moments (GLOSSARY.md「朋友圈」)."""
-
-    on: StrictBool
-
-
-class CycleSwitch(BaseModel):
-    """The user's own switch for cycles (GLOSSARY.md「周期」)."""
-
-    on: StrictBool
-
 
 class Consent(BaseModel):
     """Agreeing to the privacy policy and terms of use, and saying they are 13 or older."""
@@ -394,9 +374,6 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
         sponsor = await backend.sponsor.state()
         user = await store.get_user(user_id)
         methods = await store.sign_in_methods(user_id)
-        reach_outs = await backend.reach_outs.switch_of(user_id)
-        cycles = await backend.cycles.switch_of(user_id)
-        moments = await backend.moments.switch_of(user_id)
         return {
             "id": user_id,
             "name": user.name,
@@ -406,40 +383,14 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             ],
             "is_admin": signs_in_as_admin(methods, settings),
             "exempting_keys": [s for s in SERVICES if s in backend.config.exempting_keys],
-            "reach_outs": reach_outs,
-            "cycles": cycles,
-            "moments": moments,
-            "letters": backend.config.letters_on,
+            "reach_outs": None,
+            "cycles": None,
+            "moments": None,
+            "letters": False,
             "sponsor_version": sponsor.version,
             "deployer_tts": backend.config.has_service("tts"),
         }
 
-    @app.put("/api/account/reach-outs", status_code=204)
-    async def switch_reach_outs(body: ReachOutSwitch, user_id: UserId) -> None:
-        """Turn the user's own switch for reach-outs on or off, for all the characters; 409
-        where the deployer has reach-outs off."""
-        try:
-            await backend.reach_outs.switch(user_id, body.on)
-        except ReachOutsOff:
-            raise HTTPException(409, "搭话没有开放") from None
-
-    @app.put("/api/account/cycles", status_code=204)
-    async def switch_cycles(body: CycleSwitch, user_id: UserId) -> None:
-        """Turn the user's own switch for cycles on or off, for all the characters; 409
-        where the deployer has cycles off."""
-        try:
-            await backend.cycles.switch(user_id, body.on)
-        except CyclesOff:
-            raise HTTPException(409, "周期没有开放") from None
-
-    @app.put("/api/account/moments", status_code=204)
-    async def switch_moments(body: MomentSwitch, user_id: UserId) -> None:
-        """Turn the user's own switch for moments on or off, for all the characters; 409
-        where the deployer has moments off."""
-        try:
-            await backend.moments.switch(user_id, body.on)
-        except MomentsOff:
-            raise HTTPException(409, "朋友圈没有开放") from None
 
     @app.delete("/api/account/sign-in-methods/{provider}", status_code=204)
     async def unlink(provider: str, user_id: UserId) -> None:
@@ -588,19 +539,6 @@ def add_account_routes(app: FastAPI, backend: Backend) -> None:
             key = await own_keys.check_stt(body.provider, body.api_key.get_secret_value())
         return {"region": key.region}
 
-    @app.post("/api/account/keys/image/check")
-    async def check_own_image(body: OwnImageInput, user_id: UserId) -> dict:
-        """Try the user's own image generation before their browser keeps it, by generating
-        one picture at their expense in the deployment's art style, keeping, counting and
-        recording nothing; 422 with what the service said if the try failed, or untried
-        where there is no judge model, without which no turn has a photo. Its address and
-        model as the browser is to keep them."""
-        if backend.config.judge_settings is None:
-            raise OwnKeyRejected(NO_PHOTOS)
-        own = body.settings()
-        with throttle.asking(user_id):
-            await own_keys.check_image(own)
-        return {"base_url": own.base_url, "model": own.model}
 
     @app.post("/api/account/consent", status_code=204)
     async def consent(body: Consent, user: SignedIn) -> None:

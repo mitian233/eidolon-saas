@@ -16,8 +16,6 @@ import asyncio
 import sqlite3
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, datetime
-from pathlib import Path
 
 import httpx
 import pytest
@@ -82,16 +80,6 @@ def fed(prompt: list[ChatMessage]) -> list[str]:
     return prompt[-1].content.splitlines()
 
 
-def give_pudding(database: Path, conversation: str) -> None:
-    """Record the user's giving her a pudding in the conversation, now, as giving would."""
-    with sqlite3.connect(database) as db:
-        db.execute(
-            "INSERT INTO conversation_events (conversation_id, kind, created_at, gift_id)"
-            " VALUES (?, 'gift', ?, 'pudding')",
-            (conversation, datetime.now(UTC).isoformat()),
-        )
-
-
 async def say(client: httpx.AsyncClient, conversation: str, n: int) -> None:
     """`n` typed turns, each done."""
     for i in range(n):
@@ -138,7 +126,6 @@ async def test_the_model_reads_the_first_turns_in_order_with_their_events_and_he
     await send_turn(client, conversation, "我想去看海")
     hang_up(settings.database_path, conversation)
     await send_turn(client, conversation, "海" * 200)
-    give_pudding(settings.database_path, conversation)
     await send_turn(client, conversation, "第三句")
     await listed_titles(client)
     await send_turn(client, conversation, "第四句")
@@ -146,14 +133,13 @@ async def test_the_model_reads_the_first_turns_in_order_with_their_events_and_he
     [prompt] = background.prompts
     assert prompt[0].role == "system" and "起标题" in prompt[0].content
     assert fed(prompt) == [
-        "# 制作人和櫻木真乃的对话",
-        "制作人：我想去看海",
+        "# 用户和櫻木真乃的对话",
+        "用户：我想去看海",
         "櫻木真乃：好啊",
         "（櫻木真乃挂断了电话）",
-        f"制作人：{'海' * 150}…",
+        f"用户：{'海' * 150}…",
         "櫻木真乃：好的",
-        "（制作人送给櫻木真乃一份布丁）",
-        "制作人：第三句",
+        "用户：第三句",
         "櫻木真乃：好的",
     ]
 
@@ -216,7 +202,7 @@ async def test_a_turn_in_a_call_counts_among_the_three(
     assert in_call[-1]["type"] == "done"
     assert await listed_titles(client) == [TITLE]
     [prompt] = background.prompts
-    assert fed(prompt)[-2] == "制作人：我想去看海"
+    assert fed(prompt)[-2] == "用户：我想去看海"
 
 
 @pytest.mark.parametrize(

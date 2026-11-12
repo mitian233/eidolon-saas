@@ -101,6 +101,9 @@ HTTPS_ONLY = "接口地址需要以 https:// 开头"
 NO_PHOTOS = "这个部署发不了照片"
 """Why a user's own image generation is refused untried: no turn here has a photo."""
 
+NO_DEPLOYER_LLM = "这个部署没有配置对话模型，请在设置里带上你自己的 LLM key 再对话"
+"""Why a turn that brings no LLM of its own is refused: the platform runs no model itself."""
+
 NOVELAI_HOST = urlsplit(DEFAULT_NOVELAI_BASE_URL).hostname
 """NovelAI's own image generation's host: the one known provider of image generation."""
 
@@ -395,10 +398,11 @@ def _no_hold() -> Callable[[], None]:
 @dataclass(frozen=True)
 class DeployerKeys:
     """What the deployer pays for wherever a user brought nothing of their own; None for
-    a speech service the deployer has no key for."""
+    a model or speech service the deployer has no key for. A zero-key platform has no
+    models at all: every turn and call runs on the user's own keys."""
 
-    chat_llm: ChatLLM
-    memory_llm: ChatLLM
+    chat_llm: ChatLLM | None
+    memory_llm: ChatLLM | None
     stt: SttKey | None = None
     """For whichever speech recognition the deployer chose (`STT_PROVIDER`)."""
     tts: str | None = None
@@ -646,9 +650,11 @@ class OwnKeys:
         their own model for memories."""
         own_llm = brought.llm
         if own_llm is None:
-            assert deployer is not None
+            if deployer is None or deployer.chat_llm is None:
+                raise OwnKeyRejected(NO_DEPLOYER_LLM)
             chat = deployer.call_llm if call and deployer.call_llm else deployer.chat_llm
-            return TurnLLMs(chat, deployer.memory_llm, deployer.hold_background)
+            memory = deployer.memory_llm if deployer.memory_llm is not None else chat
+            return TurnLLMs(chat, memory, deployer.hold_background)
         chat_settings = own_llm.call if call else own_llm.text
         memory_settings = brought.memory_llm or own_llm.text
         return TurnLLMs(

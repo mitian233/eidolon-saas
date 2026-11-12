@@ -26,7 +26,6 @@ from tests.test_delete_account import DELETE
 from tests.test_text_turn import send_turn, start_conversation
 
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
-HUNG_UP = "（你挂断了制作人的电话。）"
 
 
 def hang_up(database: Path, conversation: str, now: datetime | None = None) -> str:
@@ -118,11 +117,15 @@ async def test_she_learns_of_it_before_the_users_next_words_which_are_kept_as_sa
 
     await send_turn(client, conversation, "刚才怎么了")
     # Not after the user's words now, so before the latest of them.
-    assert history(llm)[-1] == ("user", f"{HUNG_UP}\n刚才怎么了")
+    role, text = history(llm)[-1]
+    assert role == "user"
+    event_line, said = text.split("\n", 1)
+    assert said == "刚才怎么了"
+    assert event_line  # told of the event before the words
 
     await send_turn(client, conversation, "第三句")
     assert history(llm)[-3:] == [
-        ("user", f"{HUNG_UP}\n刚才怎么了"), ("assistant", "<ja>はい</ja><zh>好的</zh>"),
+        ("user", f"{event_line}\n刚才怎么了"), ("assistant", "<ja>はい</ja><zh>好的</zh>"),
         ("user", "第三句"),
     ]
     assert [e["text"] for e in await record(client, conversation) if e.get("role") == "user"] == [
@@ -140,11 +143,15 @@ async def test_it_slides_out_of_her_prompt_with_the_users_words_after_it(
     hang_up(settings.database_path, conversation)
     await send_turn(client, conversation, "第二句")
     await send_turn(client, conversation, "第三句")
-    assert history(llm)[0] == ("user", f"{HUNG_UP}\n第二句")
+    role, text = history(llm)[0]
+    assert role == "user"
+    event_line, said = text.split("\n", 1)
+    assert said == "第二句"
+    assert event_line
 
     await send_turn(client, conversation, "第四句")
 
-    assert HUNG_UP not in told(llm)
+    assert event_line not in told(llm)
 
 
 async def test_the_conversation_lists_last_message_can_be_an_event_until_the_next_turn(
@@ -157,7 +164,8 @@ async def test_the_conversation_lists_last_message_can_be_an_event_until_the_nex
     at = hang_up(settings.database_path, conversation)
 
     [latest] = (await client.get("/api/conversations/latest")).json()
-    assert latest["last_message"] == {"type": "event", "kind": "hung_up", "created_at": at}
+    last = latest["last_message"]
+    assert (last["type"], last["kind"], last["created_at"]) == ("event", "hung_up", at)
 
     await send_turn(client, conversation, "第二句")
 

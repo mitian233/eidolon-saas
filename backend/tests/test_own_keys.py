@@ -19,6 +19,7 @@ from eidolon.own_keys import (
     CallsUnavailable,
     DeployerKeys,
     DeployerLease,
+    OwnKeyRejected,
     OwnKeys,
     SERVICES,
     Service,
@@ -66,10 +67,13 @@ class Deployment:
         *,
         stt: SttKey | None = SttKey("soniox", DEPLOYER_SONIOX_KEY),
         tts: str | None = DEPLOYER_FISH_KEY,
+        models: bool = True,
     ) -> OwnKeys:
         """The own keys module on the deployer's keys, leased through `deployer`, which
-        counts them, from the last call on."""
-        self.deployer = CountingDeployer(DeployerKeys(self.chat, self.memory, stt, tts))
+        counts them, from the last call on; `models=False` for a zero-key deployment,
+        which has no models of its own."""
+        chat, memory = (self.chat, self.memory) if models else (None, None)
+        self.deployer = CountingDeployer(DeployerKeys(chat, memory, stt, tts))
         return OwnKeys(
             self.llm_service, self.deployer, self.activity, self.speech,
             exempting=lambda: frozenset(EXEMPTING_SERVICES),
@@ -227,3 +231,23 @@ async def test_asking_before_a_call_without_keys_for_speech_says_calls_are_unava
         without_speech.call_exempt(("llm", "tts"))
     assert deployment.deployer.leased == deployment.deployer.released == 1
     assert without_speech.call_exempt(("tts", "stt")) is False
+
+
+async def test_a_turn_that_brings_nothing_on_a_zero_key_deployment_is_refused(
+    deployment: Deployment,
+):
+    with pytest.raises(OwnKeyRejected, match="没有配置对话模型"):
+        deployment.own_keys(models=False).for_turn(BroughtKeys())
+
+
+async def test_a_turn_that_brings_an_llm_runs_on_it_without_deployer_models(
+    deployment: Deployment,
+):
+    deployment.llm_service.llm = FakeLLM(["好的"], ["好的"])
+
+    keys = deployment.own_keys(models=False).for_turn(brought("llm"))
+    await ask(keys.llms.chat)
+    await ask(keys.llms.background)
+
+    assert keys.own_llm is True
+    assert deployment.llm_service.llm.keys == [MY_LLM.text.api_key, MY_LLM.text.api_key]

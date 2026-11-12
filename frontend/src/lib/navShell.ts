@@ -61,12 +61,6 @@ export function showsShellCallBar(href: string, callee: string | null): boolean 
   return conversationOf(pathOf(href).path) !== callee;
 }
 
-/** Whether the rail (desktop) and the dock (phone) are drawn at `href`: everywhere in the shell but
- * the bar, which covers them with its screen (.scratch/bar-room spec「入口、路由和外壳」); the
- * call bar still runs across the top there, and the bar takes the block under it. */
-export function showsNav(href: string): boolean {
-  return playSubpage(pathOf(href).path) !== "bar";
-}
 
 /** What going to `href` in this tab does to the call with `callee` (null for no call): one
  * character at a time, so another character's conversation asks, as does leaving the shell.

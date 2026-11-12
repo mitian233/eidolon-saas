@@ -47,7 +47,7 @@ SETTLE_TIMEOUT = 5.0
 """How long, in seconds, listing a user's conversations waits for those being named."""
 
 _INSTRUCTIONS = """\
-你负责给制作人和一位角色（283 事务所的偶像或事务员）的一段对话起标题，好让制作人以后在历史对话里一眼认出这段聊了什么。制作人就是正在和她对话的用户。
+你负责给用户和一位角色的一段对话起标题，好让用户以后在历史对话里一眼认出这段聊了什么。用户就是正在和角色对话的人。
 读下面的对话，用一句中文概括这几轮主要聊了什么。
 - 忽略寒暄和问候，写具体的话题或发生的事。
 - 不超过 12 个字。
@@ -169,12 +169,12 @@ def _naming_prompt(
     record: Sequence[Message | ConversationEvent],
     gift_catalog: Mapping[str, Gift],
 ) -> list[ChatMessage]:
-    lines = [f"# 制作人和{character.name}的对话"]
+    lines = [f"# 用户和{character.name}的对话"]
     for entry in record:
         if isinstance(entry, ConversationEvent):
             lines.append(_event_line(entry, character, gift_catalog))
         elif entry.role == "user":
-            lines.append(f"制作人：{_cut(entry.text or '')}")
+            lines.append(f"用户：{_cut(entry.text or '')}")
         else:
             shown = entry.without_cues()
             lines.append(f"{character.name}：{_cut(shown.zh or shown.ja or '')}")
@@ -189,7 +189,7 @@ def _event_line(
     if event.kind == "ended":
         return f"（{character.name}结束了对话）"
     gift = gift_catalog.get(event.gift_id or "")
-    return f"（制作人送给{character.name}一份{gift.name if gift else '礼物'}）"
+    return f"（用户送给{character.name}一份{gift.name if gift else '礼物'}）"
 
 
 def _cut(said: str) -> str:

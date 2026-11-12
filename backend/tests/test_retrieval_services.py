@@ -11,7 +11,7 @@ from eidolon.characters import Character
 from eidolon.config import JevSettings, Settings
 from eidolon.producer import Birthday
 from eidolon.rerank import RerankError, SiliconFlowReranker
-from eidolon.judge import JevJudge, JudgeError
+from eidolon.judge import JevJudge, JudgeError, SAID
 from eidolon.retrieval import ModelRetrievalJudge
 from eidolon.store import Message
 from tests.test_embedding import HANG, Answer, scripted
@@ -175,9 +175,9 @@ async def test_jev_sees_the_latest_messages_and_what_was_just_said():
 
     state = requests[0]["state"]
     assert state["角色"] == "櫻木真乃"
-    assert state["上文"][-1] == "櫻木真乃：ほわっ" and "制作人：old 4" in state["上文"]
-    assert "制作人：old 1" not in state["上文"]
-    assert state["制作人最新的一句话"] == "那次比赛"
+    assert state["上文"][-1] == "櫻木真乃：ほわっ" and "用户：old 4" in state["上文"]
+    assert "用户：old 1" not in state["上文"]
+    assert state[SAID] == "那次比赛"
 
 
 async def test_jev_errors_are_reported():

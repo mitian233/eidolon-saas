@@ -95,28 +95,6 @@ export function hasUnseen<C extends Searchable & { id: string }>(
   return arrange(characters, latest, { preferences, onScreen }).rows.some((row) => row.isUnseen);
 }
 
-/** 筛选面板的一组：组合名（null 是最后的「其他」），和组里的人。 */
-export type UnitGroup<C> = { unit: string | null; members: C[] };
-
-/**
- * 按组合分组（spec「筛选面板」）：组合按官方顺序（`unit_order`），组内保持 `characters` 原来的顺序；
- * 没有组合、或者对不上官方顺序的角色放在最后一组。
- */
-export function unitsOf<C extends { unit: string | null; unit_order: number | null }>(characters: C[]): UnitGroup<C>[] {
-  const units = new Map<number, UnitGroup<C>>();
-  const others: C[] = [];
-  for (const c of characters) {
-    if (c.unit === null || c.unit_order === null) {
-      others.push(c);
-      continue;
-    }
-    const group = units.get(c.unit_order) ?? { unit: c.unit, members: [] };
-    group.members.push(c);
-    units.set(c.unit_order, group);
-  }
-  const groups = [...units.entries()].sort(([a], [b]) => a - b).map(([, group]) => group);
-  return others.length ? [...groups, { unit: null, members: others }] : groups;
-}
 
 /** 时间按哪一种写法显示：今天只写时刻，昨天写「昨天」，今年写月日，更早写年月日。按本地日历算。 */
 export type Day = "today" | "yesterday" | "thisYear" | "earlier";

@@ -1,5 +1,6 @@
-"""The world setting: the facts of the original that belong to no one character, from the
-data file `eidolon world sync` writes (`world_sync`) beside the character configuration.
+"""The world setting: facts that belong to no one character, from a data file beside the
+character configuration. The bundled file and its sync are gone with the 283 content;
+the mechanism stays for user-provided knowledge (M2).
 
 The file holds the date the data runs to, the office's president and clerk, the idols
 (with their CV, which is only for telling which lives an idol stood on and for people
@@ -43,7 +44,7 @@ class WorldError(RuntimeError):
 
 
 class WorldSyncError(RuntimeError):
-    """A source `eidolon world sync` imports from could not be reached, or answered with
+    """A source the world setting is imported from could not be reached, or answered with
     something unexpected."""
 
 
@@ -485,4 +486,4 @@ def load_world(path: Path) -> World | None:
     try:
         return World.from_json(data)
     except (KeyError, TypeError, ValueError) as e:
-        raise WorldError(f"世界设定资料 {path} 缺少或写错了字段：{e!r}（重新运行 eidolon world sync）") from None
+        raise WorldError(f"世界设定资料 {path} 缺少或写错了字段：{e!r}（请检查资料文件）") from None

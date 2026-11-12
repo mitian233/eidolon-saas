@@ -788,6 +788,7 @@ class Moments:
             "moment", plan.user_id, plan.character_id, own_llm=False, exempt=False
         )
         lease = self._config.lease()
+        assert lease.keys.chat_llm is not None  # moments run on the deployer's chat model
         try:
             with recording.current():
                 written = await written_whole(lease.keys.chat_llm.stream(post_prompt(material)))
@@ -909,6 +910,7 @@ class Moments:
             "moment_reply", due.user_id, due.character_id, own_llm=False, exempt=False
         )
         lease = self._config.lease()
+        assert lease.keys.chat_llm is not None  # replies run on the deployer's chat model
         try:
             with recording.current():
                 written = await written_whole(lease.keys.chat_llm.stream(reply_prompt(material)))
@@ -971,7 +973,7 @@ class Moments:
     ) -> ReplyMaterial:
         """What she replies to the producer's comment with, read now, of what was `before`."""
         character = self._characters[due.character_id]
-        known = await self._her_now.read(due.user_id, due.character_id, None, "moments")
+        known = await self._her_now.read(due.user_id, due.character_id, None, "apart")
         timezone = effective_timezone(before.profile, None)
         memories = (
             await self._memory.for_reaching_out(
@@ -989,8 +991,8 @@ class Moments:
             before.profile,
             [said_to_chat(m) for m in chat_history(before.messages, self._config.history_turns)],
             self._her_now.lines(
-                known, "moments", now, timezone, before.profile, None,
-                tier_prompt(before.status), replying=True,
+                known, "apart", now, timezone, before.profile, None,
+                tier_prompt(before.status),
             ),
             memories,
             recalled(before.ja, picture_note(before.image)),
@@ -1023,7 +1025,7 @@ class Moments:
         """What she posts the moment planned with, read now, in `weather` (None for none
         known): of `jobs`, her jobs done that day, if any, else of her everyday. Of her jobs,
         her places are of the kinds they take her to, none if none takes her anywhere."""
-        known = await self._her_now.read(plan.user_id, plan.character_id, None, "moments")
+        known = await self._her_now.read(plan.user_id, plan.character_id, None, "apart")
         before = await self._db.read(
             _before, plan.user_id, plan.character_id,
             (now - KEPT_APART).astimezone(UTC).isoformat(),
@@ -1059,8 +1061,8 @@ class Moments:
             self._world.prompt(character.name, local_date(now, timezone)) if self._world else None,
             before.profile,
             self._her_now.lines(
-                known, "moments", now, timezone, before.profile, None,
-                tier_prompt(status), weather,
+                known, "apart", now, timezone, before.profile, None,
+                tier_prompt(status),
             ),
             plan.birthday,
             seeds,

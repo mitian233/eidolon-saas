@@ -77,7 +77,8 @@ async def test_dev_login_makes_a_user_the_first_time_a_name_is_used(make_client:
     assert (await dev_login(newcomer, "newcomer")).status_code == 204
 
     await agree_to_terms(newcomer)
-    assert (await mano_conversations(newcomer)).json() == []
+    # A user made by dev login starts with no characters of their own.
+    assert (await newcomer.get("/api/characters")).json() == []
 
 
 async def test_without_the_dev_login_switch_there_is_no_dev_login(

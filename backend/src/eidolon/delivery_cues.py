@@ -44,6 +44,11 @@ class CueFilter:
     _space: str = ""  # whitespace yet to be shown
     _voiced: str = ""  # cues and whitespace yet to be voiced
 
+    @property
+    def in_cue(self) -> bool:
+        """Whether an opening bracket is still waiting to close."""
+        return bool(self._held)
+
     def feed(self, chunk: str) -> tuple[str, str]:
         """What of the line so far can be shown, and what voiced, beyond what was."""
         self._held += chunk

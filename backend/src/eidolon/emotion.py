@@ -32,7 +32,8 @@ T = TypeVar("T")
 
 @dataclass(frozen=True)
 class SaidSegment:
-    """A segment of her reply: its Japanese, delivery cues and all, and its subtitle."""
+    """A segment of her reply: its primary text, delivery cues and all, and its subtitle
+    (empty in the plain language mode)."""
 
     ja: str
     zh: str
@@ -115,14 +116,14 @@ _EMOTION_OPTIONS: dict[str, tuple[Emotion, str]] = {
     "思考": ("thinking", "在想、犹豫、斟酌措辞"),
 }
 _NOD_OPTIONS: dict[str, tuple[Nod | None, str]] = {
-    "同意": ("yes", "肯定、答应、附和制作人的话，会点头"),
-    "否定": ("no", "否认、拒绝、不同意制作人的话，会摇头"),
+    "同意": ("yes", "肯定、答应、附和用户的话，会点头"),
+    "否定": ("no", "否认、拒绝、不同意用户的话，会摇头"),
     "都不是": (None, "既不是同意也不是否定，例如陈述、提问、打招呼、说自己的事"),
 }
 _SCENE = (
-    "角色扮演的通话中，角色是《偶像大师 闪耀色彩》283 事务所的偶像（或事务员），正在和制作人通话。"
-    "`这一段台词` 是她此刻说出口的日语，方括号里的英文和 <whisper> 这类成对的标签是给配音的语气提示；"
-    "`这一段的中文字幕` 是这段台词的意思。"
+    "角色扮演的通话中，角色正在和用户通话。"
+    "`这一段台词` 是她此刻说出口的话，方括号里的英文和 <whisper> 这类成对的标签是给配音的语气提示；"
+    "`这一段的中文字幕` 是这段台词的意思，没有字幕时为空。"
 )
 _EMOTION_QUESTION = {
     "type": "choice",
@@ -131,7 +132,7 @@ _EMOTION_QUESTION = {
 }
 _NOD_QUESTION = {
     "type": "choice",
-    "instructions": _SCENE + "说这一段时，她是在对制作人的话表示同意，表示否定，还是都不是？",
+    "instructions": _SCENE + "说这一段时，她是在对用户的话表示同意，表示否定，还是都不是？",
     "criteria": {name: description for name, (_, description) in _NOD_OPTIONS.items()},
 }
 
@@ -145,11 +146,11 @@ class ModelEmotionJudge:
         self._judge_model = judge_model
 
     async def judge_emotion(self, segment: SegmentToJudge) -> EmotionAnswer:
-        before = [f"{s.ja}（{s.zh}）" for s in segment.before]
+        before = [f"{s.ja}（{s.zh}）" if s.zh else s.ja for s in segment.before]
         answers = await self._judge_model.ask(
             {
                 "角色": segment.character.name,
-                "制作人这句话": segment.user_said,
+                "用户这句话": segment.user_said,
                 "这条回复前面几段": before or "（这是回复的第一段）",
                 "这一段台词": segment.segment.ja,
                 "这一段的中文字幕": segment.segment.zh,

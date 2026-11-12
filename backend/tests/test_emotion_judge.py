@@ -42,7 +42,7 @@ async def test_jev_is_asked_both_questions_of_the_segment_at_once():
     assert request["auth"] == "Bearer jev-key"
     assert request["state"] == {
         "角色": "櫻木真乃",
-        "制作人这句话": "你今天很可爱",
+        "用户这句话": "你今天很可爱",
         "这条回复前面几段": ["[shyly]ほわっ……（哇……）"],
         "这一段台词": "ありがとうございます！",
         "这一段的中文字幕": "谢谢！",
@@ -60,6 +60,20 @@ async def test_the_first_segment_has_none_before_it():
     await answered(requests, {"emotion": EMOTION, "nod": NOD}).judge_emotion(first)
 
     assert requests[0]["state"]["这条回复前面几段"] == "（这是回复的第一段）"
+
+
+async def test_a_plain_segment_without_a_subtitle_is_judged_as_it_is():
+    requests: list[dict] = []
+    plain = SegmentToJudge(
+        MANO, "你今天很可爱",
+        [SaidSegment("[shyly]谢谢……", "")],
+        SaidSegment("不客气！", ""),
+    )
+
+    await answered(requests, {"emotion": EMOTION, "nod": NOD}).judge_emotion(plain)
+
+    assert requests[0]["state"]["这条回复前面几段"] == ["[shyly]谢谢……"]
+    assert requests[0]["state"]["这一段的中文字幕"] == ""
 
 
 async def test_jevs_answers_are_read_by_option_name():

@@ -4,20 +4,17 @@ in) and her character facts are searched, reranked and capped into the prompt. T
 are searched while the judge model judges, and reranked only once it has."""
 
 import asyncio
-from pathlib import Path
 
 import httpx
 import pytest
 
-from eidolon.characters import load_characters
 from eidolon.config import Settings
 from eidolon.retrieval import FALLBACK_REFERENCES, MAX_REFERENCES
-from eidolon.story_import import import_csv_directory
-from tests.conftest import KOGANE_SHEET, MANO_SHEET, CharacterConfig, ClientFactory
+from tests.conftest import KOGANE_SHEET, MANO_SHEET, Characters, ClientFactory
 from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, context_of, system_of
 from tests.test_live_config import until
 from tests.test_shared_memory import CAT, memorized
-from tests.stories import corpus_in
+from tests.stories import corpus_in, sample_episodes
 from tests.test_text_turn import send_turn, start_conversation
 
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
@@ -44,21 +41,20 @@ PARK_LINE = "公園で鳩と一緒に歌っていました"
 
 
 @pytest.fixture
-def characters(tmp_path: Path) -> CharacterConfig:
+def characters() -> Characters:
     return (
-        CharacterConfig(tmp_path / "characters")
+        Characters()
         .add("mano", "櫻木真乃", MANO_SHEET, speakers=["真乃"], facts=MANO_FACTS)
         .add("kogane", "月岡恋鐘", KOGANE_SHEET, speakers=["恋鐘"], facts=KOGANE_FACTS)
     )
 
 
 @pytest.fixture
-async def embedder(settings: Settings, story: Path) -> FakeEmbedder:
-    """The embedder the sample stories were imported with."""
+async def embedder(settings: Settings) -> FakeEmbedder:
+    """The embedder the sample stories were seeded with."""
     embedder = FakeEmbedder()
     async with corpus_in(settings.database_path, embedder) as corpus:
-        characters = load_characters(settings.characters_path)
-        await import_csv_directory(story, corpus, characters.values())
+        await corpus.save(sample_episodes({"真乃": "mano", "恋鐘": "kogane"}))
     return embedder
 
 
@@ -217,10 +213,13 @@ async def test_irrelevant_references_are_left_out(
     assert "# 回忆与资料" not in system
 
 
-async def test_edited_facts_take_effect_on_restart(
-    make_client: ClientFactory, embedder: FakeEmbedder, characters: CharacterConfig
+async def test_edited_facts_are_retrieved(
+    make_client: ClientFactory, embedder: FakeEmbedder, characters: Characters
 ):
-    characters.write("facts/mano.md", "# 鸟\n## ピーちゃん\n最近学会了说「ほわっ」。")
+    characters.add(
+        "mano", "櫻木真乃", MANO_SHEET, speakers=["真乃"],
+        facts="# 鸟\n## ピーちゃん\n最近学会了说「ほわっ」。",
+    )
     llm = FakeLLM(REPLY)
     client = make_client(llm, retrieval_judge=FakeJudge(), embedder=embedder, reranker=FakeReranker())
 
@@ -273,7 +272,7 @@ async def test_with_the_reranker_down_the_nearest_references_are_brought_but_no_
     references = system[system.index("# 回忆与资料") :]
     assert PARK_LINE in references and "真乃常去公园看鸟。" in references
     # A memory the reranker never judged might be what the user never said.
-    assert "# 关于制作人的记忆" not in system and CAT not in system
+    assert CAT not in system
 
 
 # While the judge model judges, the turn's query is embedded, once, and its candidates
@@ -304,7 +303,7 @@ async def test_a_turn_needing_references_embeds_its_query_once_for_them_and_memo
     # Nor is it embedded again to write the turn down.
     assert embedder.queries[before:] == ["公園の鳩のこと覚えてる？"]
     assert PARK_LINE in system[system.index("# 回忆与资料") :]
-    assert CAT in system[system.index("# 关于制作人的记忆") :]
+    assert CAT in system
     # Reranked as they always were: the references together, the memories apart.
     assert sorted(len(docs) for _, docs in reranker.calls) == [1, 8]
     assert [CAT] in [docs for _, docs in reranker.calls]
@@ -351,7 +350,7 @@ async def test_a_turn_needing_nothing_drops_what_it_found_while_the_judge_model_
     assert events[-1]["type"] == "done"
     assert reranker.calls == []
     system = system_of(llm.prompts[-1])
-    assert "# 回忆与资料" not in system and "# 关于制作人的记忆" not in system
+    assert "# 回忆与资料" not in system and CAT not in system
     await client.get("/api/memories")  # once written down, with the query embedded already
     assert embedder.queries.count("公園の鳩と猫、かわいいね") == 1
 

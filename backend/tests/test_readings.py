@@ -1,26 +1,19 @@
-"""Readings (GLOSSARY.md「读音」): how names are said in the characters' voices, from the
-readings file beside the character configuration. Every request to Fish Audio carries
-those that have phonemes as its pronunciation dictionary; what it is told to say, and
-what people see, keep the names as they are written."""
+"""Readings (GLOSSARY.md「读音」): how names are said in the characters' voices. Every
+request to Fish Audio carries those that have phonemes as its pronunciation dictionary;
+what it is told to say, and what people see, keep the names as they are written."""
 
 import re
 from pathlib import Path
 
 import pytest
 
-from eidolon.characters import load_characters
 from eidolon.readings import (
     Reading,
     ReadingsError,
     load_readings,
     pronunciation_dictionary,
-    readings_path,
     used_in,
 )
-from eidolon.world import load_world, world_path
-
-REPO_CHARACTERS = Path(__file__).resolve().parents[2] / "characters" / "characters.toml"
-KANJI = re.compile(r"[一-鿿々]")
 
 MANO = Reading("櫻木真乃", "さくらぎ まの", "sa0ku1ra1gi0ma1no0")
 MANO_GIVEN = Reading("真乃", "まの", "ma1no0")
@@ -89,28 +82,3 @@ def test_what_a_line_uses_is_what_fish_audio_matches_earliest_and_longest_first(
     assert used_in("真乃、真乃", readings) == (MANO_GIVEN,)
     assert used_in("透明", readings) == ()  # it has no phonemes, so Fish Audio is not told it
     assert used_in("ほわっ", readings) == ()
-
-
-# The committed readings file.
-
-
-def test_the_committed_readings_read_every_character_unit_and_the_office():
-    readings = {r.written: r for r in load_readings(readings_path(REPO_CHARACTERS))}
-    characters = load_characters(REPO_CHARACTERS, require_sheets=False)
-    world = load_world(world_path(REPO_CHARACTERS))
-    assert world is not None
-
-    # Every character with kanji in her name has her full name read.
-    unread = [c.name for c in characters.values() if KANJI.search(c.name) and c.name not in readings]
-    assert unread == []
-    for unit in world.units:
-        assert readings[unit.name].kana.replace(" ", "") == unit.reading, unit.name
-    for written in ("283プロダクション", "283プロ", "283"):
-        assert readings[written].kana.startswith("つばさ"), written
-    assert readings["天井努"].kana.replace(" ", "") == "あまいつとむ"
-    for written in ("天井社長", "天井さん"):
-        assert readings[written].kana.startswith("あまい"), written
-    # Words of their own, which these would make Fish Audio misread wherever they appear.
-    assert "透" not in readings
-    assert "天井" not in readings
-    assert [r.written for r in readings.values() if not r.phonemes] == []

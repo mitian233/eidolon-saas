@@ -41,6 +41,11 @@ describe("old and unknown play addresses", () => {
     expect(playRedirect("/play/gifts/more")).toBe("/play");
   });
 
+  it("sends the retired bar subpage to the first level, its parameters along", () => {
+    expect(playRedirect("/play/bar")).toBe("/play");
+    expect(playRedirect("/play/bar?x=1")).toBe("/play?x=1");
+  });
+
   it("leaves the first level, the subpages and other addresses alone", () => {
     expect(playRedirect("/play")).toBeNull();
     expect(playRedirect("/play/gifts")).toBeNull();

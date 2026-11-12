@@ -16,7 +16,13 @@ import eidolon.prices
 from eidolon.config import Settings
 from eidolon.prices import Price
 from tests.browser import TIMEOUT
-from tests.conftest import ClientFactory, agree_to_terms, github_identity, sign_in_with
+from tests.conftest import (
+    ClientFactory,
+    agree_to_terms,
+    character_id,
+    github_identity,
+    sign_in_with,
+)
 from tests.fakes import START, FakeCatalog, FakeClock, FakeIdentityProvider, FakeLLM
 from tests.test_activity_records import REPLY, dashboard
 from tests.test_cost_estimate import on, row
@@ -69,7 +75,7 @@ async def turn_on(
     client = make_client(
         FakeLLM(REPLY, tokens=tokens), model, settings=on(settings, base_url, model), clock=clock
     )
-    await send_turn(client, await start_conversation(client), "在吗")
+    await send_turn(client, await start_conversation(client, character_id("mano", model)), "在吗")
 
 
 def models_dev(provider: str, api: str | None, models: dict[str, tuple[float, float]]) -> dict:

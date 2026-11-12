@@ -114,10 +114,10 @@ describe("the marks of a month", () => {
 });
 
 const roster = [
-  { id: "mano", name: "櫻木真乃", name_zh: "樱木真乃", name_kana: null, name_romaji: null, unit: "illumination STARS", unit_reading: null },
-  { id: "hiori", name: "風野灯織", name_zh: "风野灯织", name_kana: null, name_romaji: null, unit: "illumination STARS", unit_reading: null },
-  { id: "madoka", name: "樋口円香", name_zh: "樋口圆香", name_kana: null, name_romaji: null, unit: "noctchill", unit_reading: null },
-  { id: "koito", name: "福丸小糸", name_zh: "福丸小糸", name_kana: null, name_romaji: null, unit: "noctchill", unit_reading: null },
+  { id: "mano", name: "櫻木真乃", intro: "" },
+  { id: "hiori", name: "風野灯織", intro: "" },
+  { id: "madoka", name: "樋口円香", intro: "" },
+  { id: "koito", name: "福丸小糸", intro: "" },
 ];
 
 /** 真乃推算在经前，灯织记过、今天什么都不是，円香和小糸没记过。 */
@@ -159,9 +159,8 @@ describe("who the avatar strip shows", () => {
   });
 
   it("does not filter while searching", () => {
-    expect(ids(stripOf(roster, hers, { filter: "recorded", query: "noctchill", picked: "mano" }))).toEqual([
+    expect(ids(stripOf(roster, hers, { filter: "recorded", query: "福丸", picked: "mano" }))).toEqual([
       "mano",
-      "madoka",
       "koito",
     ]);
     expect(ids(stripOf(roster, hers, { filter: "recorded", query: "円香", picked: "hiori" }))).toEqual(["hiori", "madoka"]);

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getCharacters, isSignedIn } from "@/lib/backend";
+import { getSignInOptions, isSignedIn } from "@/lib/backend";
 
 function backendAnswers(status: number) {
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(null, { status }));
@@ -43,27 +43,27 @@ describe("isSignedIn: whether the browser asking for a page has a live session",
   });
 });
 
-describe("getCharacters: the characters for the landing page, asked for on the server", () => {
+describe("getSignInOptions: the ways to sign in, asked for on the server", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("is the backend's character list, kept for a while rather than asked for on every visit", async () => {
-    const characters = [{ id: "mano", name: "櫻木真乃" }];
-    const fetch = vi.fn(async (_url: string, _init: RequestInit) => Response.json(characters));
+  it("is the backend's answer, kept for a while rather than asked for on every visit", async () => {
+    const options = { providers: ["google"], dev_login: false, contact: null };
+    const fetch = vi.fn(async (_url: string, _init: RequestInit) => Response.json(options));
     vi.stubGlobal("fetch", fetch);
 
-    expect(await getCharacters()).toEqual(characters);
+    expect(await getSignInOptions()).toEqual(options);
     const [url, init] = fetch.mock.calls[0];
-    expect(url).toMatch(/\/api\/characters$/);
+    expect(url).toMatch(/\/api\/auth\/providers$/);
     expect(init.next?.revalidate).toBeGreaterThan(0);
   });
 
-  it("is empty when the backend fails or cannot be reached, and the landing page goes on without the spectrum", async () => {
+  it("is null when the backend fails or cannot be reached, and the landing page goes on without it", async () => {
     backendAnswers(500);
-    expect(await getCharacters()).toEqual([]);
+    expect(await getSignInOptions()).toBeNull();
 
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("fetch failed"))));
-    expect(await getCharacters()).toEqual([]);
+    expect(await getSignInOptions()).toBeNull();
   });
 });

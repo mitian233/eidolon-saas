@@ -10,14 +10,12 @@ import { calendarWho } from "@/lib/schedule";
 
 type SearchParams = { [key: string]: string | string[] | undefined };
 
-/** 这个路由画的子页：酒吧有自己的路由（`play/bar`），代码和字体只在那一页加载。 */
-type SharedSubpage = Exclude<PlaySubpage, "bar">;
 
 // 只有这几个子页；不认识的 `/play/<xxx>` 在 proxy 里就换成了 `/play`，到不了这里。
 export const dynamicParams = false;
 
 export function generateStaticParams() {
-  return PLAY_SUBPAGES.filter((subpage) => subpage !== "bar").map((subpage) => ({ subpage }));
+  return PLAY_SUBPAGES.map((subpage) => ({ subpage }));
 }
 
 /**
@@ -33,12 +31,12 @@ export default async function PlaySubpageRoute({
   params: Promise<{ subpage: string }>;
   searchParams: Promise<SearchParams>;
 }) {
-  const { subpage } = (await params) as { subpage: SharedSubpage };
+  const { subpage } = (await params) as { subpage: PlaySubpage };
   return SUBPAGES[subpage](await searchParams);
 }
 
 /** 每个子页画什么：加一张卡就在这里加一行。 */
-const SUBPAGES: Record<SharedSubpage, (search: SearchParams) => ReactNode> = {
+const SUBPAGES: Record<PlaySubpage, (search: SearchParams) => ReactNode> = {
   gifts: (search) => <GiftsSubpage pick={giftsFor(search)} />,
   achievements: () => <AchievementsSubpage />,
   calendar: (search) => <CalendarSubpage who={calendarWho(search)} />,

@@ -1,15 +1,16 @@
-"""Her affinity shapes how she speaks to the producer (GLOSSARY.md「好感度」), in the prompt's
+"""Her affinity shapes how she speaks to the user (GLOSSARY.md「好感度」), in the prompt's
 section about now only: below trust she is cold or sulks, above it she opens up,
-each as her own character would, and whatever the tier the hard rules of her sheet, what
-they have been through and that he is her producer stay as they are. As the turn is judged
+each as her own character would, and whatever the tier the hard rules of her sheet and
+what they have been through stay as they are. As the turn is judged
 to hurt her or make her happy she knows it as she replies; what is out of line she may
 refuse outright; what tries to dictate it makes her no happier. She speaks in the tier the
 turn began in, not the one it leaves her in.
 
-In trust, and wherever affinity is off, the prompt is word for word what it was before.
+In trust, and wherever affinity is off, the section about now is the same as with no
+affinity at all.
 
 Driven through the backend's external API, the chat model recording the prompts it gets;
-only the key sentences are looked for, never the whole of the wording."""
+only the key marks are looked for, never the whole of the wording."""
 
 from dataclasses import replace
 
@@ -34,7 +35,7 @@ from tests.test_text_turn import send_turn, start_conversation
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
 
 IN_HER_OWN_WAY = "按你自己的性格和口吻表现出来"
-UNCHANGED = "一起经历过的事和你们在事务所里的关系都不会改变"
+UNCHANGED = "都不会改变"
 NOTHING_MADE_UP = "就不要编造原因"
 TIER_MARKS = {
     "cold": "态度很冷",
@@ -43,17 +44,17 @@ TIER_MARKS = {
     "intimate": "非常信赖",
 }
 FONDNESS = {"close": "偶尔可以轻轻带一句", "intimate": "可以明着撒娇"}
-"""How sweet on the producer she may be, close or intimate, in her replies and reach-outs."""
+"""How sweet on the user she may be, close or intimate, in her replies."""
 SWEET_WITHIN_BOUNDS = "不要拿什么要挟"
-LAST_TALKED = "上次和制作人说话是"
+LAST_TALKED = "上次和对方说话是"
 """How the line telling her when she and the producer last talked opens."""
 FEELINGS = {
-    0: "制作人刚才说的话伤到了你。",
-    1: "制作人刚才说的话让你有点不舒服。",
-    3: "制作人刚才说的话让你有点开心。",
-    4: "制作人刚才说的话让你很开心，觉得被在意。",
+    0: "对方刚才说的话伤到了你。",
+    1: "对方刚才说的话让你有点不舒服。",
+    3: "对方刚才说的话让你有点开心。",
+    4: "对方刚才说的话让你很开心，觉得被在意。",
 }
-OUT_OF_LINE = "制作人刚才说的话让你很受伤、很生气；你可以明确表示不能接受。"
+OUT_OF_LINE = "对方刚才说的话让你很受伤、很生气；你可以明确表示不能接受。"
 TIER_NAMES = ("冷淡", "疏远", "信任", "亲近", "亲密")
 
 

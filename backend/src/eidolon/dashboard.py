@@ -118,11 +118,6 @@ def add_dashboard_routes(app: FastAPI, backend: Backend) -> None:
         # Reach-outs, letters, achievements, visits and moments are no turns nor calls, nor
         # counted as taken by any user; their service calls count.
         records = [r for r in tally.records if r.kind in ("turn", "call")]
-        reach_out_records = [r for r in tally.records if r.kind == "reach_out"]
-        letter_records = [r for r in tally.records if r.kind == "letter"]
-        visit_records = [r for r in tally.records if r.kind == "visit"]
-        achievement_records = [r for r in tally.records if r.kind == "achievement"]
-        moment_records = [r for r in tally.records if r.kind in ("moment", "moment_reply")]
         names = {id: c.name for id, c in backend.characters.items()}
         spent = cost(tally.calls, pricing, starts)
         return {
@@ -140,31 +135,13 @@ def add_dashboard_routes(app: FastAPI, backend: Backend) -> None:
                 affinity(records, names, tally.cooled_users)
                 if backend.config.affinity_on else None
             ),
-            "scheduled_this_week": (
-                await backend.schedules.scheduled_this_week()
-                if backend.config.schedule_on else None
-            ),
-            "recorded_cycles": (
-                await backend.cycle_records.users_recording()
-                if backend.config.cycles_on else None
-            ),
-            "reach_outs": (
-                reach_outs(reach_out_records)
-                if backend.config.reach_outs.enabled or reach_out_records else None
-            ),
-            "letters": (
-                letters(letter_records)
-                if backend.config.letters_on or letter_records else None
-            ),
-            "bar": bar(visit_records) if backend.config.bar_on or visit_records else None,
-            "moments": (
-                moments(moment_records, await backend.moments.liked_or_commented_share())
-                if backend.config.moments.enabled or moment_records else None
-            ),
-            "achievements": (
-                achievements(achievement_records)
-                if backend.config.affinity_on or achievement_records else None
-            ),
+            "scheduled_this_week": None,
+            "recorded_cycles": None,
+            "reach_outs": None,
+            "letters": None,
+            "bar": None,
+            "moments": None,
+            "achievements": None,
             "cost": spent,
         }
 

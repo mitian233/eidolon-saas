@@ -64,7 +64,7 @@ async def test_the_structured_reply_streams_through_leaving_the_reasoning_out(pr
     items = [i for i in streamed if not isinstance(i, Reasoning)]
     assert all(isinstance(i, str) for i in items)
     assert len(items) > 3  # streamed in pieces, not all at once
-    parser = ReplyParser()
+    parser = ReplyParser(bilingual=True)
     for item in items:
         parser.feed(item)
     parser.finish()

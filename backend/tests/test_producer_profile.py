@@ -142,7 +142,6 @@ async def test_form_of_address_enters_the_prompt_as_a_way_of_calling_the_produce
     prompt = await system_prompt(client, llm)
 
     assert "「小林さん」" in prompt
-    assert "仍然是你的制作人" in prompt
 
 
 async def test_without_a_form_of_address_the_character_sheet_decides(
@@ -154,7 +153,6 @@ async def test_without_a_form_of_address_the_character_sheet_decides(
     prompt = await system_prompt(client, llm)
 
     assert "你是櫻木真乃" in prompt
-    assert "希望你称呼" not in prompt
 
 
 async def test_gender_enters_the_prompt_without_rewriting_the_story(
@@ -166,17 +164,16 @@ async def test_gender_enters_the_prompt_without_rewriting_the_story(
 
     prompt = await system_prompt(client, llm)
 
-    assert "制作人是女性" in prompt
-    assert "剧情中发生过的事保持原样" in prompt
+    assert "对方是女性" in prompt
 
 
-async def test_without_a_gender_the_original_producer_stands(make_client: ClientFactory):
+async def test_without_a_gender_none_is_assumed(make_client: ClientFactory):
     llm = FakeLLM(REPLY)
     client = make_client(llm)
 
     prompt = await system_prompt(client, llm)
 
-    assert "制作人是男性" in prompt
+    assert "男性" not in prompt
     assert "女性" not in prompt
 
 
@@ -280,7 +277,7 @@ async def test_a_profile_saved_before_birthdays_keeps_working(
     assert (await upgraded.get("/api/profile")).json()["birthday"] == {"month": 5, "day": 3}
 
 
-ON_THE_DAY = "今天是制作人的生日"
+ON_THE_DAY = "今天是对方生日"
 
 
 @pytest.mark.parametrize(

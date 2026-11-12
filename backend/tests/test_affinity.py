@@ -18,7 +18,7 @@ import pytest
 
 from eidolon.affinity import Judged, hurt
 from eidolon.config import JevSettings, Settings
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, character_id
 from tests.fakes import FAKE_JUDGE, START, FakeClock, FakeIdentityProvider, FakeLLM
 from tests.test_admin_users import admin_beside
 from tests.test_delete_account import user_id
@@ -135,7 +135,7 @@ async def test_each_character_is_apart_and_each_user(
 
     assert (await status(client)).json()["tier"] == "distant"
     assert (await status(client, "kogane")).json()["tier"] == "trust"
-    assert (await status(other)).json()["tier"] == "trust"
+    assert (await status(other, character_id("mano", "other"))).json()["tier"] == "trust"
 
 
 async def test_reading_it_needs_a_signed_in_user_and_a_character(make_client: ClientFactory):
@@ -168,12 +168,11 @@ async def test_unset_in_env_it_is_on_with_the_judge_model_and_off_without(
     )
 
     affinity = (await status(client)).json()
-    gifts = (await client.get("/api/gifts")).json()
 
     if judge is None:
-        assert (affinity, gifts["open"]) == (None, False)
+        assert affinity is None
     else:
-        assert (affinity, gifts["open"]) == ({"tier": "trust", "cooldown_until": None}, True)
+        assert affinity == {"tier": "trust", "cooldown_until": None}
 
 
 async def test_off_in_env_there_is_none_until_the_admin_turns_it_on(

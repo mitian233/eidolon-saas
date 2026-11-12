@@ -30,8 +30,6 @@ from tests.fakes import (
 from tests.test_delete_account import rows_mentioning, user_id
 from tests.test_memories import KYOTO, OSAKA, TOKYO, superseding
 from tests.test_memory_management import memories
-from tests.test_schedule_saving import WEDNESDAY_AFTERNOON, WEEK, placed, publish, save
-from tests.test_schedule_weeks import schedule
 from tests.test_shared_memory import CAT, REPLY, memories_section, memorized, turn
 from tests.test_text_turn import start_conversation
 
@@ -176,27 +174,6 @@ async def test_categories_left_out_are_neither_exported_nor_imported(
     assert res.status_code == 200, res.text
     assert res.json() == {**NOTHING_ELSE, "profile": False}
     assert (await there.get("/api/profile")).json()["form_of_address"] == "P"
-
-
-async def test_the_schedule_is_neither_exported_nor_imported(
-    make_client: ClientFactory, settings: Settings, tmp_path: Path
-):
-    clock = FakeClock(WEDNESDAY_AFTERNOON)
-    here = make_client(FakeLLM(), clock=clock)
-    there_settings = replace(settings, database_path=tmp_path / "other.db")
-    there = make_client(FakeLLM(), settings=there_settings, clock=clock)
-    for deployment, job in ((settings, "lesson-here"), (there_settings, "lesson-there")):
-        publish(deployment.database_path, WEEK, (job, 1, None))
-    await save(here, WEEK, placed("lesson-here", 4, 0))
-    await save(there, WEEK, placed("lesson-there", 5, 0))
-
-    package = await export(here, ",".join(data_package.CATEGORIES))
-    res = await import_package(there, package, ",".join(data_package.CATEGORIES))
-
-    with zipfile.ZipFile(io.BytesIO(package)) as unzipping:
-        assert not any(b"lesson-here" in unzipping.read(f) for f in unzipping.namelist())
-    assert res.status_code == 200, res.text
-    assert (await schedule(there))["this_week"]["placements"] == [placed("lesson-there", 5, 0)]
 
 
 async def test_a_user_exports_only_their_own_profile(make_client: ClientFactory):

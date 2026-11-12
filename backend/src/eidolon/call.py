@@ -15,7 +15,7 @@ is `CallOutcome`'s to decide; the call only reports to it. So is the call's acti
 record: each turn of the call has one under it, and its speech recognition and synthesis
 are recorded under it by `CallMeter`, which also lays each error in the pipeline at the
 door of the service it came from. A call that connected is kept as it is settled, for stats
-and towards the achievements (`Happenings.call_ended`).
+without running any game rewards.
 Whose turn it is during the call, what is a follow-on and what interrupts the character, is
 likewise `TurnTaking`'s.
 
@@ -114,7 +114,6 @@ from eidolon.config import (
     FREE_FISH_AUDIO_MODELS,
     FishAudioModel,
     IceServer,
-    ImageSettings,
     OWN_KEYS_PROXIED,
     Settings,
     SttKey,
@@ -126,7 +125,6 @@ from eidolon.emotion import EmotionJudging, SaidSegment, SegmentToJudge
 from eidolon.engine import (
     CallTurnRecorded,
     ConversationEngine,
-    PhotoPending,
     TurnDone,
     TurnJudged,
     UserSaid,
@@ -140,8 +138,7 @@ from eidolon.own_keys import (
     OwnKeys,
     Service,
 )
-from eidolon.greetings import FISH_TTS_HTTP_URL
-from eidolon.happenings import Happenings
+from eidolon.fish_audio import FISH_TTS_HTTP_URL
 from eidolon.proxy import ProxiedWebsocket, ProxyRoutes, masked, open_client
 from eidolon.readings import Reading, pronunciation_dictionary
 from eidolon.reply_format import SegmentComplete, SegmentDelta, SpeechDelta
@@ -189,7 +186,6 @@ class Call:
     device_timezone: str | None = None
     own_llm: bool = False
     voiced_by: FishAudioModel = DEFAULT_FISH_AUDIO_MODEL
-    own_image: ImageSettings | None = None
 
 
 _taking_turn: ContextVar["CallTurns | None"] = ContextVar("_taking_turn", default=None)
@@ -964,12 +960,10 @@ class Calls:
         speech: Speech,
         clock: Clock,
         store: Store,
-        happenings: Happenings,
     ) -> None:
         """Calls last as long, and take as many turns, as `limits` says as each starts.
         Calls of users banned or deleted meanwhile, as `store` has them, are hung up. Each
-        that connected is kept in `store`, then, if its conversation is still there to keep
-        it in, told to `happenings`."""
+        that connected is kept in `store` if its conversation is still present."""
         self._settings = settings
         self._engine = engine
         self._admissions = admissions
@@ -978,7 +972,6 @@ class Calls:
         self._speech = speech
         self._clock = clock
         self._store = store
-        self._happenings = happenings
         self._webrtc = SmallWebRTCRequestHandler(
             ice_servers=[RTCIceServer(**server) for server in settings.ice_servers]
         )
@@ -1038,7 +1031,7 @@ class Calls:
         recorded. Whatever fails before the call is served, it never connected; once it is
         served, it is settled as it ends, letting go of the keys it brought."""
         self._refuse_unless_room(user_id)
-        placing = _Placing(user_id)
+        placing = _Placing(user_id, character.id)
         self._placing.add(placing)
         try:
             return await self._admit_and_start(
@@ -1046,6 +1039,7 @@ class Calls:
             )
         finally:
             self._placing.discard(placing)
+            placing.done.set()
 
     async def _admit_and_start(
         self,
@@ -1059,9 +1053,7 @@ class Calls:
     ) -> dict:
 
         async def keep(connected_at: datetime, duration_s: float) -> None:
-            await self._happenings.call_ended(
-                conversation.id, user_id, character.id, connected_at, duration_s
-            )
+            await self._store.keep_call(conversation.id, connected_at, duration_s)
 
         # Cancelled meanwhile, what is let in never set up, so is settled.
         admission = await self._admissions.admitted(
@@ -1069,6 +1061,9 @@ class Calls:
             lambda let_in: CallOutcome(let_in, self._limits(), self._clock, keep).set_up_failed(),
         )
         outcome = CallOutcome(admission, self._limits(), self._clock, keep)
+        if placing.cancelled:  # she was deleted while the call was being placed
+            await outcome.set_up_failed()
+            raise CallFailed()
         try:
             await self.hang_up(user_id, "left")
         except BaseException:
@@ -1076,7 +1071,6 @@ class Calls:
             raise
         return await self._start(
             user_id, conversation, character, options, offer, admission, outcome, placing,
-            brought.image,
         )
 
     async def _start(
@@ -1089,7 +1083,6 @@ class Calls:
         admission: Admission[CallKeys],
         outcome: CallOutcome,
         placing: "_Placing",
-        own_image: ImageSettings | None = None,
     ) -> dict:
         keys = admission.keys
         connections: list[SmallWebRTCConnection] = []
@@ -1097,6 +1090,8 @@ class Calls:
 
         async def serve(connection: SmallWebRTCConnection) -> None:
             connections.append(connection)
+            if placing.cancelled:  # she was deleted while the offer was being answered
+                raise CallFailed()
 
             @connection.event_handler("closed")
             async def forget(connection: SmallWebRTCConnection) -> None:
@@ -1116,11 +1111,13 @@ class Calls:
         try:
             call = Call(
                 conversation, character, admission.llms, options.muted, options.quality,
-                options.device_timezone, admission.own_llm, keys.tts_model, own_image,
+                options.device_timezone, admission.own_llm, keys.tts_model,
             )
             answer = await self._answer(SmallWebRTCRequest(offer.sdp, offer.type), serve)
         except BaseException:
             if not started:  # once served, the call is settled as it ends
+                if connections:  # a connection was made for it: let go of it
+                    await _within_disconnect_timeout(connections[0].disconnect(), "a call")
                 await outcome.set_up_failed()
             raise
         if answer is None or not started:
@@ -1182,11 +1179,29 @@ class Calls:
         """Whether there is a call in the conversation now, connected or still connecting."""
         return any(live.conversation_id == conversation_id for live in list(self._live))
 
-    async def hang_up(self, user_id: str, reason: CallEndReason = "deleted") -> None:
+    async def hang_up(
+        self, user_id: str, reason: CallEndReason = "deleted", *, character_id: str | None = None
+    ) -> None:
         """Hang up the user's calls, for `reason`, and wait for them to end; a reply in
-        progress is dropped. Unless banned, a user's calls are hung up as they are deleted."""
+        progress is dropped. With `character_id`, only the calls with her: one still being
+        placed is cancelled, never to be served, and waited for to fail as the live ones
+        are waited for to end. Unless banned, a user's calls are hung up as they are
+        deleted."""
+        live = [
+            call for call in list(self._live)
+            if call.user_id == user_id
+            and (character_id is None or call.character_id == character_id)
+        ]
+        placing = [
+            call for call in list(self._placing)
+            if character_id is not None
+            and call.user_id == user_id and call.character_id == character_id
+        ]
+        for call in placing:
+            call.cancelled = True
         await asyncio.gather(
-            *(live.hang_up(reason) for live in list(self._live) if live.user_id == user_id)
+            *(call.hang_up(reason) for call in live),
+            *(call.done.wait() for call in placing),
         )
 
     def cooled(self, user_id: str, character_id: str, until: datetime) -> None:
@@ -1244,10 +1259,15 @@ class Calls:
 
 
 class _Placing:
-    """A call placed by the user, from being placed until it is served or fails to be."""
+    """A call placed by the user, from being placed until it is served or fails to be.
+    `cancelled` says the character was deleted meanwhile: the call is never to be served.
+    `done` is set once it is served or has failed to be, however it ends."""
 
-    def __init__(self, user_id: str) -> None:
+    def __init__(self, user_id: str, character_id: str) -> None:
         self.user_id = user_id
+        self.character_id = character_id
+        self.cancelled = False
+        self.done = asyncio.Event()
 
 
 async def _no_new_connection(connection: SmallWebRTCConnection) -> None:
@@ -1502,7 +1522,6 @@ class CallTurns(FrameProcessor):
         self._follow_on_timeout = follow_on_timeout
         self._emotions = emotions
         self._judging: set[asyncio.Task] = set()  # segments' emotions being judged
-        self._photos: set[asyncio.Task] = set()  # photos sent, waited on to tell how they came out
         self._turns = TurnTaking(text_only=call.muted)
         self._inputs: asyncio.Queue[str | None] = asyncio.Queue()  # None: wakes it, to hang up
         self._ended = False  # it is hanging up: the outcome is asked no more
@@ -1774,7 +1793,7 @@ class CallTurns(FrameProcessor):
         recorded = CallTurnRecorded()
         async for event in self._engine.turn(
             self._call.conversation, text, self._call.llms, self._call.device_timezone, stop,
-            self._outcome.in_call, self._call.voiced_by, self._call.own_image,
+            self._outcome.in_call, self._call.voiced_by,
         ):
             if isinstance(event, CallTurnRecorded):
                 recorded = event
@@ -1788,7 +1807,7 @@ class CallTurns(FrameProcessor):
                 if not stop.is_set():
                     self._judge_emotion(text, number, event.segment, ja, zh)
                 continue
-            if isinstance(event, SpeechDelta):  # the Japanese just shown, cues and all
+            if isinstance(event, SpeechDelta):  # the primary text just shown, cues and all
                 ja[event.segment] = ja.get(event.segment, "") + event.text
                 await self._carry_out(self._turns.reply_delta("ja", event.text, event.segment))
                 continue
@@ -1798,11 +1817,9 @@ class CallTurns(FrameProcessor):
             if turn is not None:
                 turn.see(event)
             message = shown(event)
-            if isinstance(event, UserSaid | PhotoPending):
+            if isinstance(event, UserSaid):
                 message["reply"] = number
             await self._send(message)
-            if isinstance(event, PhotoPending):
-                self._tell_photo(number, event.id)
             if isinstance(event, SegmentDelta):
                 if event.lang == "zh":
                     zh[event.segment] = zh.get(event.segment, "") + event.text
@@ -1837,23 +1854,12 @@ class CallTurns(FrameProcessor):
         if message is not None:
             await self._send(message)
 
-    def _tell_photo(self, reply: int, photo_id: str) -> None:
-        """Tell the browser how the photo reply `reply` sent came out, once it has, if the
-        call is still on; a photo whose reply is not recorded, dropped, is never told of."""
-        telling = self.create_task(self._send_photo(reply, photo_id))
-        self._photos.add(telling)
-        telling.add_done_callback(self._photos.discard)
-
-    async def _send_photo(self, reply: int, photo_id: str) -> None:
-        photo = await self._engine.photo_came_out(photo_id, self._call.conversation.user_id)
-        if photo is not None:
-            await self._send({"type": "photo", "reply": reply, **photo.shown()})
 
     async def _send(self, message: dict) -> None:
         await self.push_frame(RTVIServerMessageFrame(data=message))
 
     async def _stop_worker(self) -> None:
-        for task in [*self._judging, *self._photos]:
+        for task in list(self._judging):
             await self.cancel_task(task)
         if self._timer is not None:
             await self.cancel_task(self._timer)

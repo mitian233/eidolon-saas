@@ -8,16 +8,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY src ./src
 RUN uv sync --frozen --no-dev
-# The calibration set for `eidolon eval rerank`.
-COPY eval ./eval
 
 # On the PATH so that the admin can run `docker compose exec backend eidolon ...`.
 ENV PATH=/app/.venv/bin:$PATH \
-    EIDOLON_DATABASE_PATH=/data/eidolon.db \
-    EIDOLON_CHARACTERS_PATH=/characters/characters.toml \
-    EIDOLON_STORY_PATH=/corpus/SCTranslationData/data/story \
-    EIDOLON_MIRROR_CACHE_PATH=/data/mirror \
-    EIDOLON_GAME_CATALOG_PATH=/corpus/game/catalog.json \
-    EIDOLON_EVENT_NAMES_PATH=/deploy/event-names.toml
+    EIDOLON_DATABASE_PATH=/data/eidolon.db
 EXPOSE 8000
 CMD ["eidolon"]

@@ -7,7 +7,6 @@ export {
   MicOff as MicOffIcon,
   Phone as PhoneIcon,
   PhoneOff as HangUpIcon,
-  Shirt as OutfitIcon,
 } from "lucide-react";
 
 // 她结束了对话（GLOSSARY.md「已结束的对话」）：对话事件的分隔线和换掉输入栏的结束卡。
@@ -62,7 +61,7 @@ export { ListFilter as FilterIcon, Pin as PinIcon } from "lucide-react";
 // 对话列表行菜单里的「取消置顶」「在列表中隐藏」「在列表中显示」。
 export { Eye as ShowIcon, EyeOff as HideIcon, PinOff as UnpinIcon } from "lucide-react";
 
-// 对话页更多菜单里的「新对话」「历史对话」（换衣装用 OutfitIcon）；历史对话底部只读卡的图标（GLOSSARY.md「历史对话」）。
+// 对话页更多菜单里的「新对话」「历史对话」；历史对话底部只读卡的图标（GLOSSARY.md「历史对话」）。
 export { History as PastConversationsIcon, SquarePen as NewConversationIcon } from "lucide-react";
 
 // 后台用户列表可以排序的表头：按它从多到少排着的，和还没按它排的（shadcn-redesign 22）。
@@ -112,8 +111,6 @@ export { CalendarCheck as ScheduleIcon } from "lucide-react";
 // 周期：玩法页第一级「周期」卡（中性）；周期子页记录行的铅笔、点中那一天的「改这次」，弹窗里天数的 −/+。
 export { CalendarHeart as CyclesCardIcon } from "lucide-react";
 export { Minus as FewerDaysIcon, Pencil as EditRecordIcon, Plus as MoreDaysIcon } from "lucide-react";
-// 酒吧：玩法页第一级「VA-283」卡（中性）。
-export { Martini as BarCardIcon } from "lucide-react";
 
 // 礼物子页：抽奖台的「抽一次」和抽到稀有礼物时插画角上的闪光；我的礼物的四个类别筛选；
 // 重置卡确认框里「现在的档位 → 信任」的箭头。
@@ -121,7 +118,7 @@ export { Sparkles as DrawIcon, Sparkles as RareIcon } from "lucide-react";
 export { ArrowRight as BecomesIcon } from "lucide-react";
 export { Cookie as FoodIcon, CupSoda as DrinkIcon, Flower2 as FlowerIcon, Gem as TrinketIcon } from "lucide-react";
 
-// 设置一级的各类（档案、记忆、统计、通话用 PhoneIcon、搭话、周期、外观、自带密钥、登录与数据、数据包、关于）和「关于」上面的「赞赏」；「关于」里新标签页打开的链接行尾的外链图标。
+// 设置一级的各类（档案、记忆、统计、通话用 PhoneIcon、搭话、周期、自带密钥、登录与数据、数据包、关于）和「关于」上面的「赞赏」；「关于」里新标签页打开的链接行尾的外链图标。
 export {
   BookHeart as MemoriesIcon,
   CalendarSync as CyclesIcon,
@@ -131,7 +128,6 @@ export {
   ExternalLink as ExternalLinkIcon,
   Info as AboutIcon,
   KeyRound as OwnKeysIcon,
-  Palette as AppearanceIcon,
   LogIn as SignInIcon,
   MessageCircleHeart as ReachOutsIcon,
   Package as DataPackageIcon,

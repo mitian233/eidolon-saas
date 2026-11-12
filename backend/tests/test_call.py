@@ -5,8 +5,10 @@ Jev, the embedder and the reranker."""
 
 import asyncio
 import json
+from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 import pytest
@@ -18,7 +20,7 @@ from eidolon.call import CallOptions, SessionDescription
 from eidolon.config import Settings, UsageLimits
 from eidolon.own_keys import DeployerLease
 from tests.browser import TIMEOUT, Browser, open_browser, until_gone
-from tests.conftest import SITE, ClientFactory, sign_in, store_in
+from tests.conftest import SITE, Characters, ClientFactory, aside, seed_characters, sign_in, store_in
 from tests.fakes import (
     FakeBackgroundLLM,
     FakeEmbedder,
@@ -30,6 +32,7 @@ from tests.fakes import (
     context_of,
     system_of,
 )
+from tests.test_service_status import backend_of
 from tests.test_text_turn import start_conversation
 
 MANO_REPLY = ["<ja>ほわっ、", "おはようございます！</ja><zh>哇，早上好！</zh><ja>今日も</ja><zh>今天也</zh>"]
@@ -100,7 +103,7 @@ async def test_call_turns_look_things_up_and_remember(
 
     assert jev.asked == [("櫻木真乃", "我家的猫叫小白哦"), ("櫻木真乃", "你还记得我家的猫吗？")]
     context = context_of(llm.prompts[-1])
-    assert CAT in context[context.index("# 关于制作人的记忆") :]
+    assert CAT in context
 
 
 async def test_a_call_joins_the_conversation_asked_for_muted_as_asked(
@@ -175,12 +178,14 @@ async def test_a_call_whose_voice_services_cannot_be_made_is_refused_and_does_no
 
 
 async def test_a_call_failing_as_it_is_answered_never_connected_and_lets_go_of_its_keys(
-    one_call_an_hour: Settings, speech: FakeSpeech, monkeypatch: pytest.MonkeyPatch
+    one_call_an_hour: Settings, speech: FakeSpeech, monkeypatch: pytest.MonkeyPatch,
+    characters: Characters,
 ):
     """Answering the offer is replaced, raising: whatever fails in Pipecat as it answers is
     caught there, so no fake can make it raise."""
     backend = build_faked(
-        one_call_an_hour, FakeLLM(), background_llm=FakeBackgroundLLM(), speech=speech
+        one_call_an_hour, FakeLLM(), background_llm=FakeBackgroundLLM(), speech=speech,
+        characters=characters,
     )
     try:
         user = (await backend.store.create_user("producer")).id
@@ -273,10 +278,12 @@ async def test_a_call_hung_up_by_the_user_counts(
 
 
 async def test_shutting_down_hangs_up_calls_and_drops_the_reply_in_progress(
-    settings: Settings, speech: FakeSpeech, browser: Browser
+    settings: Settings, speech: FakeSpeech, browser: Browser, characters: Characters
 ):
     slow = FakeLLM(["<ja>ほわっ</ja><zh>哇</zh>", "<ja>今日も</ja><zh>今天也</zh>"], delay=60)
-    backend = build_faked(settings, slow, background_llm=FakeBackgroundLLM(), speech=speech)
+    backend = build_faked(
+        settings, slow, background_llm=FakeBackgroundLLM(), speech=speech, characters=characters
+    )
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=create_app(backend)),
@@ -284,6 +291,9 @@ async def test_shutting_down_hangs_up_calls_and_drops_the_reply_in_progress(
             headers=SITE,
             cookies=sign_in(backend.store, "producer", backend.clock()),
         ) as client:
+            user = aside(backend.store.first_user_named("producer"))
+            assert user is not None
+            aside(seed_characters(backend, user.id, characters))
             conversation_id = await start_conversation(client)
             await browser.call(client, conversation_id=conversation_id)
             await browser.connect()
@@ -300,7 +310,7 @@ async def test_shutting_down_hangs_up_calls_and_drops_the_reply_in_progress(
 
 
 async def test_a_connection_that_will_not_close_is_given_up_and_the_call_still_ends(
-    settings: Settings, speech: FakeSpeech, browser: Browser,
+    settings: Settings, speech: FakeSpeech, browser: Browser, characters: Characters,
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ):
     disconnect = SmallWebRTCConnection.disconnect
@@ -313,7 +323,10 @@ async def test_a_connection_that_will_not_close_is_given_up_and_the_call_still_e
     monkeypatch.setattr(SmallWebRTCConnection, "disconnect", never_closes)
     monkeypatch.setattr(eidolon.call, "CONNECT_TIMEOUT", timedelta(seconds=0.2))
     monkeypatch.setattr(eidolon.call, "DISCONNECT_TIMEOUT", 0.2)
-    backend = build_faked(settings, FakeLLM(), background_llm=FakeBackgroundLLM(), speech=speech)
+    backend = build_faked(
+        settings, FakeLLM(), background_llm=FakeBackgroundLLM(), speech=speech,
+        characters=characters,
+    )
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=create_app(backend)),
@@ -321,6 +334,9 @@ async def test_a_connection_that_will_not_close_is_given_up_and_the_call_still_e
             headers=SITE,
             cookies=sign_in(backend.store, "producer", backend.clock()),
         ) as client:
+            user = aside(backend.store.first_user_named("producer"))
+            assert user is not None
+            aside(seed_characters(backend, user.id, characters))
             conversation_id = await start_conversation(client)
             # never connects, as when the browser left first: only the call closes it
             assert (await browser.call(client, conversation_id=conversation_id)).status_code == 200
@@ -337,3 +353,225 @@ async def test_a_connection_that_will_not_close_is_given_up_and_the_call_still_e
     finally:
         for connection in set(stuck):  # close them after all, so nothing is left running
             await disconnect(connection)
+
+
+async def test_deleting_a_character_hangs_up_her_call_and_leaves_the_other_characters(
+    make_client: ClientFactory, speech: FakeSpeech, browser: Browser
+):
+    """Kogane is deleted with no call of her own: Mano's goes on, heard and voiced; then
+    Mano is deleted, and her call ends."""
+    client = make_client(FakeLLM(REPLY))
+    conversation_id = await start_conversation(client)
+    await browser.call(client, conversation_id=conversation_id)
+    await browser.connect()
+    assert browser.pc_id is not None
+
+    assert (await client.delete("/api/characters/kogane")).status_code == 204
+    await speech.stts[-1].hear("你好")
+    await browser.turn()  # Mano's call is still under way
+
+    assert (await client.delete("/api/characters/mano")).status_code == 204
+    await browser.hung_up()
+    await until_gone(client, browser.pc_id)
+
+
+async def test_deleting_a_character_leaves_another_characters_call_being_placed(
+    make_client: ClientFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """Kogane's call is held being placed as Mano is deleted: it is let in and served all
+    the same."""
+    client = make_client(FakeLLM())
+    conversation_id = await start_conversation(client, "kogane")
+    admissions = backend_of(client).admissions
+    let_in = admissions.call
+    letting_in, may_go_on = asyncio.Event(), asyncio.Event()
+
+    async def call(*args: Any) -> Any:
+        """The call is held being placed, until it may go on."""
+        if not letting_in.is_set():
+            letting_in.set()
+            await may_go_on.wait()
+        return await let_in(*args)
+
+    monkeypatch.setattr(admissions, "call", call)
+    async with open_browser() as browser:
+        placing = asyncio.create_task(browser.call(client, conversation_id=conversation_id))
+        try:
+            await asyncio.wait_for(letting_in.wait(), TIMEOUT)
+            assert (await client.delete("/api/characters/mano")).status_code == 204
+            may_go_on.set()
+            assert (await placing).status_code == 200
+            await browser.connect()
+        finally:  # however it went, the call is let go of, not left being placed
+            may_go_on.set()
+            await placing
+
+
+async def test_deleting_a_character_cancels_her_own_call_being_placed(
+    make_client: ClientFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """Kogane's call is held being placed as she is deleted: once let in it is never
+    served, and the deletion waits for it to fail before it returns."""
+    client = make_client(FakeLLM())
+    conversation_id = await start_conversation(client, "kogane")
+    backend = backend_of(client)
+    let_in = backend.admissions.call
+    letting_in, may_go_on = asyncio.Event(), asyncio.Event()
+
+    async def call(*args: Any) -> Any:
+        """The call is held being placed, until it may go on."""
+        if not letting_in.is_set():
+            letting_in.set()
+            await may_go_on.wait()
+        return await let_in(*args)
+
+    hang_up = backend.calls.hang_up
+    hanging_up = asyncio.Event()
+
+    async def deleting_her(*args: Any, **kwargs: Any) -> None:
+        if kwargs.get("character_id") is not None:
+            hanging_up.set()  # the deletion has reached the calls, the placing still held
+        await hang_up(*args, **kwargs)
+
+    monkeypatch.setattr(backend.admissions, "call", call)
+    monkeypatch.setattr(backend.calls, "hang_up", deleting_her)
+    async with open_browser() as browser:
+        placing = asyncio.create_task(browser.call(client, conversation_id=conversation_id))
+        deleted: asyncio.Task[httpx.Response] | None = None
+        try:
+            await asyncio.wait_for(letting_in.wait(), TIMEOUT)
+            deleted = asyncio.create_task(client.delete("/api/characters/kogane"))
+            await asyncio.wait_for(hanging_up.wait(), TIMEOUT)
+            may_go_on.set()
+            assert (await deleted).status_code == 204
+            assert placing.done()  # settled before the deletion returned, never served
+            res = await placing
+        finally:  # however it went, nothing is left being placed or deleting
+            may_go_on.set()
+            await placing
+            if deleted is not None:
+                await deleted
+
+    assert res.status_code == 500
+    assert res.json()["detail"] == "无法建立通话"
+    assert backend.calls.in_progress == 0
+
+
+async def test_deleting_a_character_while_her_offer_is_being_answered_cancels_the_call(
+    make_client: ClientFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """Kogane's call is held being answered as she is deleted: the connection made for it
+    is let go of, and the call is never served."""
+    client = make_client(FakeLLM())
+    conversation_id = await start_conversation(client, "kogane")
+    backend = backend_of(client)
+    disconnect = SmallWebRTCConnection.disconnect
+    closed: list[SmallWebRTCConnection] = []
+
+    async def watched(connection: SmallWebRTCConnection) -> None:
+        closed.append(connection)
+        await disconnect(connection)
+
+    answer = backend.calls._answer
+    answering, may_answer = asyncio.Event(), asyncio.Event()
+
+    async def held_answer(request: Any, serve: Any) -> dict | None:
+        answering.set()
+        await may_answer.wait()
+        return await answer(request, serve)
+
+    hang_up = backend.calls.hang_up
+    hanging_up = asyncio.Event()
+
+    async def deleting_her(*args: Any, **kwargs: Any) -> None:
+        if kwargs.get("character_id") is not None:
+            hanging_up.set()
+        await hang_up(*args, **kwargs)
+
+    monkeypatch.setattr(SmallWebRTCConnection, "disconnect", watched)
+    monkeypatch.setattr(backend.calls, "_answer", held_answer)
+    monkeypatch.setattr(backend.calls, "hang_up", deleting_her)
+    async with open_browser() as browser:
+        placing = asyncio.create_task(browser.call(client, conversation_id=conversation_id))
+        deleted: asyncio.Task[httpx.Response] | None = None
+        try:
+            await asyncio.wait_for(answering.wait(), TIMEOUT)
+            deleted = asyncio.create_task(client.delete("/api/characters/kogane"))
+            await asyncio.wait_for(hanging_up.wait(), TIMEOUT)
+            may_answer.set()
+            assert (await deleted).status_code == 204
+            assert placing.done()  # settled before the deletion returned, never served
+            res = await placing
+        finally:  # however it went, nothing is left being placed or deleting
+            may_answer.set()
+            await placing
+            if deleted is not None:
+                await deleted
+
+    assert res.status_code == 500
+    assert res.json()["detail"] == "无法建立通话"
+    assert backend.calls.in_progress == 0
+    assert len(closed) == 1  # the connection made for the cancelled call was let go of
+
+
+async def test_a_call_cancelled_just_after_being_answered_lets_go_of_the_connection(
+    make_client: ClientFactory, monkeypatch: pytest.MonkeyPatch
+):
+    """The request is cancelled just after the offer was answered, for a role deleted
+    meanwhile: the connection made for it is let go of all the same."""
+    client = make_client(FakeLLM())
+    conversation_id = await start_conversation(client, "kogane")
+    backend = backend_of(client)
+    disconnect = SmallWebRTCConnection.disconnect
+    closed: list[SmallWebRTCConnection] = []
+
+    async def watched(connection: SmallWebRTCConnection) -> None:
+        closed.append(connection)
+        await disconnect(connection)
+
+    answer = backend.calls._answer
+    answering, may_answer, answered = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def held_answer(request: Any, serve: Any) -> dict | None:
+        answering.set()
+        await may_answer.wait()
+        res = await answer(request, serve)
+        answered.set()
+        await asyncio.Event().wait()  # held after answering, until the request is cancelled
+        return res
+
+    hang_up = backend.calls.hang_up
+    hanging_up = asyncio.Event()
+
+    async def deleting_her(*args: Any, **kwargs: Any) -> None:
+        if kwargs.get("character_id") is not None:
+            hanging_up.set()
+        await hang_up(*args, **kwargs)
+
+    monkeypatch.setattr(SmallWebRTCConnection, "disconnect", watched)
+    monkeypatch.setattr(backend.calls, "_answer", held_answer)
+    monkeypatch.setattr(backend.calls, "hang_up", deleting_her)
+    async with open_browser() as browser:
+        placing = asyncio.create_task(browser.call(client, conversation_id=conversation_id))
+        deleted: asyncio.Task[httpx.Response] | None = None
+        try:
+            await asyncio.wait_for(answering.wait(), TIMEOUT)
+            deleted = asyncio.create_task(client.delete("/api/characters/kogane"))
+            await asyncio.wait_for(hanging_up.wait(), TIMEOUT)
+            may_answer.set()
+            await asyncio.wait_for(answered.wait(), TIMEOUT)
+            placing.cancel()  # the browser left just after the offer was answered
+            with pytest.raises(asyncio.CancelledError):
+                await placing
+            assert (await deleted).status_code == 204
+        finally:  # however it went, nothing is left being placed or deleting
+            may_answer.set()
+            if not placing.done():
+                placing.cancel()
+            with suppress(asyncio.CancelledError):
+                await placing
+            if deleted is not None:
+                await deleted
+
+    assert backend.calls.in_progress == 0
+    assert len(closed) == 1  # the connection made for it was let go of as it was cancelled

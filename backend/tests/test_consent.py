@@ -33,13 +33,6 @@ async def test_until_they_agree_new_users_are_sent_to_agree_first(
         await client.get("/api/profile"),
         await client.get("/api/memories"),
         await client.get("/api/characters/mano/affinity"),
-        await client.get("/api/gifts/catalog"),
-        await client.get("/api/gifts"),
-        await client.get("/api/bar"),
-        await client.post("/api/bar/visits", json={}),
-        await client.post("/api/bar/visits/any/serves", json={"method": "bottle", "bottle": "rum"}),
-        await client.delete("/api/bar/visits/any"),
-        await client.post("/api/gifts/draws", json={}),
         await client.get("/api/ice-servers"),
         await client.get("/api/account"),
     ]:

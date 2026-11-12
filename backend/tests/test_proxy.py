@@ -218,7 +218,7 @@ async def test_the_environments_proxy_plays_no_part(
 ):
     for name in ("NO_PROXY", "no_proxy"):
         monkeypatch.delenv(name, raising=False)
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         monkeypatch.setenv(name, proxy.url)
     async with httpx.AsyncClient() as anyone:  # as any other request, it would go through it
         await anyone.get(provider.url)

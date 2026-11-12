@@ -22,7 +22,7 @@ import pytest
 
 from eidolon.config import JevSettings, Settings, UsageLimits
 from eidolon.llm import LLMError
-from tests.conftest import CharacterConfig, ClientFactory
+from tests.conftest import Characters, ClientFactory
 from tests.fakes import (
     FAKE_JUDGE,
     FakeClock,
@@ -42,7 +42,7 @@ OUT_OF_LINE = level(1, out_of_line=True)
 
 
 @pytest.fixture
-def characters(characters: CharacterConfig) -> CharacterConfig:
+def characters(characters: Characters) -> Characters:
     """Mano and Kogane, and Meguru."""
     return characters.add("meguru", "八宮めぐる", "# 人设\n你是八宮めぐる。")
 

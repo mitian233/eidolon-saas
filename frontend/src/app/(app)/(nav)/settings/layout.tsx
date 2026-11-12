@@ -13,7 +13,6 @@ import { settingsCategory, settingsGroups, settingsHref, settingsSwitches, shown
 import { cn } from "@/lib/utils";
 import {
   AboutIcon,
-  AppearanceIcon,
   CyclesIcon,
   DataPackageIcon,
   MemoriesIcon,
@@ -36,7 +35,6 @@ const ICONS = {
   "reach-outs": ReachOutsIcon,
   moments: MomentsIcon,
   cycles: CyclesIcon,
-  appearance: AppearanceIcon,
   "own-keys": OwnKeysIcon,
   "sign-in": SignInIcon,
   "data-package": DataPackageIcon,

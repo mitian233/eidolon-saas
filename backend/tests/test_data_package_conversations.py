@@ -5,9 +5,8 @@ deployment in the order they happened, merged with what is there: the newest con
 her current one, wherever it began. One already there is passed over whole; one with a
 character not there is skipped, and the user told. Driven through the API: what a package
 holds by unzipping it, what an import did by the read endpoints; her hanging up, ending one,
-a gift and a call put in the database as recorded elsewhere."""
+a call put in the database as recorded elsewhere."""
 
-import json
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -51,7 +50,7 @@ REPLY = ["<ja>[小声で]はい</ja><zh>好的</zh>"]
 
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
-    """Affinity and gifts on, judged by the judge model."""
+    """Affinity on, judged by the judge model."""
     return replace(settings, judge=FAKE_JUDGE, affinity_and_gifts=True)
 
 
@@ -67,20 +66,6 @@ def deployment(make_client: ClientFactory, settings: Settings, tmp_path: Path, n
 
 def database(tmp_path: Path, name: str) -> Path:
     return tmp_path / f"{name}.db"
-
-
-def give_pudding(database: Path, conversation: str) -> None:
-    """Record the user's giving her a pudding she liked, now, raising her affinity, as giving
-    would."""
-    affinity = {"up": True, "tier_changed": False, "tier": "trust", "cooldown": False,
-                "thawed": False}
-    with sqlite3.connect(database) as db:
-        db.execute(
-            "INSERT INTO conversation_events"
-            " (conversation_id, kind, created_at, affinity, gift_id, liked)"
-            " VALUES (?, 'gift', ?, ?, 'pudding', 1)",
-            (conversation, datetime.now(UTC).isoformat(), json.dumps(affinity)),
-        )
 
 
 def keep_call(database: Path, conversation: str, seconds: float) -> None:
@@ -130,7 +115,6 @@ async def test_conversations_move_to_another_deployment_as_they_were(
     end(at_here, ended)
     given = await start_conversation(here)
     await send_turn(here, given, "给你布丁")
-    give_pudding(at_here, given)
     keep_call(at_here, given, 75.5)
     titled = await start_conversation(here)
     for text in ("第一句", "第二句", "第三句"):
@@ -139,7 +123,6 @@ async def test_conversations_move_to_another_deployment_as_they_were(
     await send_turn(here, kogane, "你好")
     assert (await listed(here))[0][0] == TITLE
     there = deployment(make_client, settings, tmp_path, "there", REPLY, REPLY)
-    friend = deployment(make_client, settings, tmp_path, "there", user="friend")
 
     package = await export(here, "conversations")
     _, manifest, data = unzipped(package)
@@ -171,9 +154,6 @@ async def test_conversations_move_to_another_deployment_as_they_were(
     )
     affinity = await there.get("/api/characters/mano/affinity")
     assert affinity.json()["tier"] == "trust"
-    gifts, friends = (await there.get("/api/gifts")).json(), (await friend.get("/api/gifts")).json()
-    assert (gifts["backpack"], gifts["reset_cards"]) == ([], 0)
-    assert gifts["draws"] == friends["draws"]
     # The newest of each of hers is her current one, to go on in.
     for character in ("mano", "kogane"):
         current = (await hers(there, character))[0]["id"]
@@ -325,27 +305,6 @@ async def test_conversations_with_someone_not_here_are_skipped_and_the_user_told
     assert await told_in(client) == {"制作人住在大阪": None, "制作人养了猫": "2"}
 
 
-async def test_a_gift_not_in_the_catalog_here_is_left_out_and_the_conversation_goes_on(
-    make_client: ClientFactory, settings: Settings, tmp_path: Path
-):
-    client = deployment(make_client, settings, tmp_path, "here", REPLY)
-    at = "2026-09-01T08:30:00.000000+00:00"
-    gift = {"kind": "gift", "created_at": at, "affinity": None, "liked": True}
-
-    res = await import_package(client, conversations_package(packaged_conversation(
-        "1", "2026-09-01",
-        events=[gift | {"gift_id": "pudding"}, gift | {"gift_id": "golden-crown"}],
-    )), "conversations")
-
-    assert res.json()["conversations"] == 1
-    [conversation] = await hers(client)
-    assert [e.get("gift_id") for e in await record(client, conversation["id"])] == [
-        None, None, "pudding",
-    ]
-    assert (await send_turn(client, conversation["id"], "还在吗"))[-1]["type"] == "done"
-    assert [e.get("kind") for e in await record(client, conversation["id"])][-2:] == [None, None]
-
-
 async def test_a_memory_says_which_conversation_it_was_told_in_until_that_is_deleted(
     make_client: ClientFactory, settings: Settings, tmp_path: Path
 ):
@@ -389,39 +348,6 @@ UNWELL = {
 }
 """Her being unwell since two days before, just before the user's words in
 `packaged_conversation("…", "2026-09-01")`."""
-
-
-def be_unwell(database: Path, conversation: str, first_day: str, days_ago: int) -> None:
-    """Record her being unwell in the conversation, now, as her first turn in her period
-    would."""
-    with sqlite3.connect(database) as db:
-        db.execute(
-            "INSERT INTO conversation_events"
-            " (conversation_id, kind, created_at, first_day, days_ago)"
-            " VALUES (?, 'unwell', ?, ?, ?)",
-            (conversation, datetime.now(UTC).isoformat(), first_day, days_ago),
-        )
-
-
-async def test_her_being_unwell_moves_as_it_was(
-    make_client: ClientFactory, settings: Settings, tmp_path: Path
-):
-    here = deployment(make_client, settings, tmp_path, "here", REPLY)
-    conversation = await start_conversation(here)
-    be_unwell(database(tmp_path, "here"), conversation, "2026-08-30", 2)
-    await send_turn(here, conversation, "你好")
-    there = deployment(make_client, settings, tmp_path, "there")
-
-    package = await export(here, "conversations")
-    _, manifest, data = unzipped(package)
-    [packaged] = data["conversations"][0]["events"]
-    imported = await import_package(there, package, "conversations")
-
-    assert manifest["format"] == data_package.FORMAT
-    assert packaged == UNWELL | {"created_at": packaged["created_at"]}
-    assert imported.status_code == 200, imported.text
-    assert await records(there) == await records(here)
-    assert (await records(there))[0][0]["kind"] == "unwell"
 
 
 async def test_conversations_not_in_the_format_are_refused(

@@ -13,13 +13,14 @@ from weakref import WeakKeyDictionary
 
 import pytest
 
-from eidolon.characters import Character, load_characters
+from dataclasses import replace
+
+from eidolon.characters import Character
 from eidolon import memory
 from eidolon.data_access import Database
 from eidolon.llm import ChatLLM
 from eidolon.memory import Memories, MemoryTurn, memory_query
 from eidolon.store import Conversation, Message, Segment, Store, add_turn
-from tests.conftest import CharacterConfig
 from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeReranker
 from tests.test_shared_memory import CAT, TRIP, memorized
 
@@ -42,7 +43,9 @@ class World:
     async def made(cls, db: Database, characters: dict[str, Character]) -> "World":
         """The world of the store in `db`, the producer made in it."""
         store = Store(db)
-        return cls(db, store, characters, (await store.create_user("producer")).id)
+        producer = (await store.create_user("producer")).id
+        owned = {id: replace(c, owner_id=producer) for id, c in characters.items()}
+        return cls(db, store, owned, producer)
 
     async def conversation(self, character_id: str, user_id: str | None = None) -> Conversation:
         return await self.store.create_conversation(user_id or self.producer, character_id)
@@ -54,10 +57,13 @@ class World:
 
 
 @pytest.fixture
-async def world(tmp_path: Path, characters: CharacterConfig) -> AsyncIterator[World]:
+async def world(tmp_path: Path) -> AsyncIterator[World]:
     db = Database(tmp_path / "eidolon.db")
     try:
-        yield await World.made(db, load_characters(characters.path))
+        yield await World.made(db, {
+            "mano": Character("mano", "櫻木真乃", "简介", "v1", "# 人设"),
+            "kogane": Character("kogane", "月岡恋鐘", "简介", "v2", "# 人设"),
+        })
     finally:
         await db.close()
 
@@ -142,7 +148,6 @@ async def test_what_the_user_told_mano_reaches_kogane_as_hearsay(
 
     line = line_of(section, CAT)
     assert "櫻木真乃" in line and "转述" in line
-    assert "（2026年9月25日，制作人对櫻木真乃说的" in line
 
 
 async def test_a_memory_told_to_the_character_herself_is_not_hearsay(
@@ -174,9 +179,33 @@ async def test_a_memory_told_to_a_character_since_removed_is_hearsay_from_anothe
     [cat] = await memories.entries(world.producer)
     await memories.aclose()
 
-    assert "听事务所的另一位偶像说" in line_of(section, CAT)
+    assert "转述" in line_of(section, CAT)  # hearsay, the removed character's name not revealed
     assert (cat.source_character_id, cat.source_character_name) == ("mano", None)
 
+
+
+async def test_a_memory_from_another_owners_character_never_reveals_its_name(
+    world: World, make_memories: MemoriesFactory
+):
+    earlier = make_memories(memorized(CAT))
+    await tell(earlier, world, await world.conversation("mano"), "我家的猫叫小白哦")
+    await earlier.entries(world.producer)  # written down
+    foreign = {
+        "mano": replace(world.characters["mano"], owner_id="someone-else"),
+        "kogane": world.characters["kogane"],
+    }
+    memories = Memories(
+        world.db, foreign, lambda: NOW,
+        embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
+    )
+
+    section = await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？")
+    [cat] = await memories.entries(world.producer)
+    await memories.aclose()
+
+    assert "櫻木真乃" not in section
+    assert "转述" in line_of(section, CAT)
+    assert cat.source_character_name is None
 
 async def test_one_users_memories_never_reach_another_user(
     world: World, make_memories: MemoriesFactory
@@ -212,7 +241,7 @@ async def test_the_background_model_reads_the_exchange_and_what_is_already_remem
     assert "我家的猫叫小白哦" in first and "櫻木真乃" in first
     assert "2026年9月25日" in first  # so relative dates can be written down as dates
     assert "我家的猫叫小白哦" in second and "下周六我要去北海道出差" in second
-    assert CAT in second.split("# 制作人和")[0]  # already remembered, not written down again
+    assert CAT in second.split("# 用户和")[0]  # already remembered, not written down again
     # Written down twice, remembered once, newest first.
     assert [m.text for m in listed] == [TRIP, CAT]
 
@@ -413,7 +442,7 @@ DOG = "制作人养了一只狗"
 
 def known(prompt: str) -> dict[str, int]:
     """The number of each memory the background model was shown as already remembered."""
-    section = prompt.split("# 已经记住的事")[1].split("# 制作人和")[0]
+    section = prompt.split("# 已经记住的事")[1].split("# 用户和")[0]
     numbered = (line.partition(". ") for line in section.splitlines())
     return {text: int(number) for number, _, text in numbered if number.isdigit()}
 

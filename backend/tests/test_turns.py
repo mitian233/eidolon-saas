@@ -19,7 +19,7 @@ from eidolon.llm import ToolCall
 from eidolon.own_keys import BroughtKeys
 from eidolon.reply_format import SegmentComplete, SpeechDelta
 from eidolon.store import Conversation, Store
-from tests.conftest import store_in
+from tests.conftest import Characters, store_in
 from tests.fakes import (
     HANG,
     FakeBackgroundLLM,
@@ -37,10 +37,14 @@ REPLY = ["<ja>ほわっ、</ja><zh>哇，</zh>"]
 class Turns:
     """A conversation with Mano and the engine that takes its turns."""
 
-    def __init__(self, settings: Settings, store: Store, conversation: Conversation) -> None:
+    def __init__(
+        self, settings: Settings, store: Store, conversation: Conversation,
+        characters: Characters | None = None,
+    ) -> None:
         self._settings = settings
         self._store = store
         self.conversation = conversation
+        self._characters = characters
 
     async def take(
         self,
@@ -56,7 +60,9 @@ class Turns:
         to stop a moment after that segment is complete, by when it is waiting on the
         model or a tool. Any other keyword is a script for the deployer's models or an
         outside service to use (see `fakes.build_faked`)."""
-        backend = build_faked(self._settings, llm, clock=lambda: NOW, **services)
+        backend = build_faked(
+            self._settings, llm, clock=lambda: NOW, characters=self._characters, **services
+        )
         stop = asyncio.Event()
         events = []
         try:
@@ -78,16 +84,18 @@ class Turns:
 
 
 @asynccontextmanager
-async def turns_in(settings: Settings) -> AsyncIterator[Turns]:
+async def turns_in(
+    settings: Settings, characters: Characters | None = None
+) -> AsyncIterator[Turns]:
     """Turns in a new conversation of a new user with Mano."""
     async with store_in(settings.database_path) as store:
         user = await store.create_user("producer")
-        yield Turns(settings, store, await store.create_conversation(user.id, "mano"))
+        yield Turns(settings, store, await store.create_conversation(user.id, "mano"), characters)
 
 
 @pytest.fixture
-async def turns(settings: Settings) -> AsyncIterator[Turns]:
-    async with turns_in(settings) as turns:
+async def turns(settings: Settings, characters: Characters) -> AsyncIterator[Turns]:
+    async with turns_in(settings, characters) as turns:
         yield turns
 
 

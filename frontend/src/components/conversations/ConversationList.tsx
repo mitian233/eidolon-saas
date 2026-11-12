@@ -6,15 +6,12 @@ import { SignInButton } from "@/components/app/FailureNotice";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
-import { LetterButton, UnreadLetterMark } from "@/components/letter/LetterButton";
-import { useLetters } from "@/components/letter/LetterProvider";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { copy } from "@/i18n";
 import type { Character } from "@/lib/api";
 import { showTime } from "@/lib/callTime";
 import { arrange, dayOf, previewOf, type ListRow, type Preview } from "@/lib/conversationList";
-import { unreadFrom } from "@/lib/letter";
 import { pin, setShown, unpin } from "@/lib/listPreferences";
 import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
@@ -42,10 +39,8 @@ export function ConversationList({ selectedId }: { selectedId: string | null }) 
   const now = useMinute();
   const [query, setQuery] = useState("");
   const [isFilterOpen, setFilterOpen] = useState(false);
-  const { letters } = useLetters();
   const keep = [selectedId, call?.characterId].filter((id): id is string => !!id);
-  const unreadLetters = unreadFrom(letters);
-  const shown = characters && arrange(characters, latest, { preferences, query, keep, onScreen, unreadLetters });
+  const shown = characters && arrange(characters, latest, { preferences, query, keep, onScreen });
   const hiddenCount = shown?.hiddenCount ?? 0;
   // 搜索时隐藏的人照样出现，「已隐藏 n 位」和全部隐藏的空状态只在没有搜索时出现。
   const showsHidden = query.trim() === "" && hiddenCount > 0;
@@ -54,7 +49,6 @@ export function ConversationList({ selectedId }: { selectedId: string | null }) 
     <div className="flex h-full flex-col bg-background text-foreground">
       <header className="flex shrink-0 items-center gap-2 pt-3 pr-2 pb-2 pl-4">
         <h1 className="flex-1 text-list-title">{t.title}</h1>
-        <LetterButton />
         <ServiceStatusButton />
         <Announcements userId={account?.id ?? null} />
       </header>
@@ -153,7 +147,7 @@ export function ConversationList({ selectedId }: { selectedId: string | null }) 
  * 右键、触屏长按、菜单键或 Shift+F10 打开行菜单（中性色）：置顶或取消置顶，在列表中隐藏或显示。
  */
 function Row({
-  row: { character, isPinned, isHidden, isUnseen, hasUnreadLetter },
+  row: { character, isPinned, isHidden, isUnseen },
   preview,
   call,
   isSelected,
@@ -209,7 +203,6 @@ function Row({
           <span className="flex items-baseline gap-2">
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
               <span className="min-w-0 truncate text-row-name">{character.name}</span>
-              {hasUnreadLetter && <UnreadLetterMark />}
             </span>
             {((preview && !call) || isPinned) && (
               <span className="flex shrink-0 items-center gap-1 text-meta text-muted-foreground tabular-nums">

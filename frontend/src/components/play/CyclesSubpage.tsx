@@ -49,7 +49,6 @@ import {
 import { toFailure } from "@/lib/failure";
 import { playTitle } from "@/lib/playCards";
 import { closedPlayRedirect, playHref } from "@/lib/playRoute";
-import { shortName } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
 import {
@@ -321,7 +320,7 @@ function AvatarStrip({
           )}
         >
           <MarkedAvatar name={c.name} src={c.avatar_url} />
-          <span className="w-full truncate px-1 text-center text-meta">{shortName(c)}</span>
+          <span className="w-full truncate px-1 text-center text-meta">{c.name}</span>
         </button>
       ))}
       {noMatch && <p className="self-center px-2 text-body text-muted-foreground">{copy.conversationList.noMatch}</p>}

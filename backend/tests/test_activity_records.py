@@ -49,6 +49,7 @@ from tests.test_embedding import Answer, scripted
 from tests.test_retrieval_services import ranked
 from tests.test_service_status import backend_of
 from tests.test_delete_account import rows_mentioning, user_id
+from tests.conftest import character_id
 from tests.test_llm_protocols import recorded, serving
 from tests.test_openai_compat import RECORDED_STREAM
 from tests.test_own_llm import LLM, MINE
@@ -115,7 +116,7 @@ async def test_the_dashboard_counts_turns_by_how_they_turned_out_and_says_nothin
     failed = await send_turn(producer, conversation_id, "在吗")
     await leave_turn(producer, conversation_id, "你好", after="delta")  # once asked
     refused = await post_turn(producer, conversation_id)
-    await send_turn(friend, await start_conversation(friend, "kogane"), "早上好")
+    await send_turn(friend, await start_conversation(friend, character_id("kogane", "friend")), "早上好")
     board = await dashboard(admin)
 
     assert (succeeded[-1]["type"], failed[-1]["type"], refused.status_code) == (
@@ -128,7 +129,7 @@ async def test_the_dashboard_counts_turns_by_how_they_turned_out_and_says_nothin
     assert board["active_users"] == 2
     assert turns["time_to_speak_ms"]["p50"] is not None
     assert [(c["character_id"], c["name"], c["turns"]) for c in board["characters"]] == [
-        ("mano", "櫻木真乃", 4), ("kogane", "月岡恋鐘", 1)
+        ("mano", "櫻木真乃", 4), ("kogane-friend", "月岡恋鐘", 1)
     ]
     assert sum(point["turns"] for point in board["trend"]) == 5
     # Each turn that reached the model called it once; only the one that failed failed.
@@ -327,7 +328,7 @@ async def test_deleting_a_user_keeps_the_numbers_but_not_who_it_was(
     conversation_id = await start_conversation(client)
     await send_turn(client, conversation_id, "在吗")
     await send_turn(client, conversation_id, "在吗")
-    await send_turn(friend, await start_conversation(friend), "在吗")
+    await send_turn(friend, await start_conversation(friend, character_id("mano", "friend")), "在吗")
     producer = user_id(settings.database_path, "producer")
     before = await dashboard(admin)
 
@@ -464,6 +465,7 @@ async def test_the_dashboard_shows_an_llm_at_every_effort_on_one_row_with_its_fi
     make_client: ClientFactory, settings: Settings, github: FakeIdentityProvider
 ):
     clock = FakeClock()
+    assert settings.chat_llm is not None
     high = replace(settings, chat_llm=replace(settings.chat_llm, reasoning_effort="high"))
     thinking = make_client(FakeLLM(REPLY, REPLY), settings=high, clock=clock)
     unset = make_client(
@@ -475,7 +477,7 @@ async def test_the_dashboard_shows_an_llm_at_every_effort_on_one_row_with_its_fi
     conversation_id = await start_conversation(thinking)
     await send_turn(thinking, conversation_id, "在吗")
     await send_turn(thinking, conversation_id, "在吗")
-    await send_turn(unset, await start_conversation(unset), "在吗")
+    await send_turn(unset, await start_conversation(unset, character_id("mano", "friend")), "在吗")
     board = await dashboard(admin)
 
     [chat] = [h for h in board["health"] if h["service"] == "chat_llm"]
@@ -517,32 +519,6 @@ async def test_a_database_from_before_first_words_were_timed_takes_them_now(
     assert chat["first_token_ms"] == {"p50": None, "p95": None}
 
 
-async def test_a_database_from_before_reach_outs_were_answered_has_none_answered(
-    make_client: ClientFactory, settings: Settings, github: FakeIdentityProvider
-):
-    """Reach-outs recorded before had no column for whether they were answered: none were."""
-    with sqlite3.connect(settings.database_path) as db:
-        db.execute(
-            "CREATE TABLE activity_records (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT"
-            " NOT NULL, user_id TEXT, anonymous_id TEXT, character_id TEXT NOT NULL,"
-            " started_at REAL NOT NULL, result TEXT NOT NULL, own_keys INTEGER NOT NULL"
-            " DEFAULT 0, time_to_speak_ms REAL, call_id INTEGER, duration_s REAL, end_reason"
-            " TEXT, affinity_level INTEGER, out_of_line INTEGER, manipulation INTEGER, cooled"
-            " INTEGER, ended_conversation TEXT)"
-        )
-        db.execute(
-            "INSERT INTO activity_records (kind, anonymous_id, character_id, started_at, result)"
-            " VALUES ('reach_out', 'someone', 'mano', ?, 'success')",
-            ((START - timedelta(hours=1)).timestamp(),),
-        )
-
-    admin = await admin_client(make_client, github, FakeClock())
-
-    assert (await dashboard(admin))["reach_outs"] == {
-        "succeeded": 1, "failed": 0, "answered_share": 0,
-    }
-
-
 async def test_an_llm_call_records_how_much_of_its_input_hit_the_cache(tmp_path: Path):
     async with activity_in(tmp_path / "eidolon.db") as activity:
         origin = llm_origin("chat_llm", LLMSettings("http://llm.invalid/v1", "k", "m"))
@@ -576,7 +552,7 @@ async def test_the_dashboard_shows_each_llms_cache_hit_rate(
     conversation_id = await start_conversation(told)
     await send_turn(told, conversation_id, "在吗")
     await send_turn(told, conversation_id, "在吗", own_llm=LLM)
-    await send_turn(untold, await start_conversation(untold), "在吗")
+    await send_turn(untold, await start_conversation(untold, character_id("mano", "friend")), "在吗")
     board = await dashboard(admin)
 
     chat, own = health(board, "chat_llm"), health(board, "chat_llm", own_key=True)

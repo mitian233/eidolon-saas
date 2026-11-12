@@ -16,7 +16,7 @@ import {
   todayIn,
 } from "@/lib/calendar";
 
-type Idol = { id: string; name: string; birthday: string };
+type Idol = { id: string; name: string; birthday: string | null };
 
 const MANO: Idol = { id: "mano", name: "櫻木真乃", birthday: "04-25" };
 const MADOKA: Idol = { id: "madoka", name: "樋口円香", birthday: "10-27" };
@@ -59,6 +59,10 @@ describe("某一天的事", () => {
   it("两位同一天生日都列出来，按偶像顺序", () => {
     expect(on("2026-10-27")).toEqual(["madoka", "koito"]);
     expect(on("2026-10-27", data({ characters: [KOITO, MADOKA] }))).toEqual(["koito", "madoka"]);
+  });
+
+  it("没设生日的角色不出现在生日里", () => {
+    expect(on("2026-04-25", data({ characters: [{ ...MANO, birthday: null }, MADOKA] }))).toEqual([]);
   });
 
   it("角色生日、我的生日、节假日碰在一天时按这个顺序", () => {

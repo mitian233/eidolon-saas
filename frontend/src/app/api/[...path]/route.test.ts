@@ -19,7 +19,7 @@ describe("forwarding /api/* to the backend", () => {
     vi.unstubAllGlobals();
   });
 
-  it("passes on what the browser needs to cache an avatar", async () => {
+  it("passes on what the browser needs to cache an image", async () => {
     backendAnswers(
       () =>
         new Response("jpeg", {
@@ -31,7 +31,7 @@ describe("forwarding /api/* to the backend", () => {
         }),
     );
 
-    const res = await get("characters/mano/avatar");
+    const res = await get("sponsor/image");
 
     expect(res.headers.get("cache-control")).toBe("public, max-age=86400");
     expect(res.headers.get("etag")).toBe('"abc"');
@@ -40,7 +40,7 @@ describe("forwarding /api/* to the backend", () => {
   it("asks the backend whether the browser's copy is still current, and passes on its 304", async () => {
     const fetch = backendAnswers(() => new Response(null, { status: 304, headers: { etag: '"abc"' } }));
 
-    const res = await get("characters/mano/avatar", { "if-none-match": '"abc"' });
+    const res = await get("sponsor/image", { "if-none-match": '"abc"' });
 
     const sent = new Headers(fetch.mock.calls[0][1].headers);
     expect(sent.get("if-none-match")).toBe('"abc"');

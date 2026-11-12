@@ -326,10 +326,6 @@ export type GridItem =
   | { kind: "empty"; cell: Cell; when: When }
   | { kind: "hidden"; cell: Cell };
 
-/** 日程里写她的地方（周视图的块、点格子的抽屉、月视图的清单）用的名字：短名，没有时全名。 */
-export function shortName(character: { name: string; short_name: string | null }): string {
-  return character.short_name ?? character.name;
-}
 
 /** 对话页更多菜单的「她的日程」去的地方：日历子页，「只看她」。 */
 export function herScheduleHref(characterId: string): string {

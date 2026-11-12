@@ -6,7 +6,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
 import { Popover, PopoverContent, PopoverHeader, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
 import { copy } from "@/i18n";
-import { unitsOf } from "@/lib/conversationList";
 import { setShown, showAll } from "@/lib/listPreferences";
 import { FilterIcon } from "@/theme/icons";
 
@@ -23,7 +22,7 @@ type Props = {
 
 /**
  * 搜索框右边的筛选按钮和它打开的面板（DESIGN.md「Conversation list」）：宽屏是挂在按钮下面的 Popover，
- * 窄屏是从底部弹出的 Drawer。面板按组合分组列出所有人，组标题前是三态勾选框；勾选立即生效，没有确定键。
+ * 窄屏是从底部弹出的 Drawer。面板列出所有人，每人一行勾选框；勾选立即生效，没有确定键。
  * 有人被隐藏时，按钮右上角有一个中性色的小点。
  */
 export function ListFilter({ isOpen, onOpenChange, hiddenCount }: Props) {
@@ -82,45 +81,27 @@ export function ListFilter({ isOpen, onOpenChange, hiddenCount }: Props) {
   );
 }
 
-/** 按组合分组的勾选清单：组标题前是三态勾选框，组内每人一行勾选框、小头像、名字。 */
+/** 勾选清单：每人一行勾选框、小头像、名字。 */
 function Groups() {
   const { characters, preferences, tidy } = useDirectory();
   if (!characters) return null;
   const hidden = preferences.hidden;
   return (
-    <div className="flex flex-col gap-2">
-      {unitsOf(characters).map(({ unit, members }) => {
-        const ids = members.map((c) => c.id);
-        const shownCount = ids.filter((id) => !hidden.includes(id)).length;
-        return (
-          <section key={unit ?? ""} className="flex flex-col">
-            <label className="flex items-center gap-3 py-2 font-medium">
-              <Checkbox
-                checked={shownCount === ids.length}
-                indeterminate={shownCount > 0 && shownCount < ids.length}
-                onCheckedChange={(checked) => tidy((p) => setShown(p, ids, checked))}
-              />
-              {unit ?? t.noUnit}
-            </label>
-            <ul>
-              {members.map((c) => (
-                <li key={c.id}>
-                  <label className="flex items-center gap-3 py-1.5 pl-7">
-                    <Checkbox
-                      checked={!hidden.includes(c.id)}
-                      onCheckedChange={(checked) => tidy((p) => setShown(p, [c.id], checked))}
-                    />
-                    <span aria-hidden className="flex">
-                      <MarkedAvatar name={c.name} src={c.avatar_url} size="sm" />
-                    </span>
-                    <span className="min-w-0 truncate">{c.name}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </section>
-        );
-      })}
-    </div>
+    <ul className="flex flex-col">
+      {characters.map((c) => (
+        <li key={c.id}>
+          <label className="flex items-center gap-3 py-1.5">
+            <Checkbox
+              checked={!hidden.includes(c.id)}
+              onCheckedChange={(checked) => tidy((p) => setShown(p, [c.id], checked))}
+            />
+            <span aria-hidden className="flex">
+              <MarkedAvatar name={c.name} src={c.avatar_url} size="sm" />
+            </span>
+            <span className="min-w-0 truncate">{c.name}</span>
+          </label>
+        </li>
+      ))}
+    </ul>
   );
 }

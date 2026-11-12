@@ -7,11 +7,10 @@ import pytest
 
 from eidolon.delivery_cues import spoken_by, voiced, without_cues
 from eidolon.reply_format import (
-    DIRECTED_FORMAT_INSTRUCTIONS,
-    FORMAT_INSTRUCTIONS,
     ReplyParser,
     SegmentDelta,
     SpeechDelta,
+    format_instructions,
 )
 from tests.conftest import ClientFactory, store_in
 from tests.fakes import FakeBackgroundLLM, FakeLLM
@@ -22,7 +21,7 @@ from tests.test_text_turn import send_turn, start_conversation
 
 def parse(*chunks: str) -> tuple[list[tuple[int, str, str]], list[tuple[int, str]], ReplyParser]:
     """What a reply streamed in `chunks` shows and voices, and the parser that kept it."""
-    parser = ReplyParser()
+    parser = ReplyParser(bilingual=True)
     events = [e for chunk in chunks for e in parser.feed(chunk)] + parser.finish()
     shown = [(e.segment, e.lang, e.text) for e in events if isinstance(e, SegmentDelta)]
     voiced = [(e.segment, e.text) for e in events if isinstance(e, SpeechDelta)]
@@ -192,7 +191,10 @@ async def test_jev_reads_earlier_replies_without_cues():
 
 @pytest.mark.parametrize(
     ("instructions", "least"),
-    [(FORMAT_INSTRUCTIONS, 15), (DIRECTED_FORMAT_INSTRUCTIONS, 14)],
+    [
+        (format_instructions("s1", bilingual=True), 15),
+        (format_instructions("drama-3", bilingual=True), 14),
+    ],
     ids=["plain", "directed"],
 )
 def test_every_cue_the_format_instructions_show_the_model_is_voiced_and_not_shown(

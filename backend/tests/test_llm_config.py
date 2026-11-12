@@ -16,7 +16,6 @@ from eidolon.config import LLMProtocol, LLMSettings, Settings
 from eidolon.llm import ChatMessage, LLMError
 from eidolon.llm.openai_compat import OpenAICompatLLM
 from eidolon.llm.providers import check_chat_llm, open_llm
-from tests.conftest import CharacterConfig
 
 SLOTS = ("CHAT", "BACKGROUND")
 NAMES = (
@@ -67,6 +66,7 @@ async def test_each_model_slot_chooses_its_own_protocol(monkeypatch: pytest.Monk
     )
 
     settings = Settings.from_env()
+    assert settings.chat_llm is not None
 
     assert settings.chat_llm == LLMSettings(
         "https://chat.example/v1", "chat-key", "chat-model", protocol="anthropic"
@@ -86,6 +86,7 @@ async def test_the_protocol_defaults_to_chat_completions_and_the_background_foll
     set_chat_model(monkeypatch, "https://chat.example/v1")
 
     settings = Settings.from_env()
+    assert settings.chat_llm is not None
     assert await requested_path(settings.chat_llm) == "/v1/chat/completions"
 
     # The background model follows the chat model's protocol, but not its reply cap: a cap
@@ -93,6 +94,8 @@ async def test_the_protocol_defaults_to_chat_completions_and_the_background_foll
     monkeypatch.setenv("CHAT_LLM_PROTOCOL", "responses")
     monkeypatch.setenv("CHAT_LLM_MAX_TOKENS", "2048")
     settings = Settings.from_env()
+    assert settings.chat_llm is not None
+    assert settings.background_llm is not None
     assert settings.chat_llm.max_tokens == 2048
     assert settings.background_llm == LLMSettings(
         "https://chat.example/v1", "chat-key", "chat-model", "responses"
@@ -131,6 +134,8 @@ def test_each_slot_has_its_own_effort_and_extra_body(monkeypatch: pytest.MonkeyP
     )
 
     settings = Settings.from_env()
+    assert settings.chat_llm is not None
+    assert settings.background_llm is not None
 
     assert settings.chat_llm.reasoning_effort == "none"
     assert settings.chat_llm.extra_body == {"enable_thinking": False}
@@ -162,6 +167,9 @@ def test_the_chat_model_has_an_effort_of_its_own_for_calls(monkeypatch: pytest.M
     )
 
     settings = Settings.from_env()
+    assert settings.chat_llm is not None
+    assert settings.background_llm is not None
+    assert settings.chat_model is not None
 
     assert settings.chat_model.text.reasoning_effort == "high"
     assert settings.chat_model.call == replace(settings.chat_llm, reasoning_effort="none")
@@ -225,12 +233,10 @@ def serve(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
-    characters: CharacterConfig,
     base_url: str,
 ) -> tuple[int, str]:
     set_chat_model(monkeypatch, base_url)
     monkeypatch.setenv("EIDOLON_DATABASE_PATH", str(tmp_path / "eidolon.db"))
-    monkeypatch.setenv("EIDOLON_CHARACTERS_PATH", str(characters.path))
     code = main(["serve"])
     return code, capsys.readouterr().err
 
@@ -239,12 +245,11 @@ def test_the_server_does_not_start_with_a_chat_model_that_does_not_stream(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
-    characters: CharacterConfig,
     model_service: Callable[[Handler], str],
 ):
     url = model_service(lambda _: (200, "application/json", NOT_STREAMED))
 
-    code, err = serve(monkeypatch, capsys, tmp_path, characters, url)
+    code, err = serve(monkeypatch, capsys, tmp_path, url)
 
     assert code == 1
     assert "流式输出" in err
@@ -254,7 +259,6 @@ def test_the_server_does_not_start_with_a_chat_model_that_cannot_call_tools(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
-    characters: CharacterConfig,
     model_service: Callable[[Handler], str],
 ):
     def handle(body: dict) -> tuple[int, str, str]:
@@ -265,7 +269,7 @@ def test_the_server_does_not_start_with_a_chat_model_that_cannot_call_tools(
 
     url = model_service(handle)
 
-    code, err = serve(monkeypatch, capsys, tmp_path, characters, url)
+    code, err = serve(monkeypatch, capsys, tmp_path, url)
 
     assert code == 1
     assert "不支持工具调用" in err
@@ -276,12 +280,11 @@ def test_the_server_does_not_start_when_the_chat_model_is_unreachable(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
-    characters: CharacterConfig,
     model_service: Callable[[Handler], str],
 ):
     url = model_service(lambda _: (401, "application/json", '{"error":"invalid api key"}'))
 
-    code, err = serve(monkeypatch, capsys, tmp_path, characters, url)
+    code, err = serve(monkeypatch, capsys, tmp_path, url)
 
     assert code == 1
     assert "invalid api key" in err
@@ -526,3 +529,18 @@ async def test_a_model_that_cannot_call_tools_is_told_so_whatever_its_effort():
     # Answering without tools, it took the effort: the tools are what it refuses.
     with pytest.raises(LLMError, match="^对话模型不支持工具调用.*tools are not supported"):
         await check_chat_llm(llm, "high")
+
+
+def test_a_zero_key_deployment_configures_no_models(monkeypatch: pytest.MonkeyPatch):
+    settings = Settings.from_env()
+
+    assert settings.chat_llm is None
+    assert settings.background_llm is None
+    assert settings.chat_model is None
+
+
+def test_a_partly_configured_model_still_stops_the_start(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CHAT_LLM_BASE_URL", "https://chat.example/v1")
+
+    with pytest.raises(RuntimeError, match="CHAT_LLM_API_KEY"):
+        Settings.from_env()

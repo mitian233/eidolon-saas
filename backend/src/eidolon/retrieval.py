@@ -99,15 +99,14 @@ RECALL_EPISODE_CHARS = 3000
 
 RECALL_STORY_TOOL = Tool(
     name="recall_story",
-    description="回顾剧情：在你亲身经历过的原作剧情中查找和某件事有关的剧情，返回它在你的剧情目录中的位置"
-    "（哪张卡或哪个活动）和剧情内容。当制作人问起「那次……是怎么回事」这类过去的事、"
-    "而你想不起具体经过时使用；闲聊时不需要。",
+    description="回顾背景资料：查找和某件事有关的已有记录，返回资料中的位置和内容。"
+    "当用户问起过去的事、而你想不起具体经过时使用；闲聊时不需要。",
     parameters={
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "要回顾的事，写成一句概括，例如「拍写真集的那次」「W.I.N.G. 决赛」",
+                "description": "要回顾的事，写成一句概括，例如「第一次见面时的约定」",
             }
         },
         "required": ["query"],
@@ -116,13 +115,13 @@ RECALL_STORY_TOOL = Tool(
 
 
 _CANON_RULE = (
-    "剧情里没有记录制作人当时选了哪个选项，不要断言制作人当时说了什么或选了什么。"
+    "资料没有记录的用户言行或选择，不要断言用户当时说了什么或做了什么。"
 )
 _NOT_IN_STORY = (
-    "剧情库里没有记录这段经过，但这不等于这件事没有发生过。"
+    "背景资料里没有记录这段经过，但这不等于这件事没有发生过。"
     "不要编造经过，也不要说没有这回事；可以坦率地说细节记不太清了"
 )
-_CANNOT_RECALL = "暂时想不起来，现在查不到剧情。不要编造经过，可以坦率地说记不太清了。"
+_CANNOT_RECALL = "暂时想不起来，现在查不到资料。不要编造经过，可以坦率地说记不太清了。"
 
 
 Need = Literal["nothing", "memories", "references", "recall"]
@@ -152,7 +151,7 @@ class StoryReferences:
 
     kind: ReferenceKind = "episode"
     heading = "剧情"
-    guide = "「剧情」是你亲身经历过的原作剧情，可以像回忆往事一样自然地提起，不要照搬台词。" + _CANON_RULE
+    guide = "「剧情」是已提供的背景经历，可以像回忆往事一样自然地提起，不要照搬台词。" + _CANON_RULE
     label = "剧情库"
     unit = "段"
 
@@ -244,7 +243,7 @@ class ReferenceSources:
         headings = {s.kind: s.heading for s in self._sources}
         lines = [
             "# 回忆与资料",
-            "下面是和制作人这句话可能有关的内容，按相关程度排列，和话题无关的可以忽略。",
+            "下面是和用户这句话可能有关的内容，按相关程度排列，和话题无关的可以忽略。",
             *(f"- {s.guide}" for s in self._sources),
         ]
         for reference in references:
@@ -499,7 +498,7 @@ class Retrieval:
         corpus = self._sources.corpus
         episodes = await corpus.episodes(episode_ids) if episode_ids else []
         if not episodes and not found:
-            return f"没有想起和「{asked}」有关的剧情：{_NOT_IN_STORY}，或者问问制作人。"
+            return f"没有想起和「{asked}」有关的记录：{_NOT_IN_STORY}，或者向用户询问细节。"
         catalog = await corpus.catalog(character.id) if episodes else []
         return recall_prompt(asked, episodes, catalog, found)
 
@@ -602,19 +601,16 @@ def _transcript(episode: Episode) -> str:
 
 _JUDGE_QUESTION = {
     "type": "noul",
-    "instructions": "角色扮演对话中，角色是《偶像大师 闪耀色彩》283 事务所的偶像（或事务员），正在和制作人对话。"
-    "可检索的内容有三类：剧情，即她亲身经历过的原作剧情；角色资料，即关于她自己和身边人物的设定"
-    "（档案、人物关系等）；作品资料，即作品里的歌曲、唱片和演出（演唱者、发售日、曲目、"
-    "演出的日期、会场和出演者）。回答制作人最新的一句话，是否需要检索这些内容？",
+    "instructions": "角色按用户提供的人设与用户对话。可查找的内容是已提供的背景资料、"
+    "角色设定和相关经历。回答用户最新的一句话，是否需要查找这些内容？",
     "criteria": {
-        "true": "需要回忆过去的具体经历、提到具体的人物或事件、需要确认角色设定细节，"
-        "或问到具体的歌曲、唱片、演出",
+        "true": "需要回忆过去的具体经历、提到具体的人物或事件、需要确认角色设定或背景资料细节",
         "false": "只是寒暄、闲聊、情绪回应，或只凭上文就能回答",
     },
 }
 _RECALL_QUESTION = {
     "type": "noul",
-    "instructions": "制作人最新的一句话，是不是在问角色过去某一次具体经历的来龙去脉"
+    "instructions": "用户最新的一句话，是不是在问角色过去某一次具体经历的来龙去脉"
     "（例如「那次……是怎么回事」「还记得……那次吗」），需要回想那段经历的完整经过才能回答？",
     "criteria": {
         "true": "问的是过去某一次具体的事情、活动、工作或比赛的经过和当时的心情",
@@ -623,12 +619,12 @@ _RECALL_QUESTION = {
 }
 _ABOUT_PRODUCER_QUESTION = {
     "type": "noul",
-    "instructions": "角色扮演对话中，角色是《偶像大师 闪耀色彩》283 事务所的偶像（或事务员），正在和制作人对话。"
-    "制作人最新的一句话，是否说起或问起制作人自己的事（生活、近况、工作安排、计划、家人、宠物、喜好、"
-    "身体状况等），而制作人以前对偶像们说过的相关的事可能有助于回应？",
+    "instructions": "角色按用户提供的人设与用户对话。用户最新的一句话，是否说起或问起用户自己的事"
+    "（生活、近况、工作安排、计划、家人、宠物、喜好、身体状况等），而用户以前对自己创建的角色"
+    "说过的相关的事可能有助于回应？",
     "criteria": {
-        "true": "说起或问起制作人自己的生活、近况、计划、家人宠物、喜好，或提到以前对偶像说过的事",
-        "false": "只是打招呼、说偶像自己的事、问原作剧情或角色设定，与制作人自己的生活无关",
+        "true": "说起或问起用户自己的生活、近况、计划、家人宠物、喜好，或提到以前对角色说过的事",
+        "false": "只是打招呼、说角色自己的事、问背景资料或角色设定，与用户自己的生活无关",
     },
 }
 _QUESTIONS = {

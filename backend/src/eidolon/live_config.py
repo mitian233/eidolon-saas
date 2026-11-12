@@ -133,7 +133,7 @@ from eidolon.judge import (
 )
 from eidolon.llm import ChatLLM, ChatModels, LLMError
 from eidolon.llm.providers import check_chat_llm, check_chat_models
-from eidolon.own_keys import DeployerKeys, DeployerLease, KeyCheck, OwnKeyRejected
+from eidolon.own_keys import DeployerKeys, DeployerLease, KeyCheck, OwnKeyRejected, _no_hold
 from eidolon.qweather import QWeather, QWeatherFailed, private_key_body
 from eidolon.proxy import ProxyRoutes, Unreachable, reach as reach_provider
 from eidolon.rerank import DEFAULT_THRESHOLDS, RerankThresholds, thresholds_for
@@ -312,7 +312,12 @@ class _LLMItem(_Item):
     secrets = frozenset({"api_key"})
     efforts: tuple[str, ...] = ("reasoning_effort",)
 
-    def swappable(self) -> Swappable[Any, Any]:
+    def swappable(self) -> Swappable[Any, Any] | None:
+        """The client in effect now; None while the deployment configures no such model."""
+        raise NotImplementedError
+
+    def install(self, swappable: Swappable[Any, Any]) -> None:
+        """Put the first client of a model the deployment had none of into effect."""
         raise NotImplementedError
 
     def settings_of(self, values: Values) -> Any:
@@ -350,11 +355,19 @@ class _LLMItem(_Item):
 
     async def apply(self, values: Values, prepared: Any = None) -> None:
         settings = self.settings_of(values)
-        await self.swappable().replace(prepared or self.make(settings), settings)
+        client = prepared or self.make(settings)
+        swappable = self.swappable()
+        if swappable is None:
+            self.install(Swappable(client, settings))
+        else:
+            await swappable.replace(client, settings)
 
     async def retry(self, values: Values) -> Values:
+        swappable = self.swappable()
+        if swappable is None:
+            raise ConfigRejected("还没有配置这个模型")
         try:
-            await self.check(self.swappable().current, self.settings_of(values))
+            await self.check(swappable.current, self.settings_of(values))
         except LLMError as e:
             raise ConfigRejected(str(e)[:MAX_REASON_LENGTH]) from None
         return values
@@ -368,12 +381,15 @@ class _ChatLLM(_LLMItem):
     efforts = ("reasoning_effort", CALL_EFFORT)
 
     def env(self) -> Values:
-        return _llm_values(self.c.settings.chat_llm) | {
-            CALL_EFFORT: self.c.settings.call_reasoning_effort
-        }
+        llm = self.c.settings.chat_llm
+        values = _llm_values(llm) if llm is not None else {field: None for field in LLM_FIELDS}
+        return values | {CALL_EFFORT: self.c.settings.call_reasoning_effort}
 
-    def swappable(self) -> Swappable[ChatModels, ChatModelSettings]:
+    def swappable(self) -> Swappable[ChatModels, ChatModelSettings] | None:
         return self.c._chat
+
+    def install(self, swappable: Swappable[Any, Any]) -> None:
+        self.c._chat = swappable
 
     def settings_of(self, values: Values) -> ChatModelSettings:
         return _chat_model(values)
@@ -397,7 +413,7 @@ class _ChatLLM(_LLMItem):
         at its own effort and extra body unless the chat model was tried with them."""
         values, chat = await super().tried(values)
         memory = self.c._following(values)
-        if memory is None or memory == self.c._memory.settings:
+        if memory is None or (self.c._memory is not None and memory == self.c._memory.settings):
             return values, (chat, None)
         settings = self.settings_of(values)
         if any(
@@ -424,10 +440,14 @@ class _MemoryLLM(_LLMItem):
     name = MEMORY_LLM
 
     def env(self) -> Values:
-        return _llm_values(self.c.settings.background_llm)
+        llm = self.c.settings.background_llm
+        return _llm_values(llm) if llm is not None else {field: None for field in LLM_FIELDS}
 
-    def swappable(self) -> Swappable[ChatLLM, LLMSettings]:
+    def swappable(self) -> Swappable[ChatLLM, LLMSettings] | None:
         return self.c._memory
+
+    def install(self, swappable: Swappable[Any, Any]) -> None:
+        self.c._memory = swappable
 
     def settings_of(self, values: Values) -> LLMSettings:
         return _llm(values)
@@ -1161,9 +1181,13 @@ class LiveConfig:
 
         self._routes.replace(self.proxy_settings)
         chat = self.chat_model
-        self._chat = Swappable(clients.chat_models(chat), chat)
+        self._chat: Swappable[ChatModels, ChatModelSettings] | None = (
+            Swappable(clients.chat_models(chat), chat) if chat is not None else None
+        )
         memory = self.memory_llm
-        self._memory = Swappable(clients.memory_llm(memory), memory)
+        self._memory: Swappable[ChatLLM, LLMSettings] | None = (
+            Swappable(clients.memory_llm(memory), memory) if memory is not None else None
+        )
         self._judge: Swappable[JudgeModel, JudgeSettings] | None = None
         if (judge := self.judge_settings) is not None:
             self._judge = Swappable(clients.judge_model(judge), judge)
@@ -1174,14 +1198,17 @@ class LiveConfig:
         return self._cipher is not None
 
     @property
-    def chat_model(self) -> ChatModelSettings:
-        """The deployer's chat model in effect now."""
-        return _chat_model(self.effective(CHAT_LLM))
+    def chat_model(self) -> ChatModelSettings | None:
+        """The deployer's chat model in effect now; None on a zero-key deployment, where
+        every turn runs on the user's own key."""
+        values = self.effective(CHAT_LLM)
+        return _chat_model(values) if values["base_url"] else None
 
     @property
-    def memory_llm(self) -> LLMSettings:
-        """The deployer's memory model in effect now."""
-        return _llm(self.effective(MEMORY_LLM))
+    def memory_llm(self) -> LLMSettings | None:
+        """The deployer's memory model in effect now; None without one."""
+        values = self.effective(MEMORY_LLM)
+        return _llm(values) if values["base_url"] else None
 
     @property
     def judge_settings(self) -> JudgeSettings | None:
@@ -1300,11 +1327,14 @@ class LiveConfig:
         )
 
     def has_service(self, service: ServiceName) -> bool:
-        """Whether the deployment has `service` on the deployer's keys now: the LLMs always;
-        the others with their keys in effect, embedding and reranking as `.env` has them."""
+        """Whether the deployment has `service` on the deployer's keys now: the LLMs as
+        they are configured (a zero-key platform has none), the others with their keys in
+        effect, embedding and reranking as `.env` has them."""
         match service:
-            case "chat_llm" | "memory_llm":
-                return True
+            case "chat_llm":
+                return self.chat_model is not None
+            case "memory_llm":
+                return self.memory_llm is not None
             case "tts":
                 return bool(self.effective(TTS)["api_key"])
             case "stt":
@@ -1328,13 +1358,19 @@ class LiveConfig:
             return replace(settings, max_tokens=TRIAL_MAX_TOKENS, reasoning_effort=None)
 
         if service == "chat_llm":
-            models = self._clients.chat_models(ChatModelSettings(cheap(self.chat_model.text)))
+            chat = self.chat_model
+            if chat is None:
+                raise ConfigRejected("还没有配置对话模型")
+            models = self._clients.chat_models(ChatModelSettings(cheap(chat.text)))
             try:
                 yield models.text
             finally:
                 await models.aclose()
             return
-        memory = self._clients.memory_llm(cheap(self.memory_llm))
+        settings = self.memory_llm
+        if settings is None:
+            raise ConfigRejected("还没有配置后台模型")
+        memory = self._clients.memory_llm(cheap(settings))
         try:
             yield memory
         finally:
@@ -1425,9 +1461,9 @@ class LiveConfig:
         """The deployer's keys for a turn or call starting now, held until it releases
         them. Each model's requests are recorded as service calls to the model it is, and
         the judge model judges by its own thresholds, whatever replaces it meanwhile."""
-        chat = self._chat.lease()
-        memory = self._memory.lease()
-        held: list[Lease[Any, Any]] = [chat, memory]
+        chat = self._chat.lease() if self._chat is not None else None
+        memory = self._memory.lease() if self._memory is not None else None
+        held: list[Lease[Any, Any]] = [hold for hold in (chat, memory) if hold is not None]
         emotions = None
         if self._judge is not None:
             judge = self._judge.lease()
@@ -1443,15 +1479,16 @@ class LiveConfig:
         keys = DeployerKeys(
             metered_llm(
                 chat.client.text, self._activity, llm_origin("chat_llm", chat.settings.text)
-            ),
+            ) if chat is not None else None,
             metered_llm(
                 memory.client, self._activity, llm_origin("memory_llm", memory.settings)
-            ),
+            ) if memory is not None else None,
             self.stt_key, tts["api_key"], tts["model"],
-            emotions, hold_background=lambda: memory.again().release,
+            emotions,
+            hold_background=(lambda: memory.again().release) if memory is not None else _no_hold,
             call_llm=metered_llm(
                 chat.client.call, self._activity, llm_origin("chat_llm", chat.settings.call)
-            ),
+            ) if chat is not None else None,
         )
         return DeployerLease(keys, lambda: _release(held))
 
@@ -1615,8 +1652,10 @@ class LiveConfig:
 
     async def aclose(self) -> None:
         await self.qweather.aclose()
-        await self._chat.aclose()
-        await self._memory.aclose()
+        if self._chat is not None:
+            await self._chat.aclose()
+        if self._memory is not None:
+            await self._memory.aclose()
         if self._judge is not None:
             await self._judge.aclose()
 
@@ -1635,7 +1674,9 @@ class LiveConfig:
         """Whether the memory model is the chat model in effect: `.env` has it nowhere
         else, and the admin console does not set it apart."""
         env = self.settings
-        follows = all(
+        if env.chat_llm is None:
+            return env.background_llm is None and not self._in_effect(self._items[MEMORY_LLM])
+        follows = env.background_llm is None or all(
             getattr(env.background_llm, f) == getattr(env.chat_llm, f) for f in CONNECTION_FIELDS
         )
         return follows and not self._in_effect(self._items[MEMORY_LLM])
@@ -1660,7 +1701,13 @@ class LiveConfig:
         """Have the memory model, if it follows the chat model, on the one now in effect,
         unless it is already: on `prepared`, if it was made for it."""
         memory = self.memory_llm
-        if memory != self._memory.settings:
+        if memory is None:
+            if prepared is not None:
+                await prepared.aclose()
+            return
+        if self._memory is None:
+            self._memory = Swappable(prepared or self._clients.memory_llm(memory), memory)
+        elif memory != self._memory.settings:
             await self._memory.replace(prepared or self._clients.memory_llm(memory), memory)
         elif prepared is not None:
             await prepared.aclose()
@@ -1686,10 +1733,13 @@ class LiveConfig:
     def _proxy_targets(self) -> dict[ProxiedService, str]:
         """Where each of the deployer's services that is configured reaches its provider;
         users' own keys, whatever their providers, are not among them."""
-        targets: dict[ProxiedService, str] = {
-            "chat_llm": self.chat_model.text.base_url,
-            "memory_llm": self.memory_llm.base_url,
-        }
+        targets: dict[ProxiedService, str] = {}
+        chat = self.chat_model
+        if chat is not None:
+            targets["chat_llm"] = chat.text.base_url
+        memory = self.memory_llm
+        if memory is not None:
+            targets["memory_llm"] = memory.base_url
         judge = self.judge_settings
         if isinstance(judge, CloudflareJudgeSettings):
             targets["judge"] = CLOUDFLARE_API_URL
@@ -1834,7 +1884,8 @@ class LiveConfig:
             "domain": s.domain,
             "webrtc": {"ice_servers": ice, "turn": turn},
             "backup": _backup_shown(),
-            "paths": {"database": str(s.database_path), "characters": str(s.characters_path)},
+            "paths": {"database": str(s.database_path)}
+            | ({"characters": str(s.characters_path)} if s.characters_path is not None else {}),
             "embedding": embedding,
         }
         return [{"name": k, "value": values[k], "why": why} for k, why in READ_ONLY.items()]

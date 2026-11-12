@@ -10,7 +10,7 @@ import pytest
 
 from eidolon.config import Settings, UsageLimits
 from tests.browser import Browser, open_browser, until_gone
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, character_id
 from tests.fakes import FakeClock, FakeIdentityProvider, FakeLLM, FakeServiceClients, FakeSpeech
 from tests.test_live_config import CONFIG, REPLY, admin_client
 from tests.test_concurrent_calls import another_user
@@ -110,7 +110,7 @@ async def test_the_calls_at_once_saved_hold_from_the_next_call(
 
     saved = await client.put(LIMITS, json=ENV_LIMITS | {"concurrent_calls": 1})
     async with another_user(client, "hazuki") as other:
-        theirs = await start_conversation(other)
+        theirs = await start_conversation(other, character_id("mano", "hazuki"))
         refused = await other.get("/api/ice-servers", params={"conversation": theirs})
         await client.put(LIMITS, json=ENV_LIMITS | {"concurrent_calls": 0})
         unlimited = await other.get("/api/ice-servers", params={"conversation": theirs})

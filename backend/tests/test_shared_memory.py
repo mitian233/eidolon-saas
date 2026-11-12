@@ -30,7 +30,7 @@ def memorized(*texts: str) -> str:
 
 
 def memories_section(system: str) -> str:
-    return system[system.index("# 关于制作人的记忆") :] if "# 关于制作人的记忆" in system else ""
+    return system[system.index("# 关于用户的记忆") :] if "# 关于用户的记忆" in system else ""
 
 
 async def turn(client: httpx.AsyncClient, conversation_id: str, text: str) -> None:
@@ -135,4 +135,5 @@ def test_the_background_model_is_configured_apart_from_the_chat_model(
     assert settings.background_llm == LLMSettings(
         "https://chat.example/v1", "chat-key", "cheap-model"
     )
+    assert settings.chat_llm is not None
     assert settings.chat_llm.model == "chat-model"

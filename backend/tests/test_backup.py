@@ -25,8 +25,7 @@ from eidolon.config import Settings
 from eidolon.data_access import Database
 from eidolon.s3 import S3Settings
 from tests.conftest import Admin, aside, users_in
-from tests.fakes import START
-from tests.test_stand_upload import FakeBucket
+from tests.fakes import START, FakeBucket
 
 IDENTITY = pyrage.x25519.Identity.generate()
 PING = "https://ping.test/backup"

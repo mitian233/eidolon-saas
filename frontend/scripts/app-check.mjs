@@ -6,7 +6,7 @@
 //
 // 量这几项：
 //   1. `/login`、`/privacy` 在手机 4G 节流下的 LCP（几轮取中位数），每页不超过 2.5 秒才算通过。
-//      节流、视口和落地页检查（landing-check.mjs）相同，见 phone-4g.mjs。
+//      节流、视口见 phone-4g.mjs。
 //   2. 登录后的 `/conversations` 和一个对话页（第一位角色）的 LCP：只打印数字，不算通过与否，
 //      里面还掺着接口耗时。会话用开发登录取（后端要开 EIDOLON_DEV_LOGIN=1，会建一位叫 app-check 的用户并替它
 //      同意条款），或者把一个有效会话的 cookie 值放进环境变量 APP_SESSION。两者都没有时跳过。

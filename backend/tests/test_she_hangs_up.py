@@ -41,8 +41,6 @@ from tests.fakes import (
 from tests.test_activity_records import dashboard
 from tests.test_admin_users import ADMIN, admin_beside
 from tests.test_affinity import keep
-from tests.test_affinity_cooldown import PARTING
-from tests.test_affinity_prompt import about_now
 from tests.test_call_records import call_recorded
 from tests.test_call_turns import (  # noqa: F401
     INTERRUPTED_REPLY,
@@ -60,8 +58,6 @@ from tests.test_conversation_events import record, shape
 from tests.test_text_turn import start_conversation
 
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
-HANGING_UP = "说完这句你就挂断电话"
-WARNING = "再这样下去你就要挂电话了"
 UNTIL = (START + timedelta(days=1)).isoformat()
 """When a cooldown begun at 0 as the tests begin ends."""
 OUT_OF_LINE = level(1, out_of_line=True)
@@ -105,8 +101,6 @@ async def test_the_turn_that_cools_her_has_her_hang_up_once_she_has_said_it(
     recorded = await record(client, conversation)
 
     assert turn[-1]["type"] == "done"
-    assert HANGING_UP in about_now(llm)
-    assert PARTING not in about_now(llm)
     assert ended["reason"] == "cooldown"
     assert ended["cooldown_until"] == UNTIL
     assert ended["counts"] is True
@@ -149,10 +143,6 @@ async def test_out_of_line_twice_in_a_call_she_hangs_up_and_the_next_call_starts
                 await asyncio.sleep(0.05)
     recorded = await record(client, conversation)
 
-    assert HANGING_UP not in about_now(llm, 0)
-    assert WARNING in about_now(llm, 0)
-    assert HANGING_UP in about_now(llm, 1)
-    assert HANGING_UP not in about_now(llm, 2)
     assert ended["reason"] == "she_hung_up"
     assert "cooldown_until" not in ended
     assert again[-1]["type"] == "done"
@@ -172,10 +162,6 @@ async def test_hurt_turn_after_turn_she_warns_the_user_once_then_hangs_up(mano_c
 
     _, messages = await mano_call.run(llm, one_by_one(6), affinity=[level(1)] * 6)
 
-    assert [WARNING in about_now(llm, n) for n in range(6)] == [
-        False, False, True, False, False, False
-    ]
-    assert [HANGING_UP in about_now(llm, n) for n in range(6)] == [False] * 5 + [True]
     assert messages[-1]["type"] == "ended"
     assert messages[-1]["reason"] == "she_hung_up"
     assert "cooldown_until" not in messages[-1]
@@ -193,8 +179,6 @@ async def test_only_the_latest_turns_count_so_now_and_then_she_never_hangs_up(
     )
 
     assert "ended" not in kinds(messages)
-    assert [n for n in range(11) if WARNING in about_now(llm, n)] == [4]
-    assert not any(HANGING_UP in about_now(llm, n) for n in range(11))
 
 
 async def test_hanging_up_comes_before_the_turn_limit_the_same_turn_reaches(
@@ -224,9 +208,6 @@ async def test_a_turn_that_fails_neither_has_her_hang_up_nor_counts(mano_call: C
         "user", "done", "user", "error", "user", "done", "user", "done", "ended"
     ]
     assert messages[-1]["reason"] == "she_hung_up"
-    assert [HANGING_UP in about_now(llm, n) for n in range(4)] == [
-        False, True, False, True
-    ]
     assert shape(await record_of(mano_call))[-1] == "hung_up"
 
 
@@ -245,8 +226,6 @@ async def test_a_follow_on_has_the_whole_judged_afresh_and_she_hangs_up_only_if_
         affinity=[OUT_OF_LINE, OUT_OF_LINE, level(2)],
     )
 
-    assert HANGING_UP in about_now(llm, 1)
-    assert HANGING_UP not in about_now(llm, 2)
     assert "ended" not in kinds(messages)
     assert "hung_up" not in shape(await record_of(mano_call))
 

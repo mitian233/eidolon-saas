@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from eidolon.config import Settings, UsageLimits
-from tests.conftest import ClientFactory
+from tests.conftest import ClientFactory, character_id
 from tests.browser import open_browser
 from tests.fakes import START, FakeClock, FakeLLM, FakeSpeech
 from tests.test_text_turn import leave_turn, send_turn, start_conversation
@@ -66,7 +66,7 @@ async def test_all_of_a_users_devices_share_one_limit_and_other_users_have_their
 
     assert (await post_turn(desktop, conversation_id)).status_code == 429
     assert (await post_turn(phone, conversation_id)).status_code == 429
-    events = await send_turn(friend, await start_conversation(friend), "在吗")
+    events = await send_turn(friend, await start_conversation(friend, character_id("mano", "friend")), "在吗")
     assert events[-1]["type"] == "done"
 
 

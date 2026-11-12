@@ -14,8 +14,9 @@ import pytest
 from eidolon.assembly import Backend
 from eidolon.config import Settings, UsageLimits
 from tests.browser import TIMEOUT, Browser, open_browser, until_gone
-from tests.conftest import SITE, ClientFactory, sign_in
-from tests.fakes import FakeLLM
+from eidolon.sessions import SESSION_COOKIE
+from tests.conftest import COOKIE_DOMAIN, SITE, ClientFactory, aside, character_id, seed_characters
+from tests.fakes import FakeLLM, registry_of
 from tests.test_service_status import backend_of
 from tests.test_text_turn import start_conversation
 
@@ -28,13 +29,25 @@ def one_call_at_once(settings: Settings) -> Settings:
 
 
 def another_user(client: httpx.AsyncClient, name: str) -> httpx.AsyncClient:
-    """A client on the same backend as `client`, signed in as the user named `name`."""
+    """A client on the same backend as `client`, signed in as the user named `name`, who
+    owns the registry's characters under their own ids (`character_id`)."""
     backend: Backend = client._transport.app.state.backend  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def signed_in() -> httpx.Cookies:
+        now = backend.clock()
+        user = await backend.store.first_user_named(name) or await backend.store.create_user(name)
+        if user.consented_at is None:
+            await backend.store.consent(user.id, now)
+        await seed_characters(backend, user.id, registry_of(backend), suffix=f"-{name}")
+        cookies = httpx.Cookies()
+        cookies.set(SESSION_COOKIE, await backend.store.create_session(user.id, now), domain=COOKIE_DOMAIN)
+        return cookies
+
     return httpx.AsyncClient(
         transport=client._transport,
         base_url="http://test",
         headers=SITE,
-        cookies=sign_in(backend.store, name, backend.clock()),
+        cookies=aside(signed_in()),
     )
 
 
@@ -95,7 +108,7 @@ async def test_calls_at_once_are_limited_across_users(
     assert browser.pc_id is not None
 
     async with another_user(client, "hazuki") as other:
-        theirs = await start_conversation(other)
+        theirs = await start_conversation(other, character_id("mano", "hazuki"))
         asked = await other.get("/api/ice-servers", params={"conversation": theirs})
         async with open_browser() as second:
             refused = await second.call(other, conversation_id=theirs)
@@ -119,7 +132,7 @@ async def test_a_call_counts_from_being_placed(
     client = make_client(FakeLLM(), settings=one_call_at_once)
     mine = await start_conversation(client)
     async with another_user(client, "hazuki") as other, open_browser() as a, open_browser() as b:
-        theirs = await start_conversation(other)
+        theirs = await start_conversation(other, character_id("mano", "hazuki"))
         placed = await asyncio.gather(
             a.call(client, conversation_id=mine), b.call(other, conversation_id=theirs)
         )

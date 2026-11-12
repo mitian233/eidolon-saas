@@ -20,7 +20,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { copy } from "@/i18n";
 import { cueText } from "@/lib/affinity";
-import { photoImageUrl, type Character, type Look, type Outfit, type Photo, type Segment } from "@/lib/api";
+import { photoImageUrl, type Character, type Look, type Photo, type Segment } from "@/lib/api";
 import { endCard, type CallEnd } from "@/lib/callEnd";
 import { clock, showTime } from "@/lib/callTime";
 import { giftsHref } from "@/lib/gifts";
@@ -35,7 +35,6 @@ import {
   type MicNotice,
   type ShownCall,
 } from "@/lib/liveConversation";
-import type { StandDirection } from "@/lib/standAnimations";
 import { cn } from "@/lib/utils";
 import {
   CloseIcon,
@@ -56,7 +55,6 @@ import { Ja } from "@/theme/Ja";
 
 import { CueArrowIcon } from "./AffinityBadge";
 import { PhotoViewer } from "./PhotoViewer";
-import { Stand } from "./stand/Stand";
 import { useCallTime } from "./useCallTime";
 import { useProducerTimezone } from "./useProducerTimezone";
 
@@ -94,10 +92,6 @@ type Props = {
   photo: Photo | null;
   /** 刚刚一个回合让她的好感度有了变化，约 2.6 秒；状态行这时写这句话。 */
   affinityCue: AffinityCue | null;
-  /** 她的立绘该是什么样子；她没有立绘时用不上。 */
-  standDirection: StandDirection;
-  /** 立绘依次试的衣装：选中的那套，再是默认衣装；她没有立绘时用不上。 */
-  standOutfits: readonly Outfit[];
   onCollapse: () => void;
   onHangUp: () => void;
   onToggleMic: () => void;
@@ -130,7 +124,6 @@ const notOpen = () => NOT_OPEN;
 export function LiveCallLayer({
   live,
   character,
-  standOutfits,
   layerRef,
   isFullScreen,
   go,
@@ -138,7 +131,6 @@ export function LiveCallLayer({
 }: {
   live: LiveConversation;
   character: Character;
-  standOutfits: readonly Outfit[];
   layerRef: RefObject<HTMLElement | null>;
   isFullScreen: boolean;
   go: (href: string) => void;
@@ -173,8 +165,6 @@ export function LiveCallLayer({
       draft={snapshot.draft}
       photo={snapshot.callPhoto}
       affinityCue={snapshot.affinityCue}
-      standDirection={snapshot.stand}
-      standOutfits={standOutfits}
       onCollapse={() => live.collapse()}
       onHangUp={() => void live.hangUp()}
       onToggleMic={() => live.toggleMic()}
@@ -200,16 +190,14 @@ export function LiveCallLayer({
  * 通话层（DESIGN.md「Call layer」）：从它盖住的那一块（对话栏，或者别的外壳页面）底部整张滑上来，收起是同一个动作反过来（410ms、ease-call），
  * 减少动态效果时没有过渡。强制深色（`.dark`），文字白色、次要字 80% 白。
  *
- * 底是她的头像放大模糊（有背景图时换成清晰的背景图），上面压一层到 call.deep 的渐变。
- * 没有立绘时中部是 112px 头像、名字和状态行；她有立绘时（`character.stand`）立绘做底，名字和状态行缩进头部，
- * 底部压暗。台词放在底部的毛玻璃卡里，再下面是毛玻璃底栏；结束后台词卡换成同样毛玻璃的结束卡。
+ * 底是她的头像放大模糊，上面压一层到 call.deep 的渐变。中部是 112px 头像、名字和状态行。
+ * 台词放在底部的毛玻璃卡里，再下面是毛玻璃底栏；结束后台词卡换成同样毛玻璃的结束卡。
  * 她在这通电话里发来照片时，台词卡上方出一张小卡（电脑）或一颗胶囊（手机），结束卡上不带。
  * 底栏的打字键把底栏换成输入栏，打出去的话她照常用声音回（GLOSSARY.md「打断」「补充」）。
  */
 export function CallLayer(props: Props) {
   const { character, call, isCollapsed, isFullScreen, isReducedMotion, layerRef, typing } = props;
   const ended = call.phase === "ended";
-  const hasStand = Boolean(character.stand);
 
   // 收起输入栏回到底栏时，焦点落回打字键；通话结束带走的输入栏不算。
   const typeKey = useRef<HTMLButtonElement>(null);
@@ -253,7 +241,6 @@ export function CallLayer(props: Props) {
       )}
     >
       <Backdrop character={character} />
-      {hasStand && <StandStage {...props} />}
 
       <header className="relative grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-4 pt-4">
         <div className="flex justify-start">
@@ -277,12 +264,6 @@ export function CallLayer(props: Props) {
           )}
         </div>
         <div className="min-w-0 text-center">
-          {hasStand && (
-            <>
-              <h2 className="truncate text-header font-bold">{character.name}</h2>
-              <Status call={call} cue={props.affinityCue} name={character.name} />
-            </>
-          )}
         </div>
         <div className="flex justify-end">
           {!ended && (
@@ -299,15 +280,13 @@ export function CallLayer(props: Props) {
         </div>
       </header>
 
-      {!hasStand && (
-        <div className="relative flex flex-col items-center gap-3 pt-10 text-center">
-          <Ripple isOn={call.phase === "dialing"}>
-            <MarkedAvatar name={character.name} src={character.avatar_url} size="call" />
-          </Ripple>
-          <h2 className="mt-2 text-call-name">{character.name}</h2>
-          <Status call={call} cue={props.affinityCue} name={character.name} />
-        </div>
-      )}
+      <div className="relative flex flex-col items-center gap-3 pt-10 text-center">
+        <Ripple isOn={call.phase === "dialing"}>
+          <MarkedAvatar name={character.name} src={character.avatar_url} size="call" />
+        </Ripple>
+        <h2 className="mt-2 text-call-name">{character.name}</h2>
+        <Status call={call} cue={props.affinityCue} name={character.name} />
+      </div>
 
       <div
         className={cn(
@@ -340,24 +319,16 @@ export function CallLayer(props: Props) {
   );
 }
 
-/**
- * 底：没有背景图时她的头像放大、`blur-3xl`；有背景图时背景图清晰铺满。上面压一层从 25% 黑到
- * call.deep 混黑（`her-call-shade`）的渐变，白字的可读性全靠它（DESIGN.md「Call layer」）。
- */
+/** 底：她的头像放大模糊，上面压一层从 25% 黑到 call.deep 混黑的渐变，白字的可读性全靠它。 */
 function Backdrop({ character }: { character: Character }) {
-  const src = character.background_url ?? character.avatar_url;
   return (
     <>
-      {src && (
-        // 纯装饰的底图，不经 next/image：头像要整张放大模糊，背景图按 cover 铺满。
+      {character.avatar_url && (
         <img
-          src={src}
+          src={character.avatar_url}
           alt=""
           aria-hidden
-          className={cn(
-            "pointer-events-none absolute inset-0 size-full object-cover",
-            !character.background_url && "scale-125 blur-3xl",
-          )}
+          className="pointer-events-none absolute inset-0 size-full scale-125 object-cover blur-3xl"
         />
       )}
       <div aria-hidden className="pointer-events-none absolute inset-0 bg-linear-to-b from-black/25 to-her-call-shade" />
@@ -365,43 +336,6 @@ function Backdrop({ character }: { character: Character }) {
   );
 }
 
-/**
- * 立绘（DESIGN.md「Call layer」的「立绘」）：叠在底图和渐变之上、文字和按钮之下，不接收点击。
- * 只要她有立绘，一打电话就用这套布局，立绘晚到或者加载失败都不切回头像版，台词的位置不跳。
- * - 手机：占下方 80% 的高度，取景到膝，到了从下方升起。
- * - 电脑：铺满头部以下的整层，取景到腰，原地淡入。
- * 底部 50% 压一层到 call.deep 的渐变，台词卡和底栏落在衣服上也看得清。结束后立绘降到 40%。
- */
-function StandStage(props: Props) {
-  const { call, isCollapsed, isFullScreen, isReducedMotion, standOutfits, standDirection } = props;
-  return (
-    <>
-      <div
-        aria-hidden
-        className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-0 transition-opacity duration-500",
-          isFullScreen ? "h-[80%]" : "top-16",
-          call.phase === "ended" && "opacity-40",
-        )}
-      >
-        <Stand
-          // 每拨一次重新载入：上一通失败了，这一通再试一次（通话状态带着这是第几次拨号）。
-          key={call.dial}
-          outfits={standOutfits}
-          framing={isFullScreen ? "knees" : "waist"}
-          isPaused={isCollapsed}
-          entrance={isFullScreen && !isReducedMotion ? "rise" : "fade"}
-          direction={standDirection}
-          isReducedMotion={isReducedMotion}
-        />
-      </div>
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-linear-to-b from-transparent via-her-call-deep/88 via-55% to-her-call-deep"
-      />
-    </>
-  );
-}
 
 /**
  * 状态行（名字下面）：呼叫中是「正在呼叫」加三个依次闪的小点，通话中是计时，结束后是挂断图标加

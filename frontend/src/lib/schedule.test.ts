@@ -25,7 +25,6 @@ import {
   publishedAt,
   readDrafts,
   returnedNote,
-  shortName,
   startedNote,
   startsFor,
   type Job,
@@ -560,12 +559,6 @@ describe("「只看她」的地址", () => {
   });
 });
 
-describe("日程里她的名字", () => {
-  it("写短名，没有短名时写全名", () => {
-    expect(shortName({ name: "黛冬優子", short_name: "冬優子" })).toBe("冬優子");
-    expect(shortName({ name: "七草はづき", short_name: null })).toBe("七草はづき");
-  });
-});
 
 describe("往周", () => {
   const LAST = "2026-10-12";

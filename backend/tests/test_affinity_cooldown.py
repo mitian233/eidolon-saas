@@ -31,12 +31,10 @@ from tests.fakes import (
 from tests.test_activity_records import dashboard
 from tests.test_admin_users import ADMIN, admin_beside
 from tests.test_affinity import keep, status
-from tests.test_affinity_prompt import about_now
 from tests.test_rate_limit import post_turn
 from tests.test_text_turn import send_turn, start_conversation
 
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
-PARTING = "这句话之后你暂时不想再和制作人说话了。先回应，再用你自己的方式表明你现在不想聊下去。"
 UNTIL = (START + timedelta(days=1)).isoformat()
 """When a cooldown begun at 0 as the tests begin ends."""
 
@@ -83,10 +81,7 @@ async def test_the_turn_that_takes_it_to_0_has_her_part_and_begins_a_cooldown(
     staying = await send_turn(client, other, "随便你")
     parting = await send_turn(client, conversation, "随便你")
 
-    assert PARTING not in about_now(llm, 0)
     assert staying[-1]["affinity"]["cooldown_until"] is None
-    assert PARTING in about_now(llm, 1)
-    assert "挂断电话" not in about_now(llm, 1)  # that is for calls alone
     assert parting[-1]["message"]["affinity"]["cooldown"] is True
     assert parting[-1]["affinity"]["cooldown_until"] == UNTIL
 

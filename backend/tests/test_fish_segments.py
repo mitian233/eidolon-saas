@@ -30,12 +30,9 @@ from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 from websockets.frames import Close
 from websockets.protocol import State
 
-from eidolon.assembly import build
 from eidolon.call import FishTTS, SegmentCompleteFrame, SegmentTextFrame, SpeechServices
-from eidolon.config import FishAudioModel, Settings
+from eidolon.config import FishAudioModel
 from eidolon.readings import Reading
-from tests.conftest import CharacterConfig
-from tests.fakes import FakeServiceClients
 
 CONNECTION = 0.2
 """How long, in seconds, the fake Fish Audio takes to accept a connection."""
@@ -454,20 +451,3 @@ async def test_calls_speak_with_the_readings_whoever_s_key_they_are_on(monkeypat
     await run(*reply(1, ["櫻木真乃です。"]), fish=fish, tts=tts)  # pyright: ignore[reportArgumentType]
 
     assert fish.starts and all(start["pronunciation_dictionary"] == DICTIONARY for start in fish.starts)
-
-
-async def test_the_server_speaks_with_the_readings_file_beside_the_character_configuration(
-    characters: CharacterConfig, settings: Settings
-):
-    characters.write(
-        "readings.toml",
-        '[[readings]]\nwritten = "283"\nkana = "つばさ"\nphonemes = "tsu0ba1sa1"\n',
-    )
-
-    backend = build(settings, clients=FakeServiceClients())
-    try:
-        speech = backend.calls._speech  # pyright: ignore[reportPrivateUsage]
-        assert isinstance(speech, SpeechServices)
-        assert speech.readings == (Reading("283", "つばさ", "tsu0ba1sa1"),)
-    finally:
-        await backend.aclose()

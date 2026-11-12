@@ -1,7 +1,7 @@
-"""Deleting all of a user's data: once they confirm, their memories, conversations,
-producer profile, sign-in methods, sessions and usage are gone for good, from every table,
-and they are signed out everywhere. Signing in again with the same identity makes a new
-user; nobody else's data is touched."""
+"""Deleting all of a user's data: once they confirm, their characters, memories,
+conversations, producer profile, sign-in methods, sessions and usage are gone for good,
+from every table, and they are signed out everywhere. Signing in again with the same
+identity makes a new user; nobody else's data is touched."""
 
 import asyncio
 import sqlite3
@@ -16,6 +16,7 @@ from tests.browser import Browser
 from tests.conftest import (
     ClientFactory,
     agree_to_terms,
+    character_id,
     github_identity,
     sign_in_with,
 )
@@ -45,10 +46,10 @@ def memory_client(make_client: ClientFactory, user: str | None = "producer") -> 
     )
 
 
-async def use_everything(client: httpx.AsyncClient) -> None:
+async def use_everything(client: httpx.AsyncClient, character: str = "mano") -> None:
     """Leave data of every kind: a conversation, a memory, a profile and usage."""
     await client.put("/api/profile", json={"form_of_address": "小林"})
-    await send_turn(client, await start_conversation(client), "我家的猫叫小白哦")
+    await send_turn(client, await start_conversation(client, character), "我家的猫叫小白哦")
     assert len((await client.get("/api/memories")).json()) == 1
 
 
@@ -135,7 +136,7 @@ async def test_signing_in_again_after_deleting_is_a_new_user(
 
 async def test_other_users_keep_their_data(make_client: ClientFactory, settings: Settings):
     friend = memory_client(make_client, "friend")
-    await use_everything(friend)
+    await use_everything(friend, character_id("mano", "friend"))
     before = rows_mentioning(settings.database_path, user_id(settings.database_path, "friend"))
     mine = memory_client(make_client)
     await use_everything(mine)
@@ -145,6 +146,25 @@ async def test_other_users_keep_their_data(make_client: ClientFactory, settings:
     after = rows_mentioning(settings.database_path, user_id(settings.database_path, "friend"))
     assert after == before
     assert len((await friend.get("/api/memories")).json()) == 1
+
+
+async def test_deleting_removes_the_users_characters_from_the_shared_mapping(
+    make_client: ClientFactory,
+):
+    mine = make_client(FakeLLM())
+    friend = make_client(FakeLLM(), "friend")
+    backend = mine._transport.app.state.backend  # pyright: ignore[reportAttributeAccessIssue]
+    # Each client has a backend of its own over the one database: refresh mine's shared
+    # mapping from it, as the server does at startup, to see the friend's characters too.
+    await backend.character_repository.load()
+    assert {"mano", "kogane", "mano-friend", "kogane-friend"} <= set(backend.characters)
+
+    assert (await mine.post("/api/account/delete", json=DELETE)).status_code == 204
+
+    assert set(backend.characters) == {"mano-friend", "kogane-friend"}
+    assert [c["id"] for c in (await friend.get("/api/characters")).json()] == [
+        "mano-friend", "kogane-friend",
+    ]
 
 
 @pytest.mark.parametrize("body", [{}, {"confirm": False}], ids=["unconfirmed", "declined"])
@@ -208,7 +228,7 @@ async def test_a_reader_meanwhile_holds_up_no_one_elses_turn_and_the_log_is_empt
     monkeypatch.setattr(eidolon.data_access, "CHECKPOINT_RETRY", 0.1)
     client = make_client(FakeLLM(REPLY, REPLY))
     friend = another_user(client, "friend")
-    friends = await start_conversation(friend)
+    friends = await start_conversation(friend, character_id("mano", "friend"))
     await send_turn(client, await start_conversation(client), "早上好")
     database = settings.database_path
     reader = reading(database)

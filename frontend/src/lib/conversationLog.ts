@@ -174,7 +174,9 @@ function withDelta(entry: Entry, event: TurnEvent & { type: "delta" }): Entry {
   if (entry.kind !== "character") return entry;
   const segments = [...entry.segments];
   const current = segments[event.segment] ?? { ja: "", zh: "" };
-  segments[event.segment] = { ...current, [event.lang]: current[event.lang] + event.text };
+  // A plain-language reply (`text`) keeps its words in the primary `ja` field, subtitle empty.
+  const lang = event.lang === "text" ? "ja" : event.lang;
+  segments[event.segment] = { ...current, [lang]: current[lang] + event.text };
   return { ...entry, segments };
 }
 

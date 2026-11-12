@@ -1,7 +1,7 @@
 """Reranking retrieved text against the query: Qwen3-Reranker on SiliconFlow.
 
-What counts as relevant enough depends on the model, so each model the project has
-calibrated (`eidolon eval rerank`) has thresholds of its own.
+What counts as relevant enough depends on the model, so each model calibrated for the
+project has thresholds of its own.
 
 Reranking holds up a turn, so each request is given a few seconds and made again once if
 it fails in passing (`retry`)."""

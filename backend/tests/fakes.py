@@ -1,26 +1,20 @@
 """Test doubles for external services."""
 
 import asyncio
-import base64
-import html
 import hashlib
 import io
 import json
 import secrets
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-import re
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 import zipfile
-import zlib
 from http import HTTPStatus
-from pathlib import Path
-from urllib.parse import quote, unquote, urlencode
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
+from xml.sax.saxutils import escape
 
 import httpx
-from PIL import Image
-from PIL.PngImagePlugin import PngInfo
 from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
@@ -39,6 +33,7 @@ from pipecat.utils.time import time_now_iso8601
 from eidolon.assembly import Backend, build
 from eidolon.billing import bill
 from eidolon.call import SONIOX_FOLLOW_ON_TIMEOUT, Hearing
+from eidolon.characters import Character
 from eidolon.config import (
     BailianRegion,
     ChatModelSettings,
@@ -67,13 +62,11 @@ from eidolon.llm import (
     ToolCall,
 )
 from eidolon.llm.providers import check_chat_models
-from eidolon import official_cdn
-from eidolon.mirror import Mirror
 from eidolon.own_keys import OwnKeyRejected
+from eidolon.s3 import Bucket, S3Settings
 from eidolon.affinity_judge import LEVEL as AFFINITY_LEVEL
 from eidolon.affinity_judge import CONSIDERATE_QUESTION, MANIPULATION, OUT_OF_LINE
 from eidolon.judge import SAID, JudgeError
-from eidolon.photo_judge import PHOTO
 
 if TYPE_CHECKING:
     from eidolon.judge import JudgeModel
@@ -93,33 +86,6 @@ class FakeClock:
 
     def advance(self, **delta: float) -> None:
         self.now += timedelta(**delta)
-
-
-class FakeRandom:
-    """A random source giving the numbers it was given, in order: each must be less than
-    what it is asked for, and asking once they are all given fails, so a test sees a draw
-    taking more or fewer than it meant to."""
-
-    def __init__(self, *numbers: int) -> None:
-        self._numbers = list(numbers)
-
-    def __call__(self, below: int) -> int:
-        assert self._numbers, "the fake random source has no numbers left"
-        number = self._numbers.pop(0)
-        assert 0 <= number < below, f"{number} is not below {below}"
-        return number
-
-
-class SteadyRandom:
-    """A random source giving the same number each time, however often it is asked: for
-    tests that care what is drawn, not how many times (each ask must be for more)."""
-
-    def __init__(self, number: int) -> None:
-        self._number = number
-
-    def __call__(self, below: int) -> int:
-        assert self._number < below, f"{self._number} is not below {below}"
-        return self._number
 
 
 DEPLOYER_KEY = "test-key"
@@ -460,10 +426,8 @@ class FakeJudgeModel:
     questions with the probabilities in `retrieval`, her emotion with those in `emotion`
     and the nod with neither. Answers each turn's affinity questions as the next of
     `judgings` says, as having no effect once they run out, recording what the user said
-    (`affinity_asked`); and whether the user asks for a photo with the probability `photo`,
-    recording what they said (`photo_asked`). Records the key each request came with and what
-    it asked (`asked`: "turn", with or without affinity's questions and the photo's,
-    "affinity" for those alone, with or without the photo's, "photo" for that alone,
+    (`affinity_asked`). Records the key each request came with and what it asked
+    (`asked`: "turn", with or without affinity's questions, "affinity" for those alone,
     "emotion" or "check"), and everything it was told of each (`states`) and asked of it
     (`questions`)."""
 
@@ -475,8 +439,6 @@ class FakeJudgeModel:
         self.judgings: list[Judging] = []
         self.asked: list[tuple[str, str]] = []
         self.affinity_asked: list[str] = []
-        self.photo = 0.0
-        self.photo_asked: list[str] = []
         self.states: list[dict[str, Any]] = []
         self.questions: list[dict[str, dict]] = []
 
@@ -486,7 +448,6 @@ class FakeJudgeModel:
         kind = (
             "turn" if "recall" in questions
             else "affinity" if AFFINITY_LEVEL in questions
-            else "photo" if PHOTO in questions
             else "emotion" if "emotion" in questions
             else "check"
         )
@@ -502,9 +463,6 @@ class FakeJudgeModel:
             scripted = judging.answers()
             if CONSIDERATE_QUESTION in questions:
                 scripted[CONSIDERATE_QUESTION] = {"probabilities": {str(judging.considerate): 1.0}}
-        if PHOTO in questions:
-            self.photo_asked.append(state[SAID])
-            scripted |= {PHOTO: {"noul": self.photo}}
         if kind == "turn" and self.needs is not None:
             return await self.needs.need(state) | scripted
         if kind == "emotion" and self.feels is not None:
@@ -541,6 +499,14 @@ FAKE_JUDGE = JevSettings("fake-judge-key")
 """The judge model `.env` has when a test hands one a script: Jev, whose thresholds are
 the ones every model not calibrated judges by."""
 
+_test_registries: dict[int, Mapping[str, Character]] = {}
+
+
+def registry_of(backend: Backend) -> Mapping[str, Character]:
+    """The test registry `build_faked` was given for this backend, for seeding its
+    characters to more users (`conftest.seed_characters`); empty without one."""
+    return _test_registries.get(id(backend), {})
+
 
 def build_faked(
     settings: Settings,
@@ -550,19 +516,16 @@ def build_faked(
     background_llm: "FakeBackgroundLLM | None" = None,
     retrieval_judge: "FakeJudge | None" = None,
     emotion_judge: "FakeJudge | None" = None,
+    characters: Mapping[str, Character] | None = None,
     **services: Any,
 ) -> Backend:
     """`build`, with the deployer's models made by `clients` (new ones by default):
     playing the characters from `llm`'s script, writing down memories from
     `background_llm`'s, judging what turns need from `retrieval_judge`'s and her emotions
     from `emotion_judge`'s, either judging both if only one is given. With a judge
-    script, `.env` has the judge model `FAKE_JUDGE` unless it has one. Any other keyword
-    is an outside service passed on to `build`; the weather and QWeather are fakes failing
-    by default, so that no test asks the real ones as she talks, and Fish Audio's HTTP API a
-    `FakeFishAudio`, so that none asks it as she writes a letter."""
-    services.setdefault("weather_transport", FakeWeather(failing=True).transport())
-    services.setdefault("qweather_transport", FakeQWeather(failing=True).transport())
-    services.setdefault("fish_transport", httpx.MockTransport(FakeFishAudio().handle))
+    script, `.env` has the judge model `FAKE_JUDGE` unless it has one. `characters` seeds
+    the backend's shared mapping with the test registry's definitions, as the database
+    would at startup. Any other keyword is an outside service passed on to `build`."""
     clients = clients or FakeServiceClients()
     if llm is not None:
         clients.llm = llm
@@ -573,7 +536,11 @@ def build_faked(
         clients.judge.feels = emotion_judge or retrieval_judge
         if settings.judge is None:
             settings = replace(settings, judge=FAKE_JUDGE)
-    return build(settings, clients=clients, **services)
+    backend = build(settings, clients=clients, **services)
+    _test_registries[id(backend)] = characters or {}
+    if characters:
+        backend.characters.update(characters)
+    return backend
 
 
 class FakeBackgroundLLM:
@@ -612,103 +579,6 @@ class FakeBackgroundLLM:
 
     async def aclose(self) -> None:
         pass
-
-
-OpenAIAnswer = Literal["b64_json", "data_url", "url", "not_base64", "chat"]
-"""How the fake image service answers in OpenAI's image format: the picture as bare
-base64, as a `data:` URL, as a URL to download it from, as `b64_json` that is not base64,
-or in the shape of a chat completion, as a relay of the other kind would."""
-
-
-class FakeImageService:
-    """Stands in for image generation in NovelAI's own format (`POST /ai/generate-image`)
-    and in OpenAI's (`POST /images/generations`): records each request, with the key it
-    came on (`requests`: `key`, `url`, `body`), and answers with one PNG of the size asked
-    for, carrying the prompt in its metadata as NovelAI's pictures do (`METADATA` in it):
-    in NovelAI's format in a ZIP, in OpenAI's as `openai_answer` has it, a URL to it
-    downloaded from `DOWNLOAD` (each download in `downloads`, failing with
-    `download_status` if set). With a `gate`, it answers
-    only once the gate is open, as a service taking its time. It can answer amiss instead:
-    with an HTTP error (`status`, saying `error`), a picture of another `size`, or what is
-    not a ZIP (`garbled`)."""
-
-    METADATA = "fake NovelAI metadata"
-    DOWNLOAD = "https://files.image.test/picture.png"
-
-    def __init__(self) -> None:
-        self.requests: list[dict[str, Any]] = []
-        self.downloads: list[str] = []
-        self.gate: asyncio.Event | None = None
-        self.status: int | None = None
-        self.error = "fake image service error"
-        self.download_status: int | None = None
-        self.size: tuple[int, int] | None = None
-        self.garbled = False
-        self.openai_answer: OpenAIAnswer = "b64_json"
-        self._pictures: dict[str, bytes] = {}
-
-    def transport(self) -> httpx.AsyncBaseTransport:
-        return httpx.MockTransport(self.handle)
-
-    async def handle(self, request: httpx.Request) -> httpx.Response:
-        if request.method == "GET" and str(request.url) == self.DOWNLOAD:
-            self.downloads.append(str(request.url))
-            if self.download_status is not None:
-                return httpx.Response(self.download_status)
-            return httpx.Response(200, content=self._pictures.pop(self.DOWNLOAD))
-        openai = request.url.path.endswith("/images/generations")
-        assert request.method == "POST" and (
-            openai or request.url.path.endswith("/ai/generate-image")
-        )
-        body = json.loads(request.content)
-        self.requests.append({
-            "key": request.headers["authorization"].removeprefix("Bearer "),
-            "url": str(request.url),
-            "body": body,
-        })
-        if self.gate is not None:
-            await self.gate.wait()
-        if self.status is not None:
-            return httpx.Response(self.status, json={"error": self.error})
-        if self.garbled:
-            return httpx.Response(200, content=b"<html>not a ZIP</html>")
-        if openai:
-            asked_width, asked_height = (int(n) for n in body["size"].split("x"))
-            width, height = self.size or (asked_width, asked_height)
-            picture = png(width, height, f"{self.METADATA}: {body['prompt']}")
-            return self._openai(picture)
-        parameters = body["parameters"]
-        width, height = self.size or (parameters["width"], parameters["height"])
-        picture = png(width, height, f"{self.METADATA}: {body['input']}")
-        return httpx.Response(200, content=zipped({"image_0.png": picture}))
-
-    def _openai(self, picture: bytes) -> httpx.Response:
-        encoded = base64.b64encode(picture).decode()
-        match self.openai_answer:
-            case "b64_json":
-                data = {"b64_json": encoded}
-            case "data_url":
-                data = {"b64_json": f"data:image/png;base64,{encoded}"}
-            case "not_base64":
-                data = {"b64_json": "not base64!"}
-            case "url":
-                self._pictures[self.DOWNLOAD] = picture
-                data = {"url": self.DOWNLOAD}
-            case "chat":
-                content = f"![image](data:image/png;base64,{encoded})"
-                return httpx.Response(200, json={
-                    "choices": [{"message": {"role": "assistant", "content": content}}],
-                })
-        return httpx.Response(200, json={"created": 0, "data": [data]})
-
-
-def png(width: int, height: int, comment: str = "") -> bytes:
-    """A PNG of that size, carrying `comment` in its metadata."""
-    info = PngInfo()
-    info.add_text("Comment", comment)
-    out = io.BytesIO()
-    Image.new("RGB", (width, height), (250, 200, 210)).save(out, "PNG", pnginfo=info)
-    return out.getvalue()
 
 
 def zipped(files: dict[str, bytes]) -> bytes:
@@ -834,38 +704,6 @@ class FakeSpeech:
         self.checked.append((service, api_key))
         if api_key in self.rejects:
             raise OwnKeyRejected(self.rejects[api_key])
-
-
-class FakeFishAudio:
-    """Stands in for Fish Audio's text to speech over HTTP (`POST /v1/tts`, as the greetings
-    are voiced): records each request, with the key and model it came on, and answers with
-    audio naming what it said in which voice. A voice in `refuses` is answered with that
-    status, as Fish Audio answers a key without credit (402)."""
-
-    HOST = "api.fish.audio"
-
-    def __init__(self) -> None:
-        self.requests: list[dict[str, Any]] = []
-        self.refuses: dict[str, int] = {}
-
-    @staticmethod
-    def audio(text: str, voice_id: str) -> bytes:
-        return f"mp3: {text} ({voice_id})".encode()
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        assert request.method == "POST" and request.url.path == "/v1/tts", request.url
-        assert request.headers["content-type"] == "application/json"
-        body = json.loads(request.content)
-        self.requests.append({
-            "key": request.headers["authorization"].removeprefix("Bearer "),
-            "model": request.headers.get("model"),
-            **body,
-        })
-        if status := self.refuses.get(body.get("reference_id")):
-            return httpx.Response(status, json={"status": status, "message": "Insufficient balance"})
-        return httpx.Response(
-            200, content=self.audio(body["text"], body["reference_id"]), headers={"content-type": "audio/mpeg"}
-        )
 
 
 @dataclass
@@ -1111,7 +949,7 @@ class FakeJudge:
 
     async def feel(self, state: dict[str, Any]) -> dict[str, Any]:
         self.segments.append(AskedSegment(
-            state["角色"], state["制作人这句话"], state["这条回复前面几段"], state["这一段台词"],
+            state["角色"], state["用户这句话"], state["这条回复前面几段"], state["这一段台词"],
             state["这一段的中文字幕"],
         ))
         answer = self.emotions.pop(0) if self.emotions else feeling("calm")
@@ -1200,1055 +1038,6 @@ class KeywordReranker:
         return sorted(scored, key=lambda r: -r[1])[:top_n]
 
 
-class FakeEnzaAssets:
-    """Stands in for the game's own asset server: the files it is given, under the hash
-    of their path, JSON and atlases encrypted as it sends them, and the game's page, as
-    HTML, for a path it has no file for. Records the paths it sent. Set `down` to have it
-    unreachable, or `maintenance` to have it answer everything with the game's page."""
-
-    def __init__(self) -> None:
-        self.files: dict[str, bytes] = {}
-        self.sent: list[str] = []
-        self.down = False
-        self.maintenance = False
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        if self.down:
-            raise httpx.ConnectError("connection refused", request=request)
-        path = next((path for path in self.files if official_cdn.asset_url(path) == str(request.url)), None)
-        if path is None or self.maintenance:
-            return httpx.Response(200, text="<!DOCTYPE html><title>シャニマス</title>",
-                                  headers={"Content-Type": "text/html; charset=utf-8"})
-        self.sent.append(path)
-        content = self.files[path]
-        if path.endswith((".json", ".atlas")):  # gzipped up to a flush, never finished
-            gzipper = zlib.compressobj(wbits=zlib.MAX_WBITS | 16)
-            content = official_cdn.xor(gzipper.compress(content) + gzipper.flush(zlib.Z_SYNC_FLUSH))
-        return httpx.Response(200, content=content, headers={"ETag": f'W/"{hashlib.md5(content).hexdigest()}"'})
-
-
-class FakeShinyColorsDB:
-    """Stands in for the ShinyColorsDB API, the viewer that mirrors the game's scripts and
-    the idols' albums, answering as they do: idols and their cards, each card's episodes,
-    albums, and scripts; scripts and albums with an ETag, 304 to a request for a copy that
-    is still current and 404 for one it does not have. Records every request, and which
-    scripts (and albums, as `album/NN`) it sent in full. Set `down`
-    to have it unreachable, or `down_after` to have it go down after that many requests;
-    `viewer_down` to have only the viewer unreachable, `cdn_pages` to have the CDN answer
-    for a stand's file with an error page. Behind it, the game's asset server
-    (`official`), which has nothing unless given it."""
-
-    def __init__(self) -> None:
-        self.idols: dict[int, list[dict]] = {}
-        self.events: dict[str, list[dict]] = {}
-        self.scripts: dict[str, bytes] = {}
-        self.albums: dict[int, dict] = {}
-        self.requests: list[httpx.Request] = []
-        self.sent: list[str] = []
-        self.down = False
-        self.down_after: int | None = None
-        self.viewer_down = False
-        self.cdn_pages = False
-        self.official = FakeEnzaAssets()
-
-    def add_card(
-        self, idol: int, uuid: str, name: str, type: str, episodes: Sequence[tuple[int, str]] = ()
-    ) -> None:
-        self.idols.setdefault(idol, []).append(
-            {"cardUuid": uuid, "cardName": name, "cardType": type, "cardHash": "v1", "lastModified": "2026-09-01"}
-        )
-        title = "eventTitle" if type.startswith("P_") else "eventName"
-        self.events[uuid] = [{"eventId": event_id, title: t} for event_id, t in episodes]
-
-    def update_card(self, uuid: str) -> None:
-        """The card's data changes, as when the game revises it."""
-        for card in (c for cards in self.idols.values() for c in cards if c["cardUuid"] == uuid):
-            card["cardHash"] += "+"
-
-    def add_album(
-        self, idol: int, sections: dict[str, str], entries: Sequence[tuple[str, str, str, str]]
-    ) -> None:
-        """The idol's album: its sections (album type → title), and its entries, each
-        `(category, communication id, title, album type)`."""
-        self.albums[idol] = {
-            "id": str(idol),
-            "albumCommunicationTitles": [
-                {"albumType": album_type, "id": str(1000 + n), "title": title}
-                for n, (album_type, title) in enumerate(sections.items(), 1)
-            ],
-            "communications": [
-                {"albumType": album_type, "communicationCategory": category,
-                 "communicationId": number, "title": title, "isReleased": True}
-                for category, number, title, album_type in entries
-            ],
-        }
-
-    def add_script(self, script: str, frames: object) -> None:
-        self.scripts[script] = json.dumps(frames, ensure_ascii=False).encode()
-
-    def mirror(self) -> Mirror:
-        return Mirror(httpx.AsyncClient(transport=httpx.MockTransport(self._handle)), interval=0)
-
-    def _handle(self, request: httpx.Request) -> httpx.Response:
-        if request.url.host == "shinycolors.enza.fun":
-            return self.official.handle(request)
-        self.requests.append(request)
-        if self.down or (self.down_after is not None and len(self.requests) > self.down_after):
-            raise httpx.ConnectError("connection refused")
-        path, params = request.url.path, request.url.params
-        if request.url.host == "api.shinycolors.moe":
-            if path == "/info/idolList":
-                return httpx.Response(200, json=[{"idolId": i} for i in self.idols])
-            if path == "/info/idolInfo":
-                return httpx.Response(200, json={"cardLists": self.idols.get(int(params["idolId"]), [])})
-            if path in ("/info/pCardInfo", "/info/sCardInfo"):
-                key = "cardIdolEvents" if path == "/info/pCardInfo" else "cardSupportEvents"
-                return httpx.Response(200, json={key: self.events[params["cardId"]]})
-            return httpx.Response(404)
-        if request.url.host == "cf-static.shinycolors.moe":
-            if not path.startswith("/albums/"):  # the stands, which are another fake's
-                return httpx.Response(200 if self.cdn_pages else 404, text="<html>Not Found</html>")
-            idol = int(path.removeprefix("/albums/album/").removesuffix(".json"))
-            album = self.albums.get(idol)
-            body = None if album is None else json.dumps(album, ensure_ascii=False).encode()
-            return self._send(request, f"album/{idol:02d}", body)
-        if self.viewer_down:
-            raise httpx.ConnectError("connection refused")
-        script = path.removeprefix("/json/").removesuffix(".json")
-        return self._send(request, script, self.scripts.get(script))
-
-    def _send(self, request: httpx.Request, name: str, body: bytes | None) -> httpx.Response:
-        if body is None:
-            return httpx.Response(404, text="<html>Not Found</html>")
-        etag = f'"{hashlib.md5(body).hexdigest()}"'
-        if request.headers.get("If-None-Match") == etag:
-            return httpx.Response(304)
-        self.sent.append(name)
-        return httpx.Response(200, content=body, headers={"ETag": etag})
-
-
-@dataclass
-class GameCatalogFile:
-    """What `npm run game:catalog` saves from the logged-in game (`eidolon.game_catalog`),
-    built up a card, costume, stand and event at a time, and written to `path`. Names
-    are as the game writes them, with a space in the idol's."""
-
-    path: Path
-    fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
-    characters: list[dict] = field(default_factory=list)
-    cards: list[dict] = field(default_factory=list)
-    costumes: list[dict] = field(default_factory=list)
-    stands: dict[str, list[str]] = field(default_factory=dict)
-    events: list[dict] = field(default_factory=list)
-
-    def card(
-        self,
-        idol: int,
-        enza_id: str,
-        name: str,
-        kind: Literal["produce", "support"] = "produce",
-        rarity: int = 4,
-        episodes: Sequence[tuple[int, str]] | None = (),
-    ) -> "GameCatalogFile":
-        """A card; `episodes` None for one whose episodes have not been looked up yet."""
-        self._character(idol)
-        self.cards.append({
-            "id": enza_id, "characterId": idol, "name": name, "kind": kind, "rarity": rarity,
-            "hash": "h1", "openAt": 0, "eventCount": 1 if episodes is None else len(episodes),
-            "episodes": None if episodes is None else [{"id": str(i), "title": t} for i, t in episodes],
-        })
-        return self
-
-    def costume(self, idol: int, enza_id: str, name: str, group: str) -> "GameCatalogFile":
-        self.costumes.append({"id": enza_id, "characterId": idol, "name": name, "group": group})
-        return self
-
-    def stand(self, enza_id: str, *categories: str) -> "GameCatalogFile":
-        """The game's asset server has these stands of the card or costume."""
-        self.stands[enza_id] = list(categories)
-        return self
-
-    def event(self, number: int, name: str, episodes: int) -> "GameCatalogFile":
-        self.events.append({
-            "id": str(100 + number), "name": name,
-            "episodes": [{"id": f"4001{number:03d}{e:02d}", "title": f"第{e}話"} for e in range(1, episodes + 1)],
-        })
-        return self
-
-    def write(self) -> Path:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({
-            "version": 1, "fetchedAt": self.fetched_at.isoformat(), "characters": self.characters,
-            "cards": self.cards, "costumes": self.costumes, "stands": self.stands, "events": self.events,
-        }, ensure_ascii=False), encoding="utf-8")
-        return self.path
-
-    def _character(self, idol: int) -> None:
-        if all(c["id"] != idol for c in self.characters):
-            self.characters.append({"id": idol, "name": f"idol {idol}"})
-
-
-@dataclass
-class LantisRelease:
-    """A release on Lantis's Shiny Colors site, as its page shows it."""
-
-    slug: str
-    """The page's path segment, e.g. laca-25301."""
-    title: str
-    date: str
-    """The 発売日 line as the page writes it: 2026/9/16."""
-    catalog: str
-    artist: str
-    """The アーティスト line."""
-    index: list[str]
-    """The track list, a paragraph each, its lines as the page writes them, e.g.
-    ["1．ヒカリのdestination\n歌：イルミネーションスターズ\n作詞：…"]."""
-    artist_members: str | None = None
-    """The line of idols under the アーティスト line, if the page has one."""
-    banner_date: str | None = None
-    """The date over the title (2026.09.16); by default the 発売日's."""
-
-
-@dataclass
-class FujiDisc:
-    """A disc in ふじわらはじめ's database: its name, and its tracks, each a name, its
-    units (name and members), its idols and its flags (orig, gamever, offvocal)."""
-
-    tax_id: int
-    name: str
-    tracks: list[tuple[str, list[tuple[str, list[str]]], list[str], list[str]]]
-
-
-@dataclass
-class CmsLive:
-    """An article in the idolmaster portal CMS's LIVE-EVENT category, with the fields
-    the import reads, as the API writes them."""
-
-    id: str
-    title: str
-    brands: list[str]
-    """Brand codes: SHINYCOLORS, SIDEM, …; a joint live has several."""
-    dspdate: str
-    """The display text of its days: 「2027年6月5日(土)、6日(日)」, a line each."""
-    place: str
-    """Its venue, or a tour's, a line each headed by the city: 「名古屋：日本ガイシホール」."""
-    url: str | None = None
-    """Its page, `event_url`; None for a `detail_page` article, which has `url_name`."""
-    url_name: str | None = None
-    article_type: str = "url_link"
-
-
-@dataclass
-class OldSiteEvent:
-    """An event on the old official site's page of its year."""
-
-    name: str
-    dates: str
-    """The 日時 cell's text, e.g. 「2019年3月9日(土) 開場17:00」."""
-    place: str
-    link: str | None = None
-
-
-@dataclass
-class WikiLive:
-    """A live on wikiwiki's live pages, rendered as the wiki renders it."""
-
-    title: str
-    """The heading, with a prefix like 「(開催中止) 」 if the wiki gives one."""
-    dates: list[str]
-    """The 開催日時 lines: 「2027年6月5日(土) 16:00開場」."""
-    performers: list[tuple[str | None, list[str]]]
-    """Its performers: each day's heading (「2027年6月5日(土)」, or None for a list
-    without days) and its lines as HTML: 「関根 瞳（櫻木 真乃役）/ …」, a unit's name,
-    a struck performer made by `struck`."""
-    page: str = "ライブイベント情報"
-    """The page it is on: the main one, or a yearly log 「ライブイベント情報/開催情報log01」."""
-    name: str | None = None
-    """Its full name (公演名), if not the heading's."""
-
-
-def struck(performer: str, note: str, news: str | None = None) -> str:
-    """A performer the wiki strikes out, with a footnote: `note` and a link to `news`."""
-    link = f' <a class="ext" href="{news}" rel="nofollow">{news}</a>' if news else ""
-    tooltip = html.escape(f"<p>{note}{link}</p>", quote=True)
-    return (
-        f"<del>{performer}</del> "
-        f'<a id="notetext_1"  class="note_super tooltip" data-tooltip-content="{tooltip}">*1</a>'
-    )
-
-
-@dataclass
-class ImasDbShow:
-    """One show's setlist on an imas-db live page."""
-
-    heading: str
-    """Its heading: 「セットリスト」, 「DAY1 セットリスト」, 「昼公演」, 「公演内容(全公演共通)」."""
-    rows: list[tuple[str, str, str]]
-    """Each row's number (empty for an MC), its title cell and its performers cell, as HTML
-    (`imas_idol`, `imas_unit`, … and plain text like 「全員」)."""
-    date: str | None = None
-    """A date line in the show's own section, as M@STER EXPO's page has, if any."""
-
-
-@dataclass
-class ImasDbPage:
-    """A page of imas-db's live records (`song/event/<file>`)."""
-
-    file: str
-    title: str
-    date: str | None
-    """The line under the tabs: 「2022/04/23(土) 幕張メッセ, 開場15:00/開演17:00」; None
-    for a page without one."""
-    shows: list[ImasDbShow]
-    cast: str = ""
-    """The 出演 list, as HTML: a performer followed by 「<small class="notes">※</small>」
-    stood only on the songs that name her."""
-    schedule: list[tuple[str, str]] = field(default_factory=list)
-    """The 公演概要 table, if the page has one: each show's label and date line."""
-
-
-@dataclass
-class ImasDbLive:
-    """A live on imas-db's index of live records."""
-
-    name: str
-    brands: str
-    """Its brand ids, as the index writes them: 「8」 for Shiny Colors', 「1,4,5,6,8,9」 for a
-    joint live."""
-    pages: list[tuple[str, ImasDbPage, str]]
-    """Its pages: the link's text, the page, and the date the index writes by it
-    (「2022/04/23(土)」)."""
-
-
-def imas_idol(name: str, cv: str, brand: str = "8", old: bool = False) -> str:
-    """An idol in imas-db's markup: named by her CV on older pages, by herself on newer."""
-    if old:
-        return f'<span class="idol_sc_x" title="{name}(CV:{cv})">{cv}</span>'
-    return (
-        f'<span class="idol-name" data-brand-id="{brand}" data-character-id="1" '
-        f'data-person-id="1" data-group-id="101" title="{name}(CV:{cv})">{name}</span>'
-    )
-
-
-def imas_unit(name: str, brand: str = "8", old: bool = False) -> str:
-    if old:
-        return f'<span class="idol_sc_unit01">{name}</span>'
-    return f'<span class="idol-name" data-brand-id="{brand}" data-group-id="101">{name}</span>'
-
-
-def imas_brand(name: str, brand: str) -> str:
-    """A whole brand as one performer: シャイニーカラーズ is brand 8."""
-    return f'<span class="idol-name" data-brand-id="{brand}">{name}</span>'
-
-
-def imas_note(text: str) -> str:
-    return f'<small class="notes">{text}</small>'
-
-
-DANCE_ONLY = '<span class="notes" title="ダンスパフォーマンスのみ">(※)</span>'
-
-
-def imas_badge(label: str, brand: str, slug: str) -> str:
-    """The brand of the song, after its title at a joint live."""
-    return (
-        f'<span class="visually-hidden">(</span><small class="badge small bg-imas-brand-{slug}" '
-        f'title="{brand}">{label}</small><span class="visually-hidden">)</span>'
-    )
-
-
-class FakeWorldSites:
-    """Stands in for the sites `eidolon world sync` imports from, answering as they do:
-    im@sparql's SPARQL endpoint (told apart by what each query asks for), the official
-    site's idol index and unit pages, Lantis's Shiny Colors site (the discography and the
-    releases' pages), ふじわらはじめ's API (its song list, songs and discs), the
-    idolmaster portal's CMS API (its token and the LIVE-EVENT category), the old official
-    site's event pages a year each, wikiwiki's live pages, and imas-db's index of live
-    records and their pages. Records every request. Add a host's name to `down` to have it unreachable, or a page's path
-    to `missing` to have it answer 404."""
-
-    SPARQL = "sparql.crssnky.xyz"
-    OFFICIAL = "shinycolors.idolmaster-official.jp"
-    LANTIS = "shinycolors.lantis.jp"
-    FUJI = "api.fujiwarahaji.me"
-    CMS = "cmsapi-frontend.idolmaster-official.jp"
-    OLD = "idolmaster.jp"
-    WIKI = "wikiwiki.jp"
-    IMASDB = "imas-db.jp"
-    TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
-    def __init__(self) -> None:
-        self.idols: list[dict[str, str]] = []
-        """im@sparql's idols: `id` (the resource's last path segment), `name`, `kana`, `cv`."""
-        self.staff: list[dict[str, str]] = []
-        """im@sparql's staff: `id`, `name`, `kana`, `position`."""
-        self.sparql_units: dict[str, tuple[str | None, list[str]]] = {}
-        """im@sparql's units, by name: reading and members."""
-        self.official_units: list[tuple[str, str, str, list[str]]] = []
-        """The official site's units, in order: slug, logo text (empty for none), the
-        name under the logo, members as the site writes them (family name, space, given)."""
-        self.releases: list[LantisRelease] = []
-        """Lantis's CDs, in the discography's order."""
-        self.blu_rays: list[tuple[str, str]] = []
-        """Lantis's Blu-rays: slug and title. The discography lists them apart from the CDs."""
-        self.fuji_songs: dict[int, tuple[str, list[int]]] = {}
-        """ふじわらはじめ's Shiny Colors songs by id: name and the discs it is on."""
-        self.fuji_discs: dict[int, FujiDisc] = {}
-        self.cms_lives: list[CmsLive] = []
-        """The CMS's LIVE-EVENT articles, every brand's, in the order it lists them."""
-        self.old_events: dict[int, list[OldSiteEvent]] = {}
-        """The old official site's events by year, beside one of another brand's that
-        every year's page has."""
-        self.wiki_lives: list[WikiLive] = []
-        self.imasdb_lives: list[ImasDbLive] = []
-        """imas-db's lives, besides another brand's that its index always lists."""
-        self.cms_token_refused = False
-        """Whether the CMS refuses the token, as it does, in the body of an HTTP 200."""
-        self.cms_page_most: int | None = None
-        """The most articles the CMS answers with at once, whatever it is asked for."""
-        self.requests: list[httpx.Request] = []
-        self.down: set[str] = set()
-        self.missing: set[str] = set()
-        self.empty: set[str] = set()
-        """ふじわらはじめ's API calls (path and query: v4/tax?id=4654) that answer with
-        an empty body, as it does for some discs."""
-
-    def client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(self._handle))
-
-    def _handle(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        host = request.url.host
-        if host in self.down:
-            raise httpx.ConnectError("connection refused")
-        if host == self.SPARQL and request.url.path == "/spql/imas/query":
-            return httpx.Response(200, json=self._query(request.url.params["query"]))
-        if host == self.OFFICIAL and request.url.path.strip("/") not in self.missing:
-            path = request.url.path.strip("/")
-            if path == "idol":
-                return httpx.Response(200, text=self._index())
-            for slug, logo, name, members in self.official_units:
-                if path == f"idol/{slug}":
-                    return httpx.Response(200, text=self._unit_page(slug, logo, name, members))
-        path = request.url.path.strip("/")
-        if host == self.LANTIS and path not in self.missing:
-            if path == "discography":
-                return httpx.Response(200, text=self._discography())
-            for release in self.releases:
-                if path == f"releaseinfo/{release.slug}":
-                    return httpx.Response(200, text=self._release_page(release))
-        if host == self.FUJI and f"{path}?{request.url.query.decode()}" in self.empty:
-            return httpx.Response(200, content=b"", headers={"Content-Type": "application/json"})
-        if host == self.FUJI and path not in self.missing:
-            params = request.url.params
-            if path == "v4/list" and params.get("type") == "music" and params.get("music_type") == "sc":
-                return httpx.Response(200, json=[
-                    {"name": name, "type": "music", "music_type": "sc", "song_id": song_id,
-                     "link": f"https://fujiwarahaji.me/music/sc/{song_id}",
-                     "api": f"https://{self.FUJI}/v4/music?id={song_id}"}
-                    for song_id, (name, _) in self.fuji_songs.items()
-                ])
-            if path == "v4/music" and int(params["id"]) in self.fuji_songs:
-                return httpx.Response(200, json=self._fuji_song(int(params["id"])))
-            if path == "v4/tax" and int(params["id"]) in self.fuji_discs:
-                return httpx.Response(200, json=self._fuji_disc(self.fuji_discs[int(params["id"])]))
-        if host == self.CMS and path not in self.missing:
-            if path == "sitern/api/cmsbase/Token/get":
-                return httpx.Response(200, json={
-                    "statusCode": 200, "data": {"token": self.TOKEN, "limit": 1790579592, "time": 0},
-                })
-            if path == "sitern/api/idolmaster/Article/list":
-                return httpx.Response(200, json=self._cms_list(request.url.params))
-        if host == self.OLD and path not in self.missing:
-            if match := re.fullmatch(r"event/(\d{4})\.php", path):
-                return httpx.Response(200, text=self._old_page(int(match.group(1))))
-        if host == self.WIKI and unquote(path) not in self.missing:
-            page = unquote(path).removeprefix("shinycolors/")
-            if page == "ライブイベント情報" or any(live.page == page for live in self.wiki_lives):
-                return httpx.Response(200, text=self._wiki_page(page))
-        if host == self.IMASDB and path not in self.missing:
-            if path == "song/event":
-                return httpx.Response(200, text=self._imasdb_index())
-            pages = {page.file: page for live in self.imasdb_lives for _, page, _ in live.pages}
-            if (page := pages.get(path.removeprefix("song/event/"))) is not None:
-                return httpx.Response(200, text=self._imasdb_page(page))
-        return httpx.Response(404, text="<html>Not Found</html>")
-
-    def _imasdb_index(self) -> str:
-        other = ImasDbLive("THE IDOLM@STER MILLION LIVE! 9thLIVE", "5", [
-            ("DAY1", ImasDbPage("million_9th_day1.html", "9th", "2023/01/14(土)", []), "2023/01/14(土)"),
-        ])
-        badge = (
-            '<span class="visually-hidden">(</span><span title="シャイニーカラーズ" '
-            'class="badge small bg-imas-brand-shinycolors">シャニ</span>'
-            '<span class="visually-hidden">)</span>'
-        )
-        items = []
-        for live in [other, *self.imasdb_lives]:
-            if len(live.pages) == 1 and live.pages[0][0] == live.name:
-                _, page, day = live.pages[0]
-                items.append(
-                    f'<li data-brand-ids="{live.brands}" class="mb-3"><a href="./{page.file}">'
-                    f'{html.escape(live.name)}</a> <small class="date">- {day}</small>\n {badge}</li>'
-                )
-                continue
-            links = "".join(
-                f'\t<li><a href="./{page.file}" title="{html.escape(live.name)} {label}">{label}</a>'
-                f' <small class="date">- {day}</small></li>\n'
-                for label, page, day in live.pages
-            )
-            items.append(
-                f'<li data-brand-ids="{live.brands}">{html.escape(live.name)} {badge}\n\t<ul>\n'
-                f'{links}\t</ul>\n</li>'
-            )
-        listed = "\n".join(items)
-        return (
-            '<html><body><header id="maruamyu-header"><h1 id="page_title">ライブイベント</h1></header>'
-            '<main class="container-fluid"><p>アイマスライブイベントの記録です。</p>'
-            f'<div class="section"><h2>年</h2>\n<ul>\n{listed}\n</ul></div>'
-            '</main><footer id="maruamyu-footer"></footer></body></html>'
-        )
-
-    def _imasdb_page(self, page: ImasDbPage) -> str:
-        parts = [
-            f'<html><body><header><h1 id="page_title">{html.escape(page.title)}</h1></header><hr>',
-            '<ul class="nav nav-tabs"><li class="nav-item"><a class="nav-link" href="./other.html">'
-            'DAY2</a></li></ul>',
-        ]
-        if page.date:
-            parts.append(f'<p>{page.date} <a href="https://idolmaster-official.jp/">詳細</a></p>')
-        if page.schedule:
-            rows = "".join(
-                f"<tr> <td>{label}</td> <td>{day}</td> <td>ゲスト: なし</td> </tr>\n"
-                for label, day in page.schedule
-            )
-            parts.append(
-                '<div class="section" data-brand-id="8">\n<h2>公演概要</h2>\n'
-                f'<div class="mx-3 my-2">{page.schedule[0][1][:10]} どこかのホール</div>\n'
-                f'<table class="table table-sm"><tbody>\n{rows}</tbody></table>\n</div>'
-            )
-        if page.cast:
-            parts.append(
-                f'<div class="section" data-brand-id="8">\n<h2>出演</h2>\n<ul><li>{page.cast}</li></ul>\n</div>'
-            )
-        for show in page.shows:
-            rows = "".join(
-                f"<tr> <td>{number}</td> <td>{title}</td> <td>{who}</td> </tr>\n"
-                for number, title, who in show.rows
-            )
-            date = f"<div>{show.date} 開場12:40/開演13:20</div>\n" if show.date else ""
-            parts.append(
-                '<div class="section" data-brand-id="8">\n'
-                '<div class="section_header_notes" aria-hidden="true">[by imas-db.jp]</div>\n'
-                f'<h2 class="trim-margin">{show.heading}</h2>\n{date}'
-                '<table class="tracklist">\n'
-                '<thead> <tr> <th>No.</th> <th>楽曲</th> <th>演者</th> </tr> </thead>\n'
-                f'<tbody>\n<tr class="part-header"> <th colspan="3">【メドレー】</th> </tr>\n{rows}'
-                '</tbody>\n</table>\n<div class="mx-3 my-2 notes">※ アンコール</div>\n</div>'
-            )
-        parts.append(
-            '<hr><footer id="maruamyu-footer"><p>&copy;2007-2024 maruamyu.net</p></footer></body></html>'
-        )
-        return "\n".join(parts)
-
-    def _cms_list(self, params) -> dict:
-        if self.cms_token_refused or params.get("token") != self.TOKEN:
-            return {"statusCode": 404, "data": False}
-        wanted = json.loads(params["data"])
-        assert wanted.get("category") == ["LIVE-EVENT"]
-        start, limit = int(params.get("start", 0)), int(params.get("limit", 100))
-        limit = min(limit, self.cms_page_most or limit)
-        articles = [
-            {
-                "_id": live.id, "article_type": live.article_type, "title": live.title,
-                "brand": [{"name": code.title(), "code": code} for code in live.brands],
-                "event_place": live.place, "event_dspdate": live.dspdate,
-                "event_url": live.url, "url_name": live.url_name,
-                "url": f"https://idolmaster-official.jp/live-event/01_{live.id}.html",
-            }
-            for live in self.cms_lives
-        ]
-        page = articles[start:start + limit]
-        return {"statusCode": 200, "data": {
-            "apiStatus": True, "total_count": len(articles), "start": start, "limit": limit,
-            "count": len(page), "time": 0, "article_list": page,
-        }}
-
-    def _old_page(self, year: int) -> str:
-        events = [
-            OldSiteEvent("THE IDOLM@STER SideM 某公演", f"{year}年1月5日(土)", "某ホール"),
-            *self.old_events.get(year, []),
-        ]
-        blocks = "".join(
-            '<div class="eventCont">\n<ul><li class="title">{name}</li></ul>\n'
-            '<table border="0" cellpadding="0" cellspacing="0">\n'
-            "<tr><th>公演名</th><td>{name}</td></tr>\n"
-            "<tr><th>日時</th><td>{dates}</td></tr>\n"
-            "<tr><th>場所</th><td>{place}</td></tr>\n"
-            "<tr><th>出演者</th><td>［イルミネーションスターズ］<br>関根 瞳（櫻木真乃役）</td></tr>\n"
-            "<tr><th>リンク</th><td>{link}</td></tr>\n</table>\n</div>\n".format(
-                name=html.escape(event.name), dates=html.escape(event.dates),
-                place=html.escape(event.place),
-                link=f'公式サイト：<a href="{event.link}" target="_blank">{event.link}</a><br>'
-                if event.link else "",
-            )
-            for event in events
-        )
-        return f'<html><body><div id="m1" class="detailCol">{blocks}</div></body></html>'
-
-    def _wiki_page(self, page: str) -> str:
-        logs = sorted({live.page for live in self.wiki_lives if live.page != "ライブイベント情報"})
-        links = "".join(
-            f'<li><a href="/shinycolors/{quote(log)}" title="{log}" class="rel-wiki-page">{log}</a></li>'
-            for log in logs
-        )
-        blocks = []
-        for live in self.wiki_lives:
-            if live.page != page:
-                continue
-            dates = "".join(f"<li>{d}</li>" for d in live.dates)
-            performers = []
-            for day, lines in live.performers:
-                body = "<br />\n".join(lines)
-                performers.append(f"<li>{day}<br />\n{body}</li>" if day else body)
-            listed = (
-                '<ul class="list2">' + "\n".join(performers) + "</ul>"
-                if any(day for day, _ in live.performers) else "<br />\n" + "\n".join(performers)
-            )
-            blocks.append(
-                '<div class="accordion-container ">\n    <h3 class="accordion-header">'
-                '<i class="fa-solid fa-plus-square hidden-on-open"></i>\n'
-                f"        {html.escape(live.title)}\n    </h3>\n"
-                '    <div class="accordion-content"><ul class="list1"><li>公演名<br />\n'
-                f'{html.escape(live.name or live.title)}</li></ul>\n'
-                f'<ul class="list1"><li>開催日時\n<ul class="list2">{dates}</ul></li></ul>\n'
-                '<ul class="list1"><li>会場<br />\nどこかのホール</li></ul>\n'
-                f'<ul class="list1"><li>出演者\n{listed}</li></ul>\n'
-                "<p>詳細は、公式サイトへ</p>\n</div>\n</div>\n"
-            )
-        past = f'<h2 id="h2_content_1_9">公演終了(過去の公演情報)</h2>\n<ul class="list1">{links}</ul>'
-        return (
-            '<html><body><div id="body"><h2 id="h2_content_1_0">開催予定</h2>\n'
-            f'{"".join(blocks)}<hr class="full_hr" />\n{past if page == "ライブイベント情報" else ""}'
-            '</div><div id="main-contents-bottom"><a href="/shinycolors/櫻木真乃">櫻木 真乃 / 風野 灯織</a>'
-            "</div></body></html>"
-        )
-
-    def _discography(self) -> str:
-        def links(items: list[tuple[str, str]]) -> str:
-            return "".join(
-                f'<a href="https://{self.LANTIS}/releaseinfo/{slug}/" title="{html.escape(title)}">'
-                f'<img src="x.jpg" class="hv"></a>\n'
-                for slug, title in items
-            )
-
-        return (
-            '<section id="discographys" class="mb96">\n'
-            '<div class="CD_area"><div class="cat_cd">'
-            '<h3><img src="/images/common/dsc_tit_cd.png" alt="CD" height="19"></h3></div>\n'
-            '<div class="list"><div class="dsc_box mb0"><h4><span>■CD</span></h4>\n'
-            f"{links([(r.slug, r.title) for r in self.releases])}</div></div>\n</div>\n"
-            '<div class="BD_area"><div class="cat_cd">'
-            '<h3><img src="/images/common/dsc_tit_bd.png" alt="CD" height="19"></h3></div>\n'
-            f'<div class="list"><div class="dsc_box mb0">\n{links(self.blu_rays)}</div></div>\n</div>\n'
-            "</section>"
-        )
-
-    def _release_page(self, release: LantisRelease) -> str:
-        def paragraph(text: str) -> str:
-            return "<p>" + "<br />\n".join(html.escape(line) for line in text.split("\n")) + "</p>"
-
-        year, month, day = release.date.split("/")
-        banner = release.banner_date or f"{year}.{int(month):02}.{int(day):02}"
-        artist = f"アーティスト：{release.artist}"
-        if release.artist_members:
-            artist += f"\n{release.artist_members}"
-        facts = f"発売日：{release.date}\n品番：{release.catalog}\n価格：1,980円（10%税込）"
-        index = "\n".join(paragraph(p) for p in release.index)
-        return (
-            '<html><body><section id="release"><div class="release_box cd">\n'
-            f'<div class="titles">\n<div class="date">{banner} RELEASE</div>\n'
-            f"<h2>{html.escape(release.title)}</h2>\n</div>\n"
-            f'<div class="release_contents">\n{paragraph(artist)}\n{paragraph(facts)}\n'
-            '<h3><img src="/images/common/release_index.png" alt="インデックス"></h3>\n'
-            f"{index}\n"
-            '<h3><img src="/images/common/release_information.png" alt="インフォメーション"></h3>\n'
-            "<p>描き下ろしイラストジャケット</p>\n"
-            "</div><!--release_contents-->\n</div></section>\n"
-            f"{self._discography()}</body></html>"
-        )
-
-    def _fuji_disc_ref(self, disc: FujiDisc) -> dict:
-        return {
-            "name": disc.name, "type": "disc", "tax_id": disc.tax_id,
-            "link": f"https://fujiwarahaji.me/disc/{disc.tax_id}",
-            "api": f"https://{self.FUJI}/v4/tax?id={disc.tax_id}",
-        }
-
-    @staticmethod
-    def _fuji_idol(name: str) -> dict:
-        return {"name": name, "type": "idol", "production": "sc", "cv": "某声優"}
-
-    def _fuji_song(self, song_id: int) -> dict:
-        name, discs = self.fuji_songs[song_id]
-        return {
-            "name": name, "type": "music", "song_id": song_id,
-            "link": f"https://fujiwarahaji.me/music/sc/{song_id}",
-            "api": f"https://{self.FUJI}/v4/music?id={song_id}",
-            "member": [], "disc": [self._fuji_disc_ref(self.fuji_discs[d]) for d in discs],
-        }
-
-    def _fuji_disc(self, disc: FujiDisc) -> dict:
-        return {
-            **self._fuji_disc_ref(disc), "cat": "", "flag": "", "setlist": True,
-            "song": [
-                {
-                    "name": name, "type": "music", "music_type": "sc", "song_text": "",
-                    "unit": [
-                        {"name": unit, "type": "unit", "member": [self._fuji_idol(m) for m in members]}
-                        for unit, members in units
-                    ],
-                    "member": [self._fuji_idol(m) for m in idols] or None,
-                    "member_text": "", "flag": flags,
-                }
-                for name, units, idols, flags in disc.tracks
-            ],
-        }
-
-    def _query(self, query: str) -> dict:
-        detail = "https://sparql.crssnky.xyz/imasrdf/RDFs/detail/"
-
-        def uri(value: str) -> dict:
-            return {"type": "uri", "value": value}
-
-        def ja(value: str) -> dict:
-            return {"type": "literal", "xml:lang": "ja", "value": value}
-
-        rows: list[dict] = []
-        if "imas:Unit" in query:
-            for name, (kana, members) in self.sparql_units.items():
-                for member in members:
-                    row = {"unit": uri(detail + name.replace(" ", "")), "name": ja(name), "member": ja(member)}
-                    if kana is not None:
-                        row["kana"] = ja(kana)
-                    rows.append(row)
-        elif "imas:Staff" in query:
-            for staff in self.staff:
-                rows.append({
-                    "staff": uri(detail + staff["id"]), "name": ja(staff["name"]),
-                    "kana": ja(staff["kana"]), "position": ja(staff["position"]),
-                    "officeName": ja("283プロダクション"),
-                })
-        elif "imas:Idol" in query:
-            for idol in self.idols:
-                rows.append({
-                    "idol": uri(detail + idol["id"]), "name": ja(idol["name"]),
-                    "kana": ja(idol["kana"]), "cv": ja(idol["cv"]),
-                })
-        return {"head": {"vars": []}, "results": {"bindings": rows}}
-
-    def _index(self) -> str:
-        items = "".join(
-            f'<li class="idol-item js--scroll__trigger">\n'
-            f'  <a href="./{slug}" id="{slug}" class="idol-link">\n'
-            f'    <div class="idol-logo unit{n}"><img loading="lazy" src="x.png" alt="{slug}"></div>\n'
-            f"  </a>\n</li>\n"
-            for n, (slug, *_) in enumerate(self.official_units, 1)
-        )
-        return f'<html><body><main class="idol-unit"><ul class="idol-list">\n{items}</ul></main></body></html>'
-
-    def _unit_page(self, slug: str, logo: str, name: str, members: list[str]) -> str:
-        names = "".join(
-            f'<li class="idol-group__name" data-id="{n}">\n'
-            f'<a href="../../idol/{slug}/m{n}/" class="idol-group__name--text">{member}</a>\n</li>\n'
-            for n, member in enumerate(members, 1)
-        )
-        nav = "".join(
-            f'<li class="idol-nav__unit--btn"><a href="../../idol/{other}" class="idol-nav__unit--item">'
-            f'<img loading="lazy" src="logo_{other}.png" alt="{other_logo}"></a></li>\n'
-            for other, other_logo, *_ in self.official_units
-        )
-        return (
-            f'<html><body><main class="idol common-main" data-id="{slug}">\n'
-            f'<ul class="idol-group__list">\n{names}</ul>\n'
-            f'<div class="idol-group__logo">\n<picture>\n'
-            f'<img loading="lazy" src="../../assets/img/idol/{slug}/logo.png" alt="{logo}">\n'
-            f'</picture>\n<p class="idol-group__logo--name">{name}</p>\n</div>\n'
-            f'<ul class="idol-nav__unit">\n{nav}</ul>\n</main></body></html>'
-        )
-
-
-class FakeWeather:
-    """Open-Meteo's forecast API, as `weather` fetches the weather over HTTP (`transport`).
-    Asked for hours (a moment's), each hour from `start_hour` to `end_hour` is answered with
-    `code` and `temperature` (the code None, as MSM leaves an hour it has not forecast).
-    Asked for days (her day's, `daily`), it answers yesterday, today and tomorrow where the
-    spot is (an hour ahead of UTC for each 15 degrees east), as of `clock` (without which it
-    fails): every hour `code` and `temperature`, but for those after this one, the codes
-    `ahead` in turn, then `later_code` if set; each day's highest `high` and lowest `low` (3
-    degrees off the temperature by default), yesterday's `yesterday_high` and `yesterday_low`
-    if set. Either way, failing with 503 if `failing`. Records the query of each request
-    (`requests`)."""
-
-    def __init__(
-        self,
-        code: int | None = 0,
-        temperature: float = 18.4,
-        *,
-        failing: bool = False,
-        clock: "Callable[[], datetime] | None" = None,
-        ahead: Sequence[int] = (),
-        later_code: int | None = None,
-        high: float | None = None,
-        low: float | None = None,
-        yesterday_high: float | None = None,
-        yesterday_low: float | None = None,
-    ) -> None:
-        self.code = code
-        self.ahead = list(ahead)
-        self.temperature = temperature
-        self.failing = failing
-        self.clock = clock
-        self.later_code = later_code
-        self.high = high
-        self.low = low
-        self.yesterday_high = yesterday_high
-        self.yesterday_low = yesterday_low
-        self.requests: list[dict[str, str]] = []
-
-    def transport(self) -> httpx.MockTransport:
-        return httpx.MockTransport(self._handle)
-
-    def days_asked(self) -> list[dict[str, str]]:
-        """The queries that asked for days."""
-        return [q for q in self.requests if "daily" in q]
-
-    def hours_asked(self) -> list[dict[str, str]]:
-        """The queries that asked for a moment's hours."""
-        return [q for q in self.requests if "daily" not in q]
-
-    def _handle(self, request: httpx.Request) -> httpx.Response:
-        assert request.url.host == "api.open-meteo.com", request.url
-        query = dict(request.url.params)
-        self.requests.append(query)
-        if self.failing:
-            return httpx.Response(503, json={"error": True, "reason": "unavailable"})
-        if "daily" in query:
-            return self._days(query)
-        start, end = (
-            datetime.fromisoformat(query[k]).replace(tzinfo=UTC) for k in ("start_hour", "end_hour")
-        )
-        hours = int((end - start) / timedelta(hours=1)) + 1
-        return httpx.Response(200, json={"hourly": {
-            "time": [int((start + timedelta(hours=i)).timestamp()) for i in range(hours)],
-            "weather_code": [self.code] * hours,
-            "temperature_2m": [self.temperature] * hours,
-        }})
-
-    def _days(self, query: dict[str, str]) -> httpx.Response:
-        if self.clock is None:
-            return httpx.Response(503, json={"error": True, "reason": "no clock"})
-        code, temperature, later_code = self.code, self.temperature, self.later_code
-        high, low = self.high, self.low
-        yesterday_high, yesterday_low = self.yesterday_high, self.yesterday_low
-        offset = timedelta(hours=round(float(query["longitude"]) / 15))
-        now = self.clock()
-        local = (now + offset).replace(tzinfo=None)
-        today = datetime(local.year, local.month, local.day, tzinfo=UTC) - offset
-        days = [today - timedelta(days=1), today, today + timedelta(days=1)]
-        hours = [days[0] + timedelta(hours=i) for i in range(72)]
-        this_hour = now.replace(minute=0, second=0, microsecond=0)
-        def code_at(h: datetime) -> int | None:
-            after = int((h - this_hour) / timedelta(hours=1)) - 1
-            if 0 <= after < len(self.ahead):
-                return self.ahead[after]
-            return later_code if later_code is not None and this_hour < h < days[2] else code
-
-        codes = [code_at(h) for h in hours]
-        high = temperature + 3 if high is None else high
-        low = temperature - 3 if low is None else low
-        return httpx.Response(200, json={
-            "utc_offset_seconds": int(offset.total_seconds()),
-            "hourly": {
-                "time": [int(h.timestamp()) for h in hours],
-                "weather_code": codes,
-                "temperature_2m": [temperature] * len(hours),
-            },
-            "daily": {
-                "time": [int(d.timestamp()) for d in days],
-                "temperature_2m_max": [
-                    high if yesterday_high is None else yesterday_high, high, high
-                ],
-                "temperature_2m_min": [low if yesterday_low is None else yesterday_low, low, low],
-            },
-        })
-
-
-HARBIN = {
-    "name": "哈尔滨", "id": "101050101", "lat": "45.80298", "lon": "126.53505",
-    "adm2": "哈尔滨", "adm1": "黑龙江省", "country": "中国", "tz": "Asia/Shanghai", "utcOffset": "+08:00",
-}
-"""Harbin, as QWeather finds it."""
-
-DONGCHENG = {
-    "name": "东城", "id": "101011600", "lat": "39.91755", "lon": "116.41876",
-    "adm2": "北京", "adm1": "北京市", "country": "中国", "tz": "Asia/Shanghai", "utcOffset": "+08:00",
-}
-"""Dongcheng, in Beijing, as QWeather finds it."""
-
-SHINJUKU = {
-    "name": "新宿", "id": "B00176", "lat": "35.69384", "lon": "139.70355",
-    "adm2": "东京", "adm1": "东京都", "country": "日本", "tz": "Asia/Tokyo", "utcOffset": "+09:00",
-}
-"""Shinjuku, in Tokyo, as QWeather finds it."""
-
-
-class FakeQWeather:
-    """QWeather (和风天气) on the account's own host, as `qweather` asks it over HTTP
-    (`transport`): looking a city up answers with `cities` (404 for none), the warnings at
-    a spot with `alerts`; failing as an account it does not know, 401, if `failing`.
-    Asked for the weather at a spot, it answers as of `clock` (without which it fails), the
-    spot 8 hours ahead of UTC: now, `icon` and `temperature`; the 24 hours after this one,
-    the icons `ahead` in turn, then `later_icon` (`icon` if unset) for those left of today and
-    `icon` for tomorrow's; today and the next two days, the highest `high` and lowest `low` (3
-    degrees off the temperature by default); asked for yesterday's records, yesterday's
-    `yesterday_high` and `yesterday_low` (as today's if unset), failing with 400, as for a day
-    QWeather has no records of, if `no_records`; the days from yesterday, as just after
-    midnight before they have turned, if `days_not_turned`. Records each request's path, query and token
-    (`requests`)."""
-
-    def __init__(
-        self,
-        cities: Sequence[dict] = (HARBIN,),
-        alerts: Sequence[dict] = (),
-        *,
-        failing: bool = False,
-        clock: "Callable[[], datetime] | None" = None,
-        icon: str = "100",
-        temperature: int = 18,
-        ahead: Sequence[str] = (),
-        later_icon: str | None = None,
-        high: int | None = None,
-        low: int | None = None,
-        yesterday_high: int | None = None,
-        yesterday_low: int | None = None,
-        no_records: bool = False,
-        days_not_turned: bool = False,
-    ) -> None:
-        self.cities = list(cities)
-        self.alerts = list(alerts)
-        self.failing = failing
-        self.clock = clock
-        self.icon = icon
-        self.temperature = temperature
-        self.ahead = list(ahead)
-        self.later_icon = later_icon
-        self.high = high
-        self.low = low
-        self.yesterday_high = yesterday_high
-        self.yesterday_low = yesterday_low
-        self.no_records = no_records
-        self.days_not_turned = days_not_turned
-        self.requests: list[tuple[str, dict[str, str], str]] = []
-
-    def transport(self) -> httpx.MockTransport:
-        return httpx.MockTransport(self._handle)
-
-    def lookups(self) -> list[dict[str, str]]:
-        return [q for path, q, _ in self.requests if path == "/geo/v2/city/lookup"]
-
-    def warnings_asked(self) -> list[str]:
-        return [path for path, _, _ in self.requests if path.startswith("/weatheralert/")]
-
-    def asked(self, path: str) -> list[dict[str, str]]:
-        """The queries of the requests to `path`."""
-        return [q for at, q, _ in self.requests if at == path]
-
-    def _handle(self, request: httpx.Request) -> httpx.Response:
-        auth = request.headers.get("authorization", "")
-        self.requests.append((request.url.path, dict(request.url.params), auth))
-        if self.failing:
-            return httpx.Response(401, json={"error": {
-                "status": 401, "type": "https://dev.qweather.com/docs/resource/error-code/#unauthorized",
-                "title": "Unauthorized", "detail": "Invalid token",
-            }})
-        if request.url.path == "/geo/v2/city/lookup":
-            if not self.cities:
-                return httpx.Response(200, json={"code": "404"})
-            return httpx.Response(200, json={
-                "code": "200", "location": self.cities,
-                "refer": {"sources": ["QWeather"], "license": ["QWeather Developers License"]},
-            })
-        if request.url.path.startswith("/weatheralert/v1/current/"):
-            return httpx.Response(200, json={
-                "metadata": {"tag": "t", "zeroResult": not self.alerts},
-                "alerts": self.alerts,
-            })
-        if request.url.path.startswith(("/v7/weather/", "/v7/historical/")):
-            return self._weather(request.url.path, dict(request.url.params))
-        return httpx.Response(404, json={"error": {"status": 404, "title": "Not Found"}})
-
-    def _weather(self, path: str, query: dict[str, str]) -> httpx.Response:
-        if self.clock is None:
-            return httpx.Response(503, json={"error": {"status": 503, "title": "no clock"}})
-        zone = timezone(timedelta(hours=8))
-        now = self.clock().astimezone(zone)
-        today = now.date()
-        high = self.temperature + 3 if self.high is None else self.high
-        low = self.temperature - 3 if self.low is None else self.low
-        if path == "/v7/weather/now":
-            observed = now.replace(second=0, microsecond=0) - timedelta(minutes=10)
-            return httpx.Response(200, json={"code": "200", "now": {
-                "obsTime": observed.isoformat(timespec="minutes"), "temp": str(self.temperature),
-                "icon": self.icon, "text": "",
-            }})
-        if path == "/v7/weather/24h":
-            this_hour = now.replace(minute=0, second=0, microsecond=0)
-            hours = [this_hour + timedelta(hours=i + 1) for i in range(24)]
-            icons = [
-                self.ahead[i] if i < len(self.ahead)
-                else (self.later_icon or self.icon) if h.date() == today else self.icon
-                for i, h in enumerate(hours)
-            ]
-            return httpx.Response(200, json={"code": "200", "hourly": [
-                {"fxTime": h.isoformat(timespec="minutes"), "temp": str(self.temperature),
-                 "icon": icon, "pop": "0"}
-                for h, icon in zip(hours, icons, strict=True)
-            ]})
-        if path == "/v7/weather/3d":
-            first = -1 if self.days_not_turned else 0
-            return httpx.Response(200, json={"code": "200", "daily": [
-                {"fxDate": (today + timedelta(days=i)).isoformat(),
-                 "tempMax": str(self.yesterday_high if i < 0 and self.yesterday_high else high),
-                 "tempMin": str(low)}
-                for i in range(first, first + 3)
-            ]})
-        if self.no_records:
-            return httpx.Response(400, json={"error": {
-                "status": 400, "title": "Invalid Parameter",
-                "detail": "Invalid parameter, please check your request.",
-            }})
-        yesterday = today - timedelta(days=1)
-        assert query.get("date") == f"{yesterday:%Y%m%d}", query
-        return httpx.Response(200, json={"code": "200", "weatherDaily": {
-            "date": yesterday.isoformat(),
-            "tempMax": str(high if self.yesterday_high is None else self.yesterday_high),
-            "tempMin": str(low if self.yesterday_low is None else self.yesterday_low),
-        }})
-
-
-def alert(
-    headline: str, code: str = "alert", *, id: str = "1", supersedes: Sequence[str] = ()
-) -> dict:
-    """A weather warning, as QWeather tells of one in force (or cancelled, `cancel`; or in
-    force anew, `update`, superseding those by their IDs `supersedes`)."""
-    return {
-        "id": id, "senderName": "哈尔滨市气象台",
-        "messageType": {"code": code, "supersedes": list(supersedes)},
-        "eventType": {"name": "寒潮", "code": "1009"}, "severity": "minor",
-        "color": {"code": "blue"}, "headline": headline,
-    }
-
-
 class FakeCatalog:
     """The price catalogs online, models.dev's and OpenRouter's, as `price_catalog` fetches
     them over HTTP (`transport`): what the test sets, empty by default, or failing. Counts
@@ -2273,3 +1062,72 @@ class FakeCatalog:
         assert request.url.host == "openrouter.ai", request.url
         self.fetches += 1
         return httpx.Response(200, json={"data": self.openrouter})
+
+
+class FakeBucket:
+    """An S3-compatible bucket at http://storage.test/<name> (path-style) that keeps what
+    it is sent, lists two keys a page (those under the prefix asked for), and refuses
+    unsigned requests."""
+
+    def __init__(self, name: str = "stands") -> None:
+        self.name = name
+        self.objects: dict[str, tuple[bytes, dict[str, str]]] = {}
+        self.puts: list[str] = []
+        self.deletes: list[str] = []
+        self.down = False
+        self.lists_by_marker = False
+        """List as the original List Objects does (Tencent COS): pages by `marker`,
+        whatever `list-type` asks for."""
+
+    def bucket(self, **settings) -> Bucket:
+        return Bucket(
+            S3Settings("http://storage.test", self.name, "key-id", "secret", **settings),
+            transport=httpx.MockTransport(self.handle),
+        )
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if self.down:
+            return httpx.Response(503, text="<Error><Code>SlowDown</Code></Error>")
+        if not request.headers.get("Authorization", "").startswith("AWS4-HMAC-SHA256 Credential=key-id/"):
+            return httpx.Response(403, text="<Error><Code>AccessDenied</Code></Error>")
+        path = urlsplit(str(request.url)).path
+        assert path == f"/{self.name}" or path.startswith(f"/{self.name}/"), path
+        key = unquote(path.removeprefix(f"/{self.name}").removeprefix("/"))
+        if request.method == "PUT":
+            body = request.read()
+            assert request.headers["x-amz-content-sha256"] == hashlib.sha256(body).hexdigest()
+            assert request.headers["Content-Length"] == str(len(body))
+            assert "Transfer-Encoding" not in request.headers
+            self.objects[key] = (body, dict(request.headers))
+            self.puts.append(key)
+            return httpx.Response(200, headers={"ETag": f'"{hashlib.md5(body).hexdigest()}"'})
+        if request.method == "DELETE":
+            self.objects.pop(key, None)
+            self.deletes.append(key)
+            return httpx.Response(204)
+        query = parse_qs(urlsplit(str(request.url)).query)
+        assert request.method == "GET" and query["list-type"] == ["2"]
+        prefix = query.get("prefix", [""])[0]
+        keys = sorted(key for key in self.objects if key.startswith(prefix))
+        if self.lists_by_marker:
+            marker = query.get("marker", [""])[0]
+            start = sum(1 for key in keys if key <= marker) if marker else 0
+        else:
+            start = int(query.get("continuation-token", ["0"])[0])
+        page = keys[start : start + 2]
+        more = start + 2 < len(keys)
+        contents = "".join(
+            f"<Contents><Key>{escape(key)}</Key>"
+            f"<ETag>&quot;{hashlib.md5(self.objects[key][0]).hexdigest()}&quot;</ETag>"
+            f"<Size>{len(self.objects[key][0])}</Size></Contents>"
+            for key in page
+        )
+        token = f"<NextContinuationToken>{start + 2}</NextContinuationToken>" if more else ""
+        if self.lists_by_marker:
+            token = f"<NextMarker>{escape(page[-1])}</NextMarker>" if more else ""
+        return httpx.Response(
+            200,
+            text='<?xml version="1.0" encoding="UTF-8"?>'
+            '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+            f"<IsTruncated>{'true' if more else 'false'}</IsTruncated>{token}{contents}</ListBucketResult>",
+        )

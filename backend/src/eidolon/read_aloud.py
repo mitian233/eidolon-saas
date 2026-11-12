@@ -31,7 +31,7 @@ from eidolon.activity import ActivityLog, Origin, host, timed
 from eidolon.billing import bill
 from eidolon.config import CHARACTER_BILLED_FISH_AUDIO_MODELS, OWN_KEYS_PROXIED, FishAudioModel
 from eidolon.delivery_cues import spoken_by, voiced
-from eidolon.greetings import FISH_TTS_HTTP_URL
+from eidolon.fish_audio import FISH_TTS_HTTP_URL
 from eidolon.own_keys import (
     BroughtKeys,
     OwnKeyFailed,

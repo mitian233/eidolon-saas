@@ -1,6 +1,6 @@
 """`eidolon doctor`: tries each of the deployer's services `.env` configures, the way the
 server reaches it, and says what is wrong in words a newcomer, or the agent deploying for
-them, can act on (docs/agents/deploying.md「排障」).
+them, can act on (docs/deploy.md「排障」).
 
 Each service is tried as `.env` routes it, through the proxy or direct. Failing to reach
 it, or its provider refusing the server's region, it is tried the other way, if there is
@@ -74,7 +74,7 @@ PROBLEM_NAMES: dict[Problem, str] = {
     "other": "其他错误",
 }
 
-GUIDE = "docs/agents/deploying.md"
+GUIDE = "docs/deploy.md"
 
 HINTS: dict[Problem, str] = {
     "network": "连不上这家服务。服务器所在的地区可能要经代理才能访问它：配好 EIDOLON_PROXY_URL，"
@@ -276,20 +276,22 @@ def checks_for(settings: Settings) -> dict[ServiceName, Check]:
 
     checks: dict[ServiceName, Check] = {}
 
-    async def chat_llm(proxy: str | None) -> None:
-        models = open_chat_models(settings.chat_model, open_client(proxy, LLM_TIMEOUT))
-        try:
-            await check_chat_models(models, settings.chat_model)
-        finally:
-            await models.aclose()
+    if (chat_settings := settings.chat_model) is not None:
 
-    checks["chat_llm"] = chat_llm
+        async def chat_llm(proxy: str | None) -> None:
+            models = open_chat_models(chat_settings, open_client(proxy, LLM_TIMEOUT))
+            try:
+                await check_chat_models(models, chat_settings)
+            finally:
+                await models.aclose()
 
-    if settings.background_llm != settings.chat_llm:
+        checks["chat_llm"] = chat_llm
+
+    if (background_settings := settings.background_llm) is not None and background_settings != settings.chat_llm:
 
         async def memory_llm(proxy: str | None) -> None:
             async with open_client(proxy, LLM_TIMEOUT) as client:
-                await first_word(open_llm(settings.background_llm, client))
+                await first_word(open_llm(background_settings, client))
 
         checks["memory_llm"] = memory_llm
 
@@ -416,18 +418,13 @@ class Report:
                 "",
             ]
         if self.story_episodes is None:
-            said.append("剧情库：还没有数据库（后端还没启动过）")
+            said.append("资料库：还没有数据库（后端还没启动过）")
         elif self.story_episodes == 0:
-            said.append(
-                "剧情库：空的。剧情不随仓库分发，要自己同步一次，"
-                f"在这之前角色只凭人设回复（{GUIDE}「剧情库」）"
-            )
+            said.append("资料库：空的。角色只凭人设回复，背景资料导入在后续里程碑提供")
         else:
-            said.append(f"剧情库：{self.story_episodes} 段剧情")
-        if self.stand_assets_url is None:
-            said.append(f"立绘：没配 EIDOLON_STAND_ASSETS_URL，通话时只显示背景图（{GUIDE}「立绘」）")
-        else:
-            said.append(f"立绘：从 {self.stand_assets_url} 加载")
+            said.append(f"资料库：{self.story_episodes} 段资料")
+        if self.stand_assets_url is not None:
+            said.append(f"立绘素材：从 {self.stand_assets_url} 加载（外链，平台不托管）")
         if self.invite_without_admins:
             said += [
                 "! 注册：设了只让受邀的人注册（EIDOLON_REGISTRATION=invite），却没设管理者名单"

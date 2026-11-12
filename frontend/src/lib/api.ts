@@ -16,8 +16,6 @@ import {
 } from "@/lib/localOwnKeys";
 import type { LLMOffer, LLMProvider } from "@/lib/llmProviders";
 import type { EffortHint } from "@/lib/reasoningEffort";
-import type { ServedBody } from "@/lib/barMixer";
-import type { VisitEvent } from "@/lib/barVisit";
 import type { Letter, LetterSummary } from "@/lib/letter";
 import type { Rewarded } from "@/lib/rewards";
 import { detectTimezone } from "@/lib/timezone";
@@ -30,79 +28,24 @@ export type Character = {
   id: string;
   name: string;
   intro: string;
+  /** The persona text the engine answers from. */
+  sheet: string;
+  /** An external avatar address the platform only stores; null shows none. */
   avatar_url: string | null;
-  /** Her avatar in SCSP's set, which settings can switch the app's avatars to (lib/appearance); null when not configured. */
-  scsp_avatar_url: string | null;
+  /** Her greeting as plain text, without delivery cues. */
+  greeting: string;
+  /** The user's own Fish Audio voice id; empty when unset. */
+  voice_id: string;
   /** Her image colour, `#rrggbb`; the interface only uses what `herVars()` derives from it. */
   color: string;
-  /** Her birthday in the original, `MM-DD`; February 29 falls on February 28 in a year without it. */
-  birthday: string;
-  background_url: string | null;
-  /** Her Spine stand on the call layer; null (her call background alone) unless the deployment
-   * configures her idol, her default outfit and where the stands are served from. */
-  stand: Stand | null;
-  /** Her idol number in the original; the list comes in their order, those without one last. */
-  idol_id: number | null;
-  /** What the original calls her, the end of her name (真乃), for where there is room for little: the
-   * calendar's job blocks; null when not configured, and her name is shown there. */
-  short_name: string | null;
-  /** Her name in simplified Chinese as the community writes it (八宫巡); null when not configured. */
-  name_zh: string | null;
-  /** Her full name in hiragana, family and given name a space apart (さくらぎ まの); null when not configured. */
-  name_kana: string | null;
-  /** Her full name in romaji, family name first, a space apart (Sakuragi Mano); null when not configured. */
-  name_romaji: string | null;
-  /** The name of her unit, from the world setting; null when there is none or it does not say. */
-  unit: string | null;
-  /** Her unit's name in hiragana, from the world setting; null along with `unit`. */
-  unit_reading: string | null;
-  /** Where her unit is in the units' official order, from 0; null along with `unit`. */
-  unit_order: number | null;
-  /** What she says to a visitor on the landing page; null when she has no greeting. */
-  greeting: Greeting | null;
-  /** What she says first once a visitor answers her call in the landing page's demo; null when
-   * she has none (only she who calls there needs one). */
-  call_opener: CallOpener | null;
-  /** Her card on the incoming call in the landing page's demo, a portrait WebP in the stands'
-   * bucket; null unless the deployment serves the stand assets. The server does not check that it
-   * was put there: when it fails to load, show her colour and name instead. */
-  call_poster_url: string | null;
-  /** Her voxel figure in the landing page's act about memory, a JSON file in the stands' bucket
-   * (`Voxels` in `scripts/glb-voxelize.mts`); null unless the deployment serves the stand assets. The
-   * server does not check that it was put there: when it fails to load, show her colour and name
-   * instead. */
-  voxels_url: string | null;
+  /** What she calls the user in her prompts. */
+  user_address: string;
+  /** Whether her replies are one language or paired Japanese and Chinese. */
+  language_mode: "single" | "bilingual";
+  /** Her birthday as `MM-DD`; null when unset. */
+  birthday: string | null;
+  age: number | null;
 };
-
-/** A character's greeting (GLOSSARY.md「招呼」). */
-export type Greeting = {
-  /** What she says in Japanese, without its delivery cues. */
-  ja: string;
-  /** Its Chinese subtitle. */
-  subtitle: string;
-  /** Its audio, an mp3 in the stands' bucket; null unless the deployment serves the stand assets
-   * and she has a voice. The server does not check that it was uploaded: when it fails to load, show
-   * the subtitle alone. */
-  audio_url: string | null;
-};
-
-/** A character's call opener (GLOSSARY.md「开场白」), given as her greeting is, its audio at an
- * address of its own. */
-export type CallOpener = Greeting;
-
-/** Where a character's stand comes from. */
-export type Stand = {
-  /** The outfit she wears unless the user picks another. */
-  default_outfit: Outfit;
-  /** Her outfit list: `{idol_id, cards}`, each card with its `everyday` clothes and `stage`
-   * costume (either may be null), whose `url` and `thumbnail` are relative to the list
-   * (docs/deploy.md「立绘素材」). */
-  outfits_url: string;
-};
-
-/** One outfit of her stand: `id` is `stand/<enzaId>` or `stand_costume/<enzaId>`, and `url` the
- * directory (ending in `/`) holding its `data.json`, `data.atlas` and `data.png`. */
-export type Outfit = { id: string; url: string };
 
 export type Conversation = {
   id: string;
@@ -219,7 +162,7 @@ export type Look = "weather" | "schedule" | "story";
 export type TurnEvent =
   | { type: "user"; text: string }
   | { type: "photo"; id: string; status: "pending" }
-  | { type: "delta"; segment: number; lang: "ja" | "zh"; text: string }
+  | { type: "delta"; segment: number; lang: "ja" | "zh" | "text"; text: string }
   | { type: "looking-up"; what: Look[] }
   | { type: "photos-used-up"; retry_at: string }
   | {
@@ -470,11 +413,6 @@ export async function api(path: string, init: RequestInit = {}): Promise<Respons
  * deployer gave none), which a banned user is told. */
 export type SignInOptions = { providers: Provider[]; dev_login: boolean; contact: string | null };
 
-/** What the landing page shows that belongs to no one character. `memory_still_url`: its act about
- * memory as one picture, for visitors who see no animation, in the stands' bucket; null unless the
- * deployment serves the stand assets. The server does not check that it was put there: when it
- * fails to load, show only the words. */
-export type LandingAssets = { memory_still_url: string | null };
 
 export async function getSignInOptions(): Promise<SignInOptions> {
   return json(await api("/api/auth/providers"));
@@ -715,39 +653,6 @@ export async function logout(userId?: string): Promise<void> {
   if (userId) forgetOwnKeys(userId);
 }
 
-/** A drink's flavor and kind (GLOSSARY.md「饮品」), as the recipe book's categories. */
-export type DrinkFlavor = "sweet" | "bitter" | "sour" | "spicy" | "bubbly";
-export type DrinkKind = "girly" | "manly" | "classic" | "classy" | "promo";
-
-type DrinkNames = { id: string; name: string; short_name: string; flavor: DrinkFlavor; kind: DrinkKind };
-
-/** A drink of the catalog (GLOSSARY.md「饮品」「材料」), as the bar counter and the recipe book read it:
- * mixed of parts of each ingredient (Karmotrine `"optional"` when any number will do), on ice or not,
- * aged or not, mixed or blended, big of itself or not, with its recipe card's `page` (null for the
- * few without a card); or bottled, with
- * its line of description and its parts of Karmotrine. No Japanese name, no character's tastes. */
-export type Drink =
-  | (DrinkNames & {
-      method: "mix" | "blend";
-      adelhyde: number;
-      bronson_extract: number;
-      powdered_delta: number;
-      flanergide: number;
-      karmotrine: number | "optional";
-      ice: boolean;
-      aged: boolean;
-      big: boolean;
-      page: number | null;
-    })
-  | (DrinkNames & { method: "bottle"; description: string; karmotrine: number });
-
-/** `GET /api/bar`: closed, or open with the drinks in catalog order and whether a visit done today
- * would be rewarded (none done yet today, Beijing time, and affinity and gifts open). */
-export type BarState = { enabled: false } | { enabled: true; drinks: Drink[]; reward_today: boolean };
-
-export async function getBar(): Promise<BarState> {
-  return json(await api("/api/bar"));
-}
 
 /** Tokyo's weather as a moment came out: one of seven kinds. */
 export type WeatherKind = "clear" | "cloudy" | "overcast" | "fog" | "rain" | "snow" | "thunder";
@@ -849,55 +754,6 @@ export async function getMomentsUnseen(): Promise<boolean> {
   return body.unseen;
 }
 
-/** Comes into the bar, bringing the user's own LLM (as `own_keys`) as a text turn does. Once the
- * server took it, the visit's first call, to be followed as it comes: `visit` first, then her lines
- * up to her order. Refused while the bar is closed (409), or over the limit (429, `retryAt` saying
- * when). Aborting `signal` closes the call, and the server leaves the visit. */
-export async function enterBar(userId: string, signal?: AbortSignal): Promise<AsyncGenerator<VisitEvent>> {
-  const res = await api("/api/bar/visits", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ own_keys: turnOwnKeys(userId) }),
-    signal,
-  });
-  if (!res.ok) await json(res);
-  return serverSentEvents<VisitEvent>(res);
-}
-
-/** Serves her what the bar counter holds (lib/barMixer `served`). Once the server took it, the
- * call it set off, to be followed as it comes: the producer's 「请慢用」, her reaction, and her next
- * order or her goodbye. Refused if it is none of the drinks (422 `broken_drink`), while she is not
- * waiting for one (409, a double tap), or with the visit gone (410 `visit_gone`). */
-export async function serveBarDrink(
-  visitId: string,
-  served: ServedBody,
-  signal?: AbortSignal,
-): Promise<AsyncGenerator<VisitEvent>> {
-  const res = await api(`/api/bar/visits/${encodeURIComponent(visitId)}/serves`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(served),
-    signal,
-  });
-  if (!res.ok) await json(res);
-  return serverSentEvents<VisitEvent>(res);
-}
-
-/** Tries again the call the visit stopped before, failing (a `failed` event). Once the server took
- * it, the call to be followed as it comes, from its first line on, without the producer's 「请慢用」
- * of a drink served. Refused while no call failed (409 `not_failed`), or with the visit gone (410
- * `visit_gone`, as after her farewell failed to be written down). */
-export async function retryBarVisit(visitId: string, signal?: AbortSignal): Promise<AsyncGenerator<VisitEvent>> {
-  const res = await api(`/api/bar/visits/${encodeURIComponent(visitId)}/retry`, { method: "POST", signal });
-  if (!res.ok) await json(res);
-  return serverSentEvents<VisitEvent>(res);
-}
-
-/** Leaves the visit: over, not to be come back to. `keepalive` as the page goes away. */
-export async function leaveBarVisit(visitId: string, { keepalive = false } = {}): Promise<void> {
-  const path = `/api/bar/visits/${encodeURIComponent(visitId)}`;
-  await expectNoContent(await api(path, { method: "DELETE", keepalive }));
-}
 
 /** The user's stats (GLOSSARY.md「统计」), in the producer's time zone, the lower part over
  * `range` (all of it unless given). */

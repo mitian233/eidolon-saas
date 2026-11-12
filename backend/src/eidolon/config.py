@@ -374,19 +374,25 @@ class LLMSettings:
     """Merged into every request last (see `checked_extra_body`)."""
 
     @classmethod
-    def chat_from_env(cls) -> "LLMSettings":
+    def chat_from_env(cls) -> "LLMSettings | None":
+        """The deployer's chat model; None if the deployment configures none of it, as a
+        zero-key platform does: every turn runs on the user's own key."""
         return cls._from_env("CHAT")
 
     @classmethod
-    def background_from_env(cls) -> "LLMSettings":
-        """The background model; each setting left unset is the chat model's."""
+    def background_from_env(cls) -> "LLMSettings | None":
+        """The background model; each setting left unset is the chat model's, and None
+        if neither is configured."""
         return cls._from_env("BACKGROUND", fallback="CHAT")
 
     @classmethod
-    def _from_env(cls, slot: str, fallback: str | None = None) -> "LLMSettings":
+    def _from_env(cls, slot: str, fallback: str | None = None) -> "LLMSettings | None":
         def value(name: str) -> str | None:
             names = [f"{slot}_LLM_{name}"] + ([f"{fallback}_LLM_{name}"] if fallback else [])
             return next((v for n in names if (v := os.environ.get(n))), None)
+
+        if not any(value(name) for name in _LLM_SLOT_FIELDS):
+            return None
 
         def required(name: str) -> str:
             if found := value(name):
@@ -426,6 +432,12 @@ class LLMSettings:
         )
 
 
+_LLM_SLOT_FIELDS = (
+    "BASE_URL", "API_KEY", "MODEL", "PROTOCOL", "MAX_TOKENS", "REASONING_EFFORT", "EXTRA_BODY",
+)
+"""What a model slot is configured by: any of them set, the connection three are required."""
+
+
 def effort_from_env(name: str, protocol: str) -> ReasoningEffort | None:
     """The reasoning effort `.env` sets in `name` for a model on `protocol`; None if it sets
     none. Raises RuntimeError if it is not one such a model may be set to."""
@@ -452,10 +464,14 @@ class ChatModelSettings:
 @dataclass(frozen=True)
 class Settings:
     database_path: Path
-    characters_path: Path
-    chat_llm: LLMSettings
-    background_llm: LLMSettings = None  # pyright: ignore[reportAssignmentType]  # see below
-    """Left out, the background model is the chat model."""
+    characters_path: Path | None = None
+    """The bundled character configuration of the upstream project; None here, characters
+    living in the database. Kept as a path the admin console shows; nothing loads it."""
+    chat_llm: LLMSettings | None = None
+    """The deployer's chat model; None on a zero-key platform, every turn running on the
+    user's own key."""
+    background_llm: LLMSettings | None = None
+    """Left out, the background model is the chat model's, if there is one."""
     call_reasoning_effort: ReasoningEffort | None = None
     """The chat model's in calls (`CHAT_LLM_CALL_REASONING_EFFORT`): see `chat_model`."""
     ice_servers: list[IceServer] = field(default_factory=lambda: list(DEFAULT_ICE_SERVERS))
@@ -558,8 +574,10 @@ class Settings:
             )
 
     @property
-    def chat_model(self) -> ChatModelSettings:
-        """The chat model, as text turns and calls each use it."""
+    def chat_model(self) -> ChatModelSettings | None:
+        """The chat model, as text turns and calls each use it; None without one."""
+        if self.chat_llm is None:
+            return None
         return ChatModelSettings(self.chat_llm, self.call_reasoning_effort)
 
     @property
@@ -603,7 +621,8 @@ class Settings:
             chat_llm=chat_llm,
             background_llm=LLMSettings.background_from_env(),
             call_reasoning_effort=effort_from_env(
-                "CHAT_LLM_CALL_REASONING_EFFORT", chat_llm.protocol
+                "CHAT_LLM_CALL_REASONING_EFFORT",
+                chat_llm.protocol if chat_llm is not None else "chat-completions",
             ),
             ice_servers=_ice_servers(os.environ.get("EIDOLON_ICE_SERVERS")),
             turn=TurnSettings.from_env(),
@@ -688,29 +707,11 @@ def database_path_from_env() -> Path:
     return Path(os.environ.get("EIDOLON_DATABASE_PATH", "data/eidolon.db"))
 
 
-def characters_path_from_env() -> Path:
-    return Path(os.environ.get("EIDOLON_CHARACTERS_PATH", "../characters/characters.toml"))
-
-
-def story_path_from_env() -> Path:
-    """SCTranslationData's story directory, which `eidolon story sync` imports from."""
-    return Path(os.environ.get("EIDOLON_STORY_PATH", "../corpus/SCTranslationData/data/story"))
-
-
-def mirror_cache_path_from_env() -> Path:
-    """Where `eidolon story sync` keeps the scripts it downloads from the mirror."""
-    return Path(os.environ.get("EIDOLON_MIRROR_CACHE_PATH", "../corpus/mirror"))
-
-
-def event_names_path_from_env() -> Path:
-    """The admin's table of event names, which `eidolon story sync` names events from."""
-    return Path(os.environ.get("EIDOLON_EVENT_NAMES_PATH", "../deploy/event-names.toml"))
-
-
-def game_catalog_path_from_env() -> Path:
-    """What `npm run game:catalog` saved from the logged-in game (ADR-0034), which the story
-    sync and the stand fetch take the cards from while it is fresh."""
-    return Path(os.environ.get("EIDOLON_GAME_CATALOG_PATH") or "../corpus/game/catalog.json")
+def characters_path_from_env() -> Path | None:
+    """`EIDOLON_CHARACTERS_PATH`, if a deployment still names one; None by default: the
+    bundled character configuration is gone, characters live in the database."""
+    value = os.environ.get("EIDOLON_CHARACTERS_PATH", "").strip()
+    return Path(value) if value else None
 
 
 def stand_assets_url_from_env() -> str | None:
@@ -724,13 +725,6 @@ def stand_assets_url_from_env() -> str | None:
             f"而不是 {value}"
         )
     return value
-
-
-def stand_build_path_from_env() -> Path:
-    """Where `eidolon stand fetch` keeps the stands it fetched (`source/`), `eidolon stand
-    outfits` writes the outfit lists and the thumbnails are rendered, laid out as the
-    bucket is, before they are uploaded."""
-    return Path(os.environ.get("EIDOLON_STAND_BUILD_PATH", "../corpus/stand"))
 
 
 ADMIN_PROVIDERS = ("github", "google")

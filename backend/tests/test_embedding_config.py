@@ -1,14 +1,12 @@
 """Choosing the embedding service at deploy time (ADR-0005): SiliconFlow's Qwen3-Embedding
 by default, or Google's Gemini Embedding 2; reranking stays on SiliconFlow either way."""
 
-import logging
 from pathlib import Path
 
 import pytest
 
 from eidolon.config import EmbeddingSettings, LLMSettings, RerankSettings, Settings
 from eidolon.embedding import GeminiEmbedder, SiliconFlowEmbedder, open_embedder
-from tests.conftest import Admin, CharacterConfig
 from tests.fakes import FakeBackgroundLLM, FakeJudge, FakeLLM, FakeSpeech, build_faked
 
 NAMES = (
@@ -105,8 +103,6 @@ def test_a_bad_choice_stops_the_start(
 async def test_retrieval_is_off_without_either_key(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    characters: CharacterConfig,
-    caplog: pytest.LogCaptureFixture,
     keys: dict[str, str],
 ):
     monkeypatch.setenv("EMBEDDING_PROVIDER", "gemini")
@@ -114,28 +110,17 @@ async def test_retrieval_is_off_without_either_key(
         monkeypatch.setenv(name, value)
     settings = Settings(
         database_path=tmp_path / "eidolon.db",
-        characters_path=characters.path,
         chat_llm=LLMSettings("http://llm.invalid/v1", "k", "m"),
         embedding=EmbeddingSettings.from_env(),
         rerank=RerankSettings.from_env(),
     )
 
-    with caplog.at_level(logging.INFO, logger="eidolon.assembly"):
-        backend = build_faked(
-            settings, FakeLLM([]), background_llm=FakeBackgroundLLM(),
-            retrieval_judge=FakeJudge(), speech=FakeSpeech(),
-        )
+    backend = build_faked(
+        settings, FakeLLM([]), background_llm=FakeBackgroundLLM(),
+        retrieval_judge=FakeJudge(), speech=FakeSpeech(),
+    )
 
     await backend.aclose()
-    assert "retrieval and memory are off" in caplog.text
+    assert backend.corpus is None  # nothing to retrieve from without both services
 
 
-def test_commands_name_the_missing_gemini_key(
-    admin: Admin, story: Path, characters: CharacterConfig, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setenv("EMBEDDING_PROVIDER", "gemini")
-    monkeypatch.setenv("SILICONFLOW_API_KEY", "sk-test")
-
-    err = admin.fails("story", "import-csv", str(story), "--characters", str(characters.path))
-
-    assert "GEMINI_API_KEY" in err

@@ -35,24 +35,18 @@ from tests.fakes import (
     FAKE_JUDGE,
     FakeClock,
     FakeLLM,
-    FakeRandom,
     FakeServiceClients,
     FakeSpeech,
     Judging,
     level,
 )
 from tests.test_affinity import keep, status
-from tests.test_affinity_cooldown import PARTING, UNTIL, ask_before_calling
-from tests.test_affinity_prompt import about_now
+from tests.test_affinity_cooldown import UNTIL, ask_before_calling
 from tests.test_conversation_events import record, shape
-from tests.test_gift_backpack import RESET_CARD
-from tests.test_reset_cards import USE
-from tests.test_she_hangs_up import HANGING_UP, OUT_OF_LINE, say
-from tests.test_she_hangs_up import WARNING as HANG_UP_WARNING
+from tests.test_she_hangs_up import OUT_OF_LINE, say
 from tests.test_text_turn import send_turn, start_conversation
 
 REPLY = ["<ja>はい</ja><zh>好的</zh>"]
-WARNING = "制作人再这样下去你就不想聊了"
 ENDED = "她已经结束了对话"
 HURT = level(1)
 """Hurting her a little: six in a row end the conversation, the third warns the user."""
@@ -87,18 +81,13 @@ def ended_by(turn: list[dict]) -> bool:
 async def test_hurt_turn_after_turn_she_warns_once_then_ends_the_conversation_after_her_last_line(
     make_client: ClientFactory, settings: Settings
 ):
-    client, llm = client_judging(make_client, [HURT] * 6)
+    client, _ = client_judging(make_client, [HURT] * 6)
     conversation = await start_conversation(client)
 
     turns = await say_each(client, conversation, 6)
     recorded = await record(client, conversation)
     listed = (await client.get("/api/conversations/latest")).json()
 
-    assert [WARNING in about_now(llm, n) for n in range(6)] == [False, False, True] + [False] * 3
-    assert [PARTING in about_now(llm, n) for n in range(6)] == [False] * 5 + [True]
-    assert not any(
-        HANG_UP_WARNING in about_now(llm, n) or HANGING_UP in about_now(llm, n) for n in range(6)
-    )
     assert [ended_by(turn) for turn in turns] == [False] * 5 + [True]
     assert turns[-1][-1]["affinity"]["cooldown_until"] is None
     assert shape(recorded)[-3:] == ["user:第5句", "character:好的", "ended"]
@@ -141,26 +130,13 @@ async def test_only_the_latest_eight_typed_turns_count_so_now_and_then_she_never
     make_client: ClientFactory, settings: Settings
 ):
     # Hurt every other turn: twelve in all, but never more than eight in eight turns.
-    client, llm = client_judging(make_client, [HURT if n % 2 == 0 else FINE for n in range(11)])
+    client, _ = client_judging(make_client, [HURT if n % 2 == 0 else FINE for n in range(11)])
     conversation = await start_conversation(client)
 
     turns = await say_each(client, conversation, 11)
 
     assert not any(ended_by(turn) for turn in turns)
-    assert [n for n in range(11) if WARNING in about_now(llm, n)] == [4]
     assert "ended" not in shape(await record(client, conversation))
-
-
-async def test_she_warns_again_only_once_it_has_eased_below_halfway(
-    make_client: ClientFactory, settings: Settings
-):
-    # Six off her affinity in the latest eight all along, never below, as the ninth hurts.
-    client, llm = client_judging(make_client, [HURT] * 3 + [FINE] * 5 + [HURT])
-    conversation = await start_conversation(client)
-
-    await say_each(client, conversation, 9)
-
-    assert [n for n in range(9) if WARNING in about_now(llm, n)] == [2]
 
 
 async def test_a_turn_not_judged_ends_nothing_but_takes_its_place_among_the_latest(
@@ -168,14 +144,13 @@ async def test_a_turn_not_judged_ends_nothing_but_takes_its_place_among_the_late
 ):
     failing = Judging(fails=True)
     # Five that hurt, three not judged, one that hurts: ten in the latest eight, not twelve.
-    client, llm = client_judging(make_client, [HURT] * 5 + [failing] * 3 + [HURT])
+    client, _ = client_judging(make_client, [HURT] * 5 + [failing] * 3 + [HURT])
     conversation = await start_conversation(client)
 
     turns = await say_each(client, conversation, 9)
 
     assert all(turn[-1]["type"] == "done" for turn in turns)
     assert not any(ended_by(turn) for turn in turns)
-    assert not any(PARTING in about_now(llm, n) for n in range(9))
 
 
 async def test_turns_from_before_typed_turns_were_counted_count_for_nothing(
@@ -194,7 +169,7 @@ async def test_a_calls_turns_count_in_it_alone_and_her_hanging_up_leaves_the_con
     make_client: ClientFactory, settings: Settings, speech: FakeSpeech
 ):
     # Out of line twice in the call (twenty off her affinity), then hurt a little typing.
-    client, llm = client_judging(make_client, [OUT_OF_LINE, OUT_OF_LINE, HURT])
+    client, _ = client_judging(make_client, [OUT_OF_LINE, OUT_OF_LINE, HURT])
     conversation = await start_conversation(client)
 
     async with open_browser() as browser:
@@ -211,12 +186,11 @@ async def test_a_calls_turns_count_in_it_alone_and_her_hanging_up_leaves_the_con
 
     assert typed[-1]["type"] == "done"
     assert not ended_by(typed)
-    assert WARNING not in about_now(llm)
     assert "ended" not in shape(await record(client, conversation))
 
 
 async def test_off_she_never_ends_it(make_client: ClientFactory, settings: Settings):
-    client, llm = client_judging(
+    client, _ = client_judging(
         make_client, [HURT] * 6, settings=replace(settings, affinity_and_gifts=False)
     )
     conversation = await start_conversation(client)
@@ -224,20 +198,18 @@ async def test_off_she_never_ends_it(make_client: ClientFactory, settings: Setti
     turns = await say_each(client, conversation, 6)
 
     assert all(turn[-1]["type"] == "done" and turn[-1]["ended"] is None for turn in turns)
-    assert not any(WARNING in about_now(llm, n) for n in range(6))
     assert "ended" not in shape(await record(client, conversation))
 
 
 async def test_out_of_line_a_second_time_in_the_latest_eight_typed_turns_she_ends_it(
     make_client: ClientFactory, settings: Settings
 ):
-    client, llm = client_judging(make_client, [OUT_OF_LINE] + [FINE] * 6 + [OUT_OF_LINE])
+    client, _ = client_judging(make_client, [OUT_OF_LINE] + [FINE] * 6 + [OUT_OF_LINE])
     conversation = await start_conversation(client)
 
     turns = await say_each(client, conversation, 8)
 
     assert [ended_by(turn) for turn in turns] == [False] * 7 + [True]
-    assert PARTING in about_now(llm, 7)
     assert shape(await record(client, conversation))[-1] == "ended"
     assert ended_kept(settings.database_path) == [None] * 7 + ["out_of_line"]
 
@@ -245,13 +217,12 @@ async def test_out_of_line_a_second_time_in_the_latest_eight_typed_turns_she_end
 async def test_out_of_line_more_than_eight_typed_turns_ago_is_not_counted(
     make_client: ClientFactory, settings: Settings
 ):
-    client, llm = client_judging(make_client, [OUT_OF_LINE] + [FINE] * 7 + [OUT_OF_LINE])
+    client, _ = client_judging(make_client, [OUT_OF_LINE] + [FINE] * 7 + [OUT_OF_LINE])
     conversation = await start_conversation(client)
 
     turns = await say_each(client, conversation, 9)
 
     assert not any(ended_by(turn) for turn in turns)
-    assert not any(PARTING in about_now(llm, n) for n in range(9))
 
 
 async def test_the_turn_that_cools_her_ends_it_saying_till_when_and_the_cooldown_over_it_stays_ended(
@@ -274,36 +245,11 @@ async def test_the_turn_that_cools_her_ends_it_saying_till_when_and_the_cooldown
 
     assert done["ended"] == recorded[-1]
     assert done["affinity"]["cooldown_until"] == UNTIL
-    assert PARTING in about_now(llm, 0)
     assert shape(recorded) == ["user:随便你", "character:好的", "ended"]
     assert ended_kept(settings.database_path)[0] == "cooldown"
     assert rejected[-1] == {"type": "error", "message": ENDED}
     assert elsewhere[-1]["type"] == "done"
     assert "ended" not in shape(await record(client, other))
-
-
-async def test_a_reset_card_does_not_open_it_again(make_client: ClientFactory, settings: Settings):
-    clock = FakeClock()
-    clients = FakeServiceClients()
-    clients.judge.judgings = [level(0)]
-    client = make_client(
-        FakeLLM(REPLY), clients=clients, clock=clock, random=FakeRandom(RESET_CARD)
-    )
-    assert (await client.get("/api/gifts")).status_code == 200
-    assert (await client.post("/api/gifts/draws", json={})).status_code == 200
-    conversation = await start_conversation(client)
-    keep(settings.database_path, "producer", 1, clock.now)
-    await send_turn(client, conversation, "随便你")
-
-    used = await client.post(USE)
-    rejected = await send_turn(client, conversation, "对不起")
-    asked = await ask_before_calling(client, conversation)
-
-    assert used.status_code == 200, used.text
-    assert (await status(client)).json()["cooldown_until"] is None
-    assert rejected[-1] == {"type": "error", "message": ENDED}
-    assert asked.status_code == 409
-    assert asked.json()["detail"] == ENDED
 
 
 async def test_cooling_her_in_a_call_ends_no_conversation(

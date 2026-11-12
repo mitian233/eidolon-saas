@@ -1,12 +1,10 @@
-"""Deleting a past conversation (GLOSSARY.md「历史对话」): it and its record, messages,
-conversation events and her reach-outs alike, and when she was to reach out in it, go for good; the memories written in it stay, saying where no
+"""Deleting a past conversation (GLOSSARY.md「历史对话」): it and its record, messages and
+conversation events alike go for good; the memories written in it stay, saying where no
 longer, even those written after it was deleted; her current one, someone else's, or
 one not there is not deleted. Driven through the backend's external API."""
 
 import asyncio
 import sqlite3
-from dataclasses import replace
-from datetime import timedelta
 from pathlib import Path
 
 
@@ -17,7 +15,6 @@ from tests.fakes import (
     FakeEmbedder,
     FakeJudge,
     FakeLLM,
-    FakeRandom,
     FakeReranker,
 )
 from tests.test_conversation_events import hang_up
@@ -25,7 +22,6 @@ from tests.test_conversation_titles import TITLE, listed_titles
 from tests.test_delete_account import rows_mentioning
 from tests.test_memory_management import memories, memory_client
 from tests.test_past_conversations import hers
-from tests.test_reach_outs import MIDDLE, REACH_OUT, backend_of, last_contact, talked
 from tests.test_shared_memory import CAT, REPLY, memorized, turn
 from tests.test_text_turn import send_turn, start_conversation
 
@@ -57,25 +53,6 @@ async def test_a_past_conversation_and_its_record_are_deleted_and_its_memories_k
     # The current conversation is untouched.
     messages = (await client.get(f"/api/conversations/{current}/messages")).json()
     assert [m["text"] for m in messages if m["role"] == "user"] == ["早上好"]
-
-
-async def test_her_reach_outs_in_it_and_when_she_was_to_come_go_with_it(
-    make_client: ClientFactory, settings: Settings
-):
-    client, _, clock, past = await talked(
-        make_client, REACH_OUT,
-        settings=replace(settings, reach_outs=True), random=FakeRandom(MIDDLE),
-    )
-    last_contact(settings.database_path, past, clock.now - timedelta(hours=28))
-    await backend_of(client).reach_outs.run_due()
-    assert set(rows_mentioning(settings.database_path, past)) >= {
-        "reach_outs", "reach_out_schedules",
-    }
-    await start_conversation(client)
-
-    assert (await client.delete(f"/api/conversations/{past}")).status_code == 204
-
-    assert rows_mentioning(settings.database_path, past) == {}
 
 
 async def test_her_current_conversation_is_not_deleted(make_client: ClientFactory):

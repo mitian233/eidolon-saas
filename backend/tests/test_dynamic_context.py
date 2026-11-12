@@ -5,12 +5,12 @@ service can cache all of it but the end (ADR-0020)."""
 import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from eidolon.config import Settings
 from eidolon.llm import ChatMessage
-from eidolon.reply_format import FORMAT_INSTRUCTIONS
 from tests.conftest import ClientFactory
 from tests.fakes import (
     FakeBackgroundLLM,
@@ -24,8 +24,26 @@ from tests.fakes import (
 )
 from tests.test_affinity_prompt import LAST_TALKED
 from tests.test_call_turns import MANO_REPLY, CallUnderTest, spoken
-from tests.test_reach_outs import connected_call, last_contact
 from tests.test_text_turn import send_turn, start_conversation
+
+
+def last_contact(database: Path, conversation: str, at: datetime) -> None:
+    """Have the conversation's turns have been recorded at `at`, the last contact."""
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "UPDATE messages SET created_at = ? WHERE conversation_id = ?",
+            (at.isoformat(), conversation),
+        )
+
+
+def connected_call(database: Path, conversation: str, at: datetime, seconds: float) -> None:
+    """Keep a call in the conversation that connected at `at` and lasted `seconds`."""
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO calls (conversation_id, connected_at, duration_s) VALUES (?, ?, ?)",
+            (conversation, at.isoformat(), seconds),
+        )
+
 
 PROFILE = {
     "form_of_address": "小林",
@@ -54,7 +72,7 @@ async def test_what_changes_each_turn_comes_after_the_history(make_client: Clien
     await send_turn(client, conversation, "第2句")
 
     shared, producer, *rest = llm.prompts[-1]
-    assert shared.cache_breakpoint and shared.content.endswith(FORMAT_INSTRUCTIONS)
+    assert shared.cache_breakpoint and "# 回复格式" in shared.content
     assert producer.role == "system"
     assert "小林" in producer.content and "5月3日" in producer.content
     assert "现在是" not in producer.content
@@ -136,8 +154,8 @@ async def test_without_a_limit_the_whole_history_is_carried(
 
 
 
-TYPING = "制作人正在用文字和你聊天"
-IN_A_CALL = "制作人正在和你打电话"
+TYPING = "对方正在用文字和你聊天"
+IN_A_CALL = "对方正在和你打电话"
 
 
 async def test_she_is_told_whether_the_turn_is_typed_or_in_a_call_after_what_is_cached(
@@ -190,7 +208,7 @@ async def test_each_typed_turn_is_told_when_they_last_talked_and_how_long_ago(
     ]
     assert told == [
         [],
-        ["上次和制作人说话是 10月17日 10:00，隔了 2 天。"],
-        ["上次和制作人说话是 10月19日 19:30，隔了 1 小时。"],
-        ["上次和制作人说话是 2025年12月31日 20:55，隔了 292 天。"],
+        ["上次和对方说话是 10月17日 10:00，隔了 2 天。"],
+        ["上次和对方说话是 10月19日 19:30，隔了 1 小时。"],
+        ["上次和对方说话是 2025年12月31日 20:55，隔了 292 天。"],
     ]

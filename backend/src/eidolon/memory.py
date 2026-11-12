@@ -73,11 +73,11 @@ CANDIDATES = 12
 MAX_FOUND = 3
 """The most memories one turn's prompt carries, after reranking."""
 LATELY = timedelta(days=14)
-"""How long ago what she reaches out with as his news may have been written down."""
+"""How long ago what she reaches out with as the user's news may have been written down."""
 MAX_LATEST = 5
-"""The most of his news she reaches out with, besides what is found."""
-ANOTHER_IDOL = "事务所的另一位偶像"
-"""Who a memory was told to, when that character has been removed from the configuration."""
+"""The most of the user's news she reaches out with, besides what is found."""
+ANOTHER_CHARACTER = "另一位角色"
+"""Who a memory was told to, when that character has been removed."""
 
 # `memories` predates this module and keeps the columns and constraints it had in the
 # store; `memory_vectors` holds each memory's embedding, per embedding model.
@@ -559,8 +559,11 @@ class Memories:
         superseded_by: int | None = None, conversation_id: str | None = None,
     ) -> Memory:
         source = self._characters.get(source_character_id)
+        # A memory imported from elsewhere may name another owner's character: its name is
+        # never revealed across owners (D13), only the hearsay fallback.
+        name = source.name if source is not None and source.owner_id == user_id else None
         return Memory(
-            id, user_id, source_character_id, source.name if source else None, text,
+            id, user_id, source_character_id, name, text,
             created_at, superseded_by, conversation_id,
         )
 
@@ -785,25 +788,25 @@ class MemoryTurn:
 
 
 _INSTRUCTIONS = """\
-你负责替《偶像大师 闪耀色彩》283 事务所的偶像们（还有事务员）记住关于制作人的事。制作人就是正在和她们对话的用户。
-读下面的对话，从制作人最新的一句话里找出值得长期记住的、关于制作人本人的信息。
+你负责替角色记住关于用户的事。用户就是正在和角色对话的人。
+读下面的对话，从用户最新的一句话里找出值得长期记住的、关于用户本人的信息。
 
 只记过后仍有意义的事。
-要记的：制作人自己透露的个人情况、喜好、经历、计划、身边的人和宠物、希望偶像记住的事；\
+要记的：用户自己透露的个人情况、喜好、经历、计划、身边的人和宠物、希望角色记住的事；\
 会持续几天、朋友过后会问起的近况，例如生病、考试、面试、搬家、出差。
 不要记的：当天就会过去的状态（例如累、困、饿、无聊、心情不好）和一时的情绪，\
-同一句话里还说了值得记的事时只记那件事、不记这种状态；寒暄；偶像说的话；原作剧情和偶像的设定；制作人向偶像提的问题。
+同一句话里还说了值得记的事时只记那件事、不记这种状态；寒暄；角色说的话；角色的设定；用户向角色提的问题。
 
-每条记忆是一句能单独看懂的中文陈述，以「制作人」开头，例如「制作人养了一只叫小白的猫」。
+每条记忆是一句能单独看懂的中文陈述，以「用户」开头，例如「用户养了一只叫小白的猫」。
 提到「明天」「下周六」这样的相对时间时，换算成具体日期写下来。
 
 「已经记住的事」按编号列出了和这轮对话最相关的记忆，写之前先对照：
 - 和已经记住的一样的，不要再写。
 - 更新或修正了已经记住的事（例如搬了家、换了工作），写一条单独看也完整的新记忆，写清从什么变成了什么，\
-例如「制作人从大阪搬到了东京」，并在 supersedes 里写上被它取代的记忆的编号，可以写多个。
+例如「用户从大阪搬到了东京」，并在 supersedes 里写上被它取代的记忆的编号，可以写多个。
 - 补充了已经记住的事的细节（例如说出了猫的名字），写一条把细节合进去的完整记忆，取代原来那条。
 - 一件事只变了一部分的，新记忆要把仍然成立的部分也写进去，例如原来记着养了一只猫和一只狗、\
-现在狗去世了，就写「制作人的狗去世了，现在还养着那只猫」，取代原来那条。
+现在狗去世了，就写「用户的狗去世了，现在还养着那只猫」，取代原来那条。
 - 两件事可以同时成立的（例如喜欢喝咖啡，最近也开始喝茶），新的照常写，不取代旧的。
 
 只输出 JSON，格式为 {"memories": [{"text": "……", "supersedes": [编号]}]}，不取代任何记忆时 \
@@ -818,15 +821,15 @@ def _extraction_prompt(
     shown: Sequence[Memory],
     now: datetime,
 ) -> list[ChatMessage]:
-    lines = [f"今天是 {_date(now)}（制作人所在时区）。", "", "# 已经记住的事"]
+    lines = [f"今天是 {_date(now)}（对方所在时区）。", "", "# 已经记住的事"]
     lines += [f"{n}. {m.text}" for n, m in enumerate(shown, 1)] or ["（还没有）"]
-    lines += ["", f"# 制作人和{character.name}的对话"]
+    lines += ["", f"# 用户和{character.name}的对话"]
     for message in history[-EXCHANGE_HISTORY:]:
         if message.role == "user":
-            lines.append(f"制作人：{message.text}")
+            lines.append(f"用户：{message.text}")
         else:
             lines.append(f"{character.name}：{_said(message)}")
-    lines += [f"制作人（最新的一句话）：{text}", f"{character.name}：{_said(reply)}"]
+    lines += [f"用户（最新的一句话）：{text}", f"{character.name}：{_said(reply)}"]
     return [ChatMessage("system", _INSTRUCTIONS), ChatMessage("user", "\n".join(lines))]
 
 
@@ -896,17 +899,17 @@ def parse_memories(answer: str) -> list[NewMemory] | None:
 
 
 _FOUND = (
-    "下面是制作人以前说过的、和这句话可能有关的事，按相关程度排列，和话题无关的可以忽略。"
+    "下面是用户以前说过的、和这句话可能有关的事，按相关程度排列，和话题无关的可以忽略。"
     "像平时记得这些事一样自然地提起，不要逐条复述。"
 )
 _REACHING_OUT = (
-    "下面是制作人以前对你说过的事：先是和你们上次聊的可能有关的，再是制作人这两周的近况。"
+    "下面是用户以前对你说过的事：先是和你们上次聊的可能有关的，再是用户这两周的近况。"
     "挑一两件自然地提起，不要逐条复述。"
 )
 
 _POSTING = (
-    "下面是制作人以前对你说过的事：先是和你们上次聊的可能有关的，再是制作人这两周的近况。"
-    "朋友圈大家都看得到：最多隐约呼应一件，不要复述，他私下告诉你的事不要点明。"
+    "下面是用户以前对你说过的事：先是和你们上次聊的可能有关的，再是用户这两周的近况。"
+    "朋友圈大家都看得到：最多隐约呼应一件，不要复述，对方私下告诉你的事不要点明。"
 )
 
 
@@ -923,16 +926,16 @@ def _memories_prompt(
 ) -> str:
     """The prompt section carrying `memories`, after its heading and `opening`, which says
     what they are."""
-    lines = ["# 关于制作人的记忆", opening]
+    lines = ["# 关于用户的记忆", opening]
     for memory in memories:
         when = _date(datetime.fromisoformat(memory.created_at).astimezone(ZoneInfo(timezone)))
         if memory.source_character_id == character.id:
-            lines.append(f"- {memory.text}（{when}，制作人对你说的）")
+            lines.append(f"- {memory.text}（{when}，用户对你说的）")
         else:
-            name = memory.source_character_name or ANOTHER_IDOL
+            name = memory.source_character_name or ANOTHER_CHARACTER
             lines.append(
-                f"- {memory.text}（{when}，制作人对{name}说的，你是听{name}说的：提起时要用转述的口吻，"
-                f"例如「听{name}说……」，不要说成是制作人亲口告诉你的）"
+                f"- {memory.text}（{when}，用户对{name}说的，你是听{name}说的：提起时要用转述的口吻，"
+                f"例如「听{name}说……」，不要说成是用户亲口告诉你的）"
             )
     return "\n".join(lines)
 

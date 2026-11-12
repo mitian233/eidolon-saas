@@ -28,7 +28,7 @@ async function forward(request: Request, { params }: { params: Promise<{ path: s
   const res = await fetch(url, init);
 
   const out = new Headers();
-  // the etag lets the browser revalidate an avatar instead of downloading it again; a data
+  // the etag lets the browser revalidate an image instead of downloading it again; a data
   // package downloads under its name, with its size for the browser's progress
   for (const name of [
     "content-type",

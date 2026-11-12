@@ -13,10 +13,8 @@ import {
   type RefObject,
 } from "react";
 
-import { UnseenDot } from "@/components/app/AchievementLine";
 import { FailureNotice, SignInButton } from "@/components/app/FailureNotice";
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
-import { HerLetterButton } from "@/components/letter/LetterButton";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,7 +39,6 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { copy } from "@/i18n";
 import { cueText, untilText } from "@/lib/affinity";
 import type { Character, Look } from "@/lib/api";
-import { keepCalendarMode } from "@/lib/calendar";
 import { eventText } from "@/lib/conversationEvents";
 import type { Entry } from "@/lib/conversationLog";
 import type { Failure } from "@/lib/failure";
@@ -52,19 +49,16 @@ import { linesOf, type Line } from "@/lib/messageLines";
 import { pastDay } from "@/lib/pastConversations";
 import { photosUsedUpText } from "@/lib/photoFailure";
 import { saidOf, type ReadAloud, type Said } from "@/lib/readAloud";
-import { herScheduleHref } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
 import {
   AchievementsIcon,
   BackIcon,
-  CalendarIcon,
   CooldownIcon,
   EndedIcon,
   GiftIcon,
   MoreIcon,
   NewConversationIcon,
-  OutfitIcon,
   PastConversationsIcon,
   PhoneIcon,
   PhotosUsedUpIcon,
@@ -72,23 +66,18 @@ import {
 } from "@/theme/icons";
 import { Ja } from "@/theme/Ja";
 
-import { AchievementsPanel } from "./AchievementsPanel";
 import { AffinityBadge, CueArrowIcon } from "./AffinityBadge";
 import { CallBar } from "./CallBar";
 import { EVENT_ICONS } from "./EventIcon";
 import { LiveCallLayer } from "./CallLayer";
-import { OutfitPicker } from "./OutfitPicker";
 import { PastConversations } from "./PastConversations";
 import { PhotoBlock } from "./PhotoBlock";
 import { ReadAloudBar, ReadAloudMenu } from "./ReadAloud";
 import { useDirectory, useWide } from "./ConversationDirectory";
 import { useFocusBack } from "./useFocusBack";
-import { useHerAchievements } from "./useHerAchievements";
 import { usePastConversation, type Viewing } from "./usePastConversation";
 import { useProducerTimezone } from "./useProducerTimezone";
 import { readAloudFor, useCanReadAloud } from "./useReadAloud";
-import { useScheduleOn } from "./useScheduleOn";
-import { useStandOutfits } from "./useStandOutfits";
 
 const t = copy.conversation;
 
@@ -100,21 +89,15 @@ const noSubscription = () => () => {};
  * 成组的 22px 圆角气泡，实底的输入栏。对话的状态全在 LiveConversation 里，这里只画它的快照、把操作交给它。
  * 整个子树注入她的颜色（herVars），浮层（更多菜单）的 container 指回这棵子树。
  *
- * 她写过信时，电话键左边一个信封键（GLOSSARY.md「信」，`HerLetterButton`），点开是她的信。
  * 页首的电话键打开通话层并开始呼叫（spec「通话层」）；通话层可以收起回到这里，页首下面出现通话条，
  * 电话键变成实心的「回到通话」。对话的实时状态（连同通话）由导航外壳持有（ADR-0018）：这一页打开时向外壳要她那一份，
  * 离开时交回；通话中离开这一页，通话留在外壳里，回来时一切照旧。她的声音、电话本身的声音和切换麦克风的面板也在外壳里。
- * 她有立绘时，更多菜单里有「换衣装」（spec「衣装与换衣装」）。
  * 好感度可用时，电话键和更多菜单之间是好感度标识（GLOSSARY.md「好感度」）；不可用时读到 null，不显示。
  * 她在冷却中（GLOSSARY.md「冷却」）时，输入栏换成一行说明和「送她一件礼物」、电话键禁用，到点自己恢复。
  * 她结束了这个对话（GLOSSARY.md「已结束的对话」）时，输入栏换成结束卡「她结束了对话」和「开个新对话」、电话键禁用，只能往上翻看；她还在冷却中时，结束卡写上解除时刻、加「送她一件礼物」。
  * 送礼的入口（冷却时的输入栏、标识的说明末尾、冷却版结束卡）都跳到玩法里的礼物子页，带上她（spec「打开好感度藏起的送礼入口」），
  * 礼物一律记进当前对话；好感度和礼物同一个开关，好感度读不到时这些入口都不在。
  *
- * 更多菜单依次是「新对话」「历史对话」「换衣装」「成就」「她的日程」。「成就」打开她的成就面板（`AchievementsPanel`），「好感度和礼物」关着时没有；
- * 「她的日程」去日历子页只看她、切成周视图，日程关着时没有；
- * 她有没看过的解锁时，更多菜单键右上角和「成就」后面各一个点（`useHerAchievements`）。这一页上的回合解锁了她的阶段、
- * 通话层没盖着页首时，好感度标识左边跳出奖杯和「+n」，约 3 秒收起（快照的 `trophy`）。
  * 「历史对话」打开面板（`PastConversations`），点一段就看那段历史对话
  * （地址带 `?c=`，`usePastConversation`）：消息区照平时画、只读，页首名字下面写「{日期}的对话」，电话键禁用
  * （通话中也禁用，回通话走通话条），输入栏换成只读卡「回到当前对话」；窄屏页首的返回键、只读卡的按钮都回到当前对话。
@@ -139,15 +122,11 @@ export function ConversationView({
   const [live, setLive] = useState<LiveConversation | null>(null);
   const snapshot = useSyncExternalStore(live?.subscribe ?? noSubscription, live?.snapshot ?? notOpen, notOpen);
   const { conversation, entries, call, layer, hearing, lookingUp, draft, failure } = snapshot;
-  const outfits = useStandOutfits(character);
-  const [pickingOutfit, setPickingOutfit] = useState(false);
   const [pickingPast, setPickingPast] = useState(false);
   const { viewing, view, backToCurrent } = usePastConversation(character.id);
   const subtree = useRef<HTMLDivElement>(null);
   // 她现在对制作人的好感度；读不到（好感度关着、没配判断模型或请求失败）就不显示标识，也不出变化胶囊。
   const { affinity, affinityCue, cooling, ended, trophy } = snapshot;
-  const achievements = useHerAchievements(character.id, userId, snapshot.herUnlockedAt);
-  const isScheduleOn = useScheduleOn();
   // 解除时刻按制作人的时区写成今天或明天。
   const timeZone = useProducerTimezone();
 
@@ -249,7 +228,6 @@ export function ConversationView({
           <p className="truncate text-meta text-muted-foreground">{t.past.heading(pastDay(viewing.at, new Date()))}</p>
         )}
       </div>
-      <HerLetterButton character={character} className={headerKey} />
       {phoneKey}
       {trophy && <TrophyCue key={trophy.key} trophy={trophy} isReducedMotion={isReducedMotion} />}
       {/* 礼貌的 live region 一直在，奖杯出现时读「成就，抽奖 +n」；按 key 换节点，同样的 n 再来一次也读 */}
@@ -273,14 +251,11 @@ export function ConversationView({
               variant="ghost"
               size="icon-lg"
               className={cn(headerKey, "relative")}
-              aria-label={achievements.isUnseen ? t.menuUnseen : t.menu}
+              aria-label={t.menu}
             />
           }
         >
           <MoreIcon className="size-5" />
-          {achievements.isUnseen && (
-            <span aria-hidden className="absolute top-2 right-2 size-1.5 rounded-full bg-foreground" />
-          )}
         </DropdownMenuTrigger>
         <DropdownMenuContent container={subtree} align="end">
           {/* 菜单项里的图标默认 16px、跟着菜单文字的颜色，不用她的颜色 */}
@@ -292,30 +267,6 @@ export function ConversationView({
             <PastConversationsIcon aria-hidden />
             {t.past.open}
           </DropdownMenuItem>
-          {outfits && (
-            <DropdownMenuItem onClick={() => setPickingOutfit(true)}>
-              <OutfitIcon aria-hidden />
-              {t.outfits.open}
-            </DropdownMenuItem>
-          )}
-          {achievements.her && (
-            <DropdownMenuItem onClick={() => achievements.setPanelOpen(true)}>
-              <AchievementsIcon aria-hidden />
-              {copy.achievements.open}
-              {achievements.isUnseen && <UnseenDot className="ml-auto" />}
-            </DropdownMenuItem>
-          )}
-          {isScheduleOn && (
-            <DropdownMenuItem
-              onClick={() => {
-                keepCalendarMode(userId, "week");
-                go(herScheduleHref(character.id));
-              }}
-            >
-              <CalendarIcon aria-hidden />
-              {t.herSchedule}
-            </DropdownMenuItem>
-          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </header>
@@ -497,33 +448,14 @@ export function ConversationView({
           if (id === viewing?.id) backToCurrent();
         }}
       />
-      <AchievementsPanel
-        isOpen={achievements.isPanelOpen}
-        onOpenChange={achievements.setPanelOpen}
-        isWide={!isFullScreen}
-        color={character.color}
-        her={achievements.her}
-        unseen={achievements.unseenRows}
-      />
       {live && (
         <LiveCallLayer
           live={live}
           character={character}
-          standOutfits={outfits?.toTry ?? []}
           layerRef={focus.layer}
           isFullScreen={isFullScreen}
           go={go}
           exemptingKeys={account?.exempting_keys ?? null}
-        />
-      )}
-      {outfits && (
-        <OutfitPicker
-          isOpen={pickingOutfit}
-          onOpenChange={setPickingOutfit}
-          isWide={!isFullScreen}
-          isReducedMotion={isReducedMotion}
-          color={character.color}
-          outfits={outfits}
         />
       )}
     </Frame>
@@ -834,10 +766,16 @@ function Bubbled({
                     <div className="flex flex-col gap-2">
                       {entry.segments.map((segment, i) => (
                         <div key={i} className="flex flex-col gap-0.5">
-                          <p className="text-japanese-line">
-                            <Ja>{segment.ja}</Ja>
-                          </p>
-                          {segment.zh && <p className="text-subtitle text-muted-foreground">{segment.zh}</p>}
+                          {segment.zh ? (
+                            <>
+                              <p className="text-japanese-line">
+                                <Ja>{segment.ja}</Ja>
+                              </p>
+                              <p className="text-subtitle text-muted-foreground">{segment.zh}</p>
+                            </>
+                          ) : (
+                            <p className="text-body">{segment.ja}</p>
+                          )}
                         </div>
                       ))}
                     </div>

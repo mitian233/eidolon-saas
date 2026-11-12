@@ -1,7 +1,7 @@
 // Server side only: where the backend is, for the API proxy and the server components
 // that ask the backend before rendering.
 
-import { CONSENT_REQUIRED, type Character, type LandingAssets, type SignInOptions } from "@/lib/api";
+import { CONSENT_REQUIRED, type SignInOptions } from "@/lib/api";
 
 export const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
@@ -31,8 +31,7 @@ export async function isSignedIn(cookie: string): Promise<boolean> {
   }
 }
 
-/** How long the landing page keeps what it asks the backend for (the character list, the ways to
- * sign in, its pictures) before asking again. */
+/** How long the landing page keeps the sign-in options it asks the backend for before asking again. */
 const LANDING_REVALIDATE_SECONDS = 60;
 
 /** What the landing page asks the backend for at `path`, kept for a minute rather than asked for on
@@ -47,14 +46,8 @@ async function forLanding<T>(path: string, otherwise: T): Promise<T> {
   }
 }
 
-/** The characters, for the landing page's spectrum. None when the backend fails; the landing page
- * then goes without the spectrum. */
-export const getCharacters = (): Promise<Character[]> => forLanding("/api/characters", []);
 
 /** The ways to sign in the backend offers, for the landing page to say which there are. Null when
  * the backend fails; the landing page then does not say. */
 export const getSignInOptions = (): Promise<SignInOptions | null> => forLanding("/api/auth/providers", null);
 
-/** The landing page's pictures that belong to no one character. None of them when the backend
- * fails; the landing page then goes without them. */
-export const getLandingAssets = (): Promise<LandingAssets> => forLanding("/api/landing", { memory_still_url: null });

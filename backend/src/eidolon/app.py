@@ -6,12 +6,12 @@ import math
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict
-from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.types import Receive, Scope, Send
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+from typing import Literal
 
 from eidolon.admission import CoolingDown
 from eidolon.assembly import Backend
@@ -25,24 +25,13 @@ from eidolon.call import (
     SessionDescription,
     StillPlacing,
 )
-from eidolon.characters import Character, ScriptedLine, in_idol_order, signature_url
-from eidolon.config import FishAudioModel
+from eidolon.character_repository import shown_character
 from eidolon.database import readable
 from eidolon.engine import ENDED, TurnJudged, shown
-from eidolon.greetings import (
-    LANDING_MEMORY_STILL_PATH,
-    call_opener_path,
-    call_poster_path,
-    greeting_path,
-    voxels_path,
-)
-from eidolon.read_aloud import NoVoice, ReadAloudFailed
-from eidolon.reply_format import Segment, SegmentComplete, SegmentDelta, SpeechDelta
+from eidolon.reply_format import SegmentComplete, SegmentDelta, SpeechDelta
 from eidolon.own_keys import (
     BroughtKeys,
     CallsUnavailable,
-    NoSpeechSynthesis,
-    OwnKeyFailed,
     UnknownService,
     named_services,
 )
@@ -57,7 +46,6 @@ from eidolon.producer import (
     is_timezone,
 )
 from eidolon.account_api import OwnKeysInput, add_account_routes
-from eidolon.cities_api import add_city_routes
 from eidolon.admin_api import add_admin_routes
 from eidolon.admin_backup_api import add_admin_backup_routes
 from eidolon.dashboard import add_dashboard_routes
@@ -66,54 +54,21 @@ from eidolon.admin_users_api import add_admin_user_routes
 from eidolon.admin_config_api import add_admin_config_routes
 from eidolon.admin_prices_api import add_admin_price_routes
 from eidolon.announcements_api import add_announcement_routes
-from eidolon.bar_api import add_bar_routes
-from eidolon.calendar_api import add_calendar_routes
-from eidolon.cycles_api import add_cycle_routes
-from eidolon.letters_api import add_letter_routes
-from eidolon.moments_api import add_moment_routes
-from eidolon.gifts_api import add_gift_routes
 from eidolon.invites_api import add_invite_routes
-from eidolon.photos_api import add_photo_routes
-from eidolon.schedule_api import add_schedule_routes
+from eidolon.calendar_api import add_calendar_routes
 from eidolon.sessions import DeviceTimezone, UserId, session_middleware
 from eidolon.sponsor_api import add_sponsor_routes
-from eidolon.stats import add_stats_routes
 from eidolon.service_status import add_service_status_routes
-from eidolon.stand_outfits import list_path, outfit_path
+from eidolon.stats import add_stats_routes
 from eidolon.store import Conversation, ConversationEvent, IsCurrent, ReachOut, Recorded
 from eidolon.throttle import Throttled
 from eidolon.turn_outcome import TurnOutcome
 from eidolon.usage import OverLimit
-from eidolon.world import World
 
 HEALTH_TIMEOUT = 5.0
 """How long, in seconds, the health check may take before the backend is taken not to
 serve: its threads may all be taken."""
 
-_PICTURE_CACHE = {"Cache-Control": "public, max-age=86400"}
-"""Avatars and call backgrounds change only with a deploy (ADR-0003): browsers keep them a
-day, then revalidate by ETag, so lists showing every avatar don't download them each visit."""
-
-
-_PICTURE_TYPES = {".webp": "image/webp"}
-"""Types FileResponse cannot guess: Python 3.11 knows no .webp (signatures), nor does a slim
-image without /etc/mime.types. Others it guesses from the suffix."""
-
-
-def _picture(path: Path, request: Request) -> Response:
-    """An avatar, call background or signature, or a 304 when the browser's copy is still
-    current; FileResponse sets the ETag but, unlike StaticFiles, never answers 304 itself."""
-    response = FileResponse(
-        path,
-        headers=_PICTURE_CACHE,
-        media_type=_PICTURE_TYPES.get(path.suffix.lower()),
-        stat_result=path.stat(),
-    )
-    etag = response.headers["etag"]
-    cached_etags = request.headers.get("if-none-match", "")
-    if etag in (tag.strip() for tag in cached_etags.split(",")):
-        return Response(status_code=304, headers={"ETag": etag, **_PICTURE_CACHE})
-    return response
 
 
 class NewConversation(BaseModel):
@@ -124,22 +79,10 @@ class TurnInput(BaseModel):
     text: str
     own_keys: OwnKeysInput | None = None
     """The user's own keys, which their browser keeps, for the turn to run on; the shape
-    calls bring too. A turn uses only the LLMs and image generation, voice keys brought
-    along go unused."""
-    own_llm: object = None
-    """Where pages from before brought their own LLM. Transitional, to be deleted once no
-    such page is left open: a turn bringing it is refused, asking for a refresh, rather
-    than quietly run on the deployer's key and counted."""
-    read_aloud_model: FishAudioModel | None = None
-    """The model of the user's own key for speech synthesis, where their browser keeps one,
-    but not the key: her reply is written with delivery cues as the model it would be read
-    aloud with reads them (GLOSSARY.md「朗读」), the deployer's without it."""
+    calls bring too. A text turn uses only the language model keys.
+    """
 
 
-class ReadAloudInput(BaseModel):
-    own_keys: OwnKeysInput | None = None
-    """The user's own keys, which their browser keeps: her words are read aloud on theirs
-    for speech synthesis, if it brings it; the others go unused."""
 
 
 class CallRequest(BaseModel):
@@ -159,6 +102,27 @@ class BirthdayInput(BaseModel):
         if not is_day_of_the_year(self.month, self.day):
             raise ValueError(f"没有 {self.month} 月 {self.day} 日这一天")
         return self
+
+
+class CharacterInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=100)
+    sheet: str = Field(min_length=1, max_length=100000)
+    intro: str = Field(default="", max_length=2000)
+    avatar_url: HttpUrl | None = None
+    greeting: str = Field(default="", max_length=10000)
+    voice_id: str = Field(default="", max_length=200)
+    color: str = Field(default="#64748b", pattern=r"^#[0-9a-fA-F]{6}$")
+    user_address: str = Field(default="你", min_length=1, max_length=80)
+    language_mode: Literal["single", "bilingual"] = "single"
+    birthday: BirthdayInput | None = None
+    age: int | None = Field(default=None, gt=0)
+
+    def settings(self) -> dict:
+        values = self.model_dump()
+        values["avatar_url"] = str(self.avatar_url) if self.avatar_url is not None else None
+        values["birthday"] = Birthday(self.birthday.month, self.birthday.day) if self.birthday else None
+        return values
 
 
 class CityInput(BaseModel):
@@ -223,125 +187,36 @@ class IceCandidates(BaseModel):
     candidates: list[IceCandidateInput]
 
 
-def _stand(character: Character, assets_url: str | None) -> dict | None:
-    """Her stand on the call screen: where her default outfit's files are, and her outfit
-    list (`stand_outfits`). None, and her call background alone, unless her idol, her
-    default outfit and the stand assets are all configured."""
-    if character.idol_id is None or character.default_outfit is None or assets_url is None:
-        return None
-    outfit = character.default_outfit
-    return {
-        "default_outfit": {"id": outfit, "url": f"{assets_url}/{outfit_path(outfit)}"},
-        "outfits_url": f"{assets_url}/{list_path(character.idol_id)}",
-    }
-
-
-def _greeting(character: Character, assets_url: str | None) -> dict | None:
-    """Her greeting on the landing page: what she says as people see it, its subtitle, and
-    where `eidolon greeting upload` puts its audio (`greeting_path`), without asking the
-    bucket whether it is there; no audio unless the stand assets and her voice are
-    configured. None without a greeting."""
-    return _scripted(character.greeting, greeting_path(character), assets_url)
-
-
-def _call_opener(character: Character, assets_url: str | None) -> dict | None:
-    """Her call opener on the landing page, as her greeting is (`call_opener_path`); None
-    without one."""
-    return _scripted(character.call_opener, call_opener_path(character), assets_url)
-
-
-def _call_poster(character: Character, assets_url: str | None) -> str | None:
-    """Her card on the landing page's incoming call (ADR-0003, 2026-10-12), at
-    `call_poster_path`, listed without asking the bucket whether it is there (the page shows
-    her colour instead when it is not). None unless the stand assets are served."""
-    return f"{assets_url}/{call_poster_path(character)}" if assets_url else None
-
-
-def _voxels(character: Character, assets_url: str | None) -> str | None:
-    """Her voxel figure in the landing page's act about memory (ADR-0003, 2026-10-16), at
-    `voxels_path`, listed as her call poster is."""
-    return f"{assets_url}/{voxels_path(character)}" if assets_url else None
-
-
-def _scripted(line: ScriptedLine | None, path: str | None, assets_url: str | None) -> dict | None:
-    if line is None:
-        return None
-    return {
-        "ja": line.ja,
-        "subtitle": line.subtitle,
-        "audio_url": f"{assets_url}/{path}" if assets_url and path else None,
-    }
-
-
-def _unit(character: Character, world: World | None) -> dict:
-    """Her unit, its reading in hiragana, and where it is in the units' official order
-    (`World.unit_of`); all None without the world setting, or if its sources could not
-    agree on her unit."""
-    unit, order = (world.unit_of(character.name) if world else None) or (None, None)
-    reading = world.units[order].reading if world and order is not None else None
-    return {"unit": unit, "unit_reading": reading, "unit_order": order}
 
 
 def create_app(backend: Backend) -> FastAPI:
     """The API over `backend`, which the app closes when it shuts down."""
     store, characters, engine = backend.store, backend.characters, backend.engine
     memory, calls, admissions = backend.memories, backend.calls, backend.admissions
-    gift_catalog, titles = backend.gift_catalog, backend.titles
-
-    def gift_of(event: ConversationEvent) -> dict:
-        """For a gift record, which gift and its name, to show it by."""
-        if event.gift_id is None:
-            return {}
-        return {"gift_id": event.gift_id, "gift_name": gift_catalog[event.gift_id].name}
+    titles = backend.titles
 
     def last_shown(last: Recorded | None) -> dict | None:
-        """The last thing in a conversation as a list shows it: a message without its
-        delivery cues, marked `photo` if it is her reply with a photo she sent (not one being
-        generated or not sent after all), or a conversation event, with which gift for a gift
-        and since when for her being unwell, or her reach-out, shown as her message is, marked
-        `reach_out`; None while it has none."""
         if last is None:
             return None
+        shown = last.shown()
         if isinstance(last, ConversationEvent):
-            since = (
-                {"first_day": last.first_day, "days_ago": last.days_ago}
-                if last.kind == "unwell" else {}
-            )
-            return {"type": "event", "kind": last.kind, "created_at": last.created_at} | gift_of(
-                last
-            ) | since
-        if isinstance(last, ReachOut):
-            said = last.without_cues()
-            return {
-                "role": "character",
-                "text": None,
-                "ja": said.ja,
-                "zh": said.zh,
-                "created_at": said.created_at,
-                "reach_out": True,
-            }
-        shown = last.without_cues()
-        return {
-            "role": shown.role,
-            "text": shown.text,
-            "ja": shown.ja,
-            "zh": shown.zh,
-            "created_at": shown.created_at,
-        } | ({"photo": True} if shown.photo_sent else {})
+            return shown
+        return {key: shown.get(key) for key in ("role", "text", "ja", "zh", "created_at")} | (
+            {"reach_out": True} if isinstance(last, ReachOut) else {}
+        )
 
     def recorded(entry: Recorded) -> dict:
-        """A message, conversation event or reach-out as the browser reads it."""
-        if isinstance(entry, ConversationEvent):
-            return entry.shown() | gift_of(entry)
         return entry.shown()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await backend.start()
-        yield
-        await backend.aclose()
+        try:
+            yield
+        finally:
+            await backend.aclose()
 
-    app = FastAPI(title="Eidolon-SC", lifespan=lifespan)
+    app = FastAPI(title="Eidolon-SaaS", lifespan=lifespan)
     app.state.backend = backend
     app.middleware("http")(session_middleware(backend.settings))
 
@@ -384,9 +259,6 @@ def create_app(backend: Backend) -> FastAPI:
     async def unknown_service(_: Request, e: UnknownService) -> JSONResponse:
         return JSONResponse({"detail": str(e)}, status_code=422)
 
-    @app.exception_handler(NoSpeechSynthesis)
-    async def no_speech_synthesis(_: Request, e: NoSpeechSynthesis) -> JSONResponse:
-        return JSONResponse({"detail": str(e)}, status_code=503)
 
     @app.exception_handler(CallNotFound)
     async def call_not_found(_: Request, e: CallNotFound) -> JSONResponse:
@@ -412,7 +284,8 @@ def create_app(backend: Backend) -> FastAPI:
         conversation = await store.get_conversation(conversation_id)
         if conversation is None or conversation.user_id != user_id:
             raise HTTPException(404, "对话不存在")
-        if conversation.character_id not in characters:  # removed from the configuration
+        character = await backend.character_repository.get(user_id, conversation.character_id)
+        if character is None:
             raise HTTPException(404, "角色不存在")
         return conversation
 
@@ -450,19 +323,11 @@ def create_app(backend: Backend) -> FastAPI:
     add_admin_config_routes(app, backend)
     add_admin_price_routes(app, backend)
     add_announcement_routes(app, backend)
-    add_gift_routes(app, backend)
     add_calendar_routes(app)
-    add_schedule_routes(app, backend)
-    add_cycle_routes(app, backend)
-    add_moment_routes(app, backend)
-    add_letter_routes(app, backend)
-    add_city_routes(app, backend)
-    add_bar_routes(app, backend)
-    add_photo_routes(app, backend)
     add_sponsor_routes(app, backend)
     add_data_package_routes(app, backend)
-    add_stats_routes(app, backend)
     add_service_status_routes(app, backend.service_status)
+    add_stats_routes(app, backend)
 
     @app.get("/api/ice-servers")
     async def ice_servers(
@@ -528,83 +393,47 @@ def create_app(backend: Backend) -> FastAPI:
         await store.save_profile(user_id, profile)
         return shown_profile(profile)
 
+    async def owned_character(character_id: str, user_id: str):
+        character = await backend.character_repository.get(user_id, character_id)
+        if character is None:
+            raise HTTPException(404, "角色不存在")
+        return character
+
     @app.get("/api/characters")
-    def list_characters() -> list[dict]:
-        """Who there is to talk to; shown before signing in too, and on the landing page.
-        In the order of their idol numbers, those without one after them as configured."""
-        listed = in_idol_order(characters.values())
-        return [
-            {
-                "id": c.id,
-                "name": c.name,
-                "intro": c.intro,
-                "avatar_url": f"/api/characters/{c.id}/avatar" if c.avatar else None,
-                "scsp_avatar_url": f"/api/characters/{c.id}/scsp-avatar" if c.scsp_avatar else None,
-                "color": c.color,
-                "birthday": f"{c.birthday.month:02}-{c.birthday.day:02}",
-                "background_url": f"/api/characters/{c.id}/background" if c.background else None,
-                "signature_url": signature_url(c),
-                "stand": _stand(c, backend.settings.stand_assets_url),
-                "idol_id": c.idol_id,
-                "short_name": c.short_name,
-                "name_zh": c.name_zh,
-                "name_kana": c.name_kana,
-                "name_romaji": c.name_romaji,
-                **_unit(c, backend.world),
-                "greeting": _greeting(c, backend.settings.stand_assets_url),
-                "call_opener": _call_opener(c, backend.settings.stand_assets_url),
-                "call_poster_url": _call_poster(c, backend.settings.stand_assets_url),
-                "voxels_url": _voxels(c, backend.settings.stand_assets_url),
-            }
-            for c in listed
-        ]
+    async def list_characters(user_id: UserId) -> list[dict]:
+        return [shown_character(c) for c in await backend.character_repository.list(user_id)]
 
-    @app.get("/api/landing")
-    def landing() -> dict:
-        """What the landing page shows that belongs to no one character: its act about memory
-        as one picture, for visitors who see no animation (ADR-0003, 2026-10-16). Listed as a
-        call poster is, without asking the bucket whether it is there (the page shows only the
-        words instead); None unless the stand assets are served."""
-        assets_url = backend.settings.stand_assets_url
-        return {"memory_still_url": f"{assets_url}/{LANDING_MEMORY_STILL_PATH}" if assets_url else None}
+    @app.post("/api/characters", status_code=201)
+    async def create_character(body: CharacterInput, user_id: UserId) -> dict:
+        character = await backend.character_repository.create(user_id, **body.settings())
+        return shown_character(character)
 
-    @app.get("/api/characters/{character_id}/avatar")
-    def character_avatar(character_id: str, request: Request) -> Response:
-        character = characters.get(character_id)
-        if character is None or character.avatar is None:
-            raise HTTPException(404, "没有这位角色的头像")
-        return _picture(character.avatar, request)
+    @app.get("/api/characters/{character_id}")
+    async def get_character(character_id: str, user_id: UserId) -> dict:
+        return shown_character(await owned_character(character_id, user_id))
 
-    @app.get("/api/characters/{character_id}/scsp-avatar")
-    def character_scsp_avatar(character_id: str, request: Request) -> Response:
-        """Her avatar in SCSP's set, for users who switched to it in settings."""
-        character = characters.get(character_id)
-        if character is None or character.scsp_avatar is None:
-            raise HTTPException(404, "没有这位角色的 SCSP 头像")
-        return _picture(character.scsp_avatar, request)
+    @app.put("/api/characters/{character_id}")
+    async def update_character(character_id: str, body: CharacterInput, user_id: UserId) -> dict:
+        character = await backend.character_repository.update(
+            user_id, character_id, **body.settings()
+        )
+        if character is None:
+            raise HTTPException(404, "角色不存在")
+        return shown_character(character)
 
-    @app.get("/api/characters/{character_id}/background")
-    def character_background(character_id: str, request: Request) -> Response:
-        """The picture behind her call screen, served like her avatar."""
-        character = characters.get(character_id)
-        if character is None or character.background is None:
-            raise HTTPException(404, "没有这位角色的通话背景图")
-        return _picture(character.background, request)
+    @app.delete("/api/characters/{character_id}", status_code=204)
+    async def delete_character(character_id: str, user_id: UserId) -> None:
+        await owned_character(character_id, user_id)
+        await calls.hang_up(user_id, character_id=character_id)
+        if not await backend.character_repository.delete(user_id, character_id):
+            raise HTTPException(404, "角色不存在")
 
-    @app.get("/api/characters/{character_id}/signature")
-    def character_signature(character_id: str, request: Request) -> Response:
-        """Her handwritten signature, at the end of her letters, served like her avatar."""
-        character = characters.get(character_id)
-        if character is None or character.signature is None:
-            raise HTTPException(404, "没有这位角色的签名图")
-        return _picture(character.signature, request)
 
     @app.get("/api/characters/{character_id}/affinity")
     async def affinity(character_id: str, user_id: UserId) -> dict | None:
         """Her affinity with the user now, by tier only, and when the cooldown ends if she
         is in one; null while affinity is off."""
-        if character_id not in characters:
-            raise HTTPException(404, "角色不存在")
+        await owned_character(character_id, user_id)
         status = await backend.affinities.status(user_id, character_id)
         return status and status.shown()
 
@@ -635,8 +464,7 @@ def create_app(backend: Backend) -> FastAPI:
 
     @app.post("/api/conversations", status_code=201)
     async def create_conversation(body: NewConversation, user_id: UserId) -> dict:
-        if body.character_id not in characters:
-            raise HTTPException(404, "角色不存在")
+        await owned_character(body.character_id, user_id)
         return asdict(await store.create_conversation(user_id, body.character_id))
 
     @app.get("/api/conversations")
@@ -645,6 +473,7 @@ def create_app(backend: Backend) -> FastAPI:
         with its title, null if it has none, the last thing in it, as the conversation list
         shows it, and whether she has ended it. Those being named are waited for a while."""
         await titles.settle(user_id)
+        await owned_character(character_id, user_id)
         listed = await store.list_conversations(user_id, character_id)
         return [
             asdict(c) | {"last_message": last_shown(last), "ended": ended}
@@ -657,7 +486,6 @@ def create_app(backend: Backend) -> FastAPI:
         last thing in it, a message, a conversation event or a reach-out (null while it has
         none), whether it has a reach-out the user has not seen, and whether she has a letter
         to the user they have not read, in one request."""
-        unread = await backend.letters.unread_from(user_id)
         return [
             {
                 "character_id": c.character_id,
@@ -665,7 +493,6 @@ def create_app(backend: Backend) -> FastAPI:
                 "created_at": c.created_at,
                 "last_message": last_shown(last),
                 "unseen_reach_out": unseen,
-                "unread_letter": c.character_id in unread,
             }
             for c, last, unseen in await store.latest_conversations(user_id)
         ]
@@ -695,8 +522,6 @@ def create_app(backend: Backend) -> FastAPI:
         device_timezone: DeviceTimezone = None,
     ) -> StreamingResponse:
         conversation = await conversation_or_404(conversation_id, user_id)
-        if body.own_llm is not None:  # transitional: see `TurnInput.own_llm`
-            raise HTTPException(422, "页面已经更新，请刷新后再发")
         brought = body.own_keys.brought() if body.own_keys else BroughtKeys()
         # Cancelled meanwhile, what is let in never runs, so is settled as left.
         admission = await admissions.admitted(
@@ -713,8 +538,6 @@ def create_app(backend: Backend) -> FastAPI:
             async with outcome.running():
                 async with aclosing(engine.turn(
                     conversation, body.text, admission.llms, device_timezone,
-                    voiced_by=backend.own_keys.read_aloud_model(body.read_aloud_model),
-                    own_image=brought.image,
                 )) as turn:
                     async for event in turn:
                         outcome.see(event)
@@ -726,46 +549,6 @@ def create_app(backend: Backend) -> FastAPI:
 
         return _TurnResponse(events(), lambda: outcome.over(cut_short_by_failure=False))
 
-    async def read_aloud(
-        conversation: Conversation, segments: list[Segment] | None, body: ReadAloudInput,
-        user_id: str,
-    ) -> Response:
-        """Her `segments` read aloud (GLOSSARY.md「朗读」), as mp3 for the user's browser alone:
-        404 without them; 503 with no key for speech synthesis, or her voice not configured;
-        429 with no read-alouds left this hour; 502 if Fish Audio failed, with `code` "own_key" if on the user's own key,
-        saying why."""
-        if segments is None:
-            raise HTTPException(404, "没有这句话")
-        brought = body.own_keys.brought() if body.own_keys else BroughtKeys()
-        voice_id = characters[conversation.character_id].voice_id
-        try:
-            audio = await backend.read_aloud.voice(user_id, voice_id, segments, brought)
-        except OwnKeyFailed as e:
-            return JSONResponse({"detail": e.message, "code": "own_key"}, status_code=502)
-        except ReadAloudFailed as e:
-            return JSONResponse({"detail": str(e)}, status_code=502)
-        except NoVoice as e:
-            return JSONResponse({"detail": str(e)}, status_code=503)
-        return Response(audio, media_type="audio/mpeg", headers={"Cache-Control": "no-store"})
-
-    @app.post("/api/conversations/{conversation_id}/messages/{message_id}/read-aloud")
-    async def read_reply_aloud(
-        conversation_id: str, message_id: int, body: ReadAloudInput, user_id: UserId
-    ) -> Response:
-        """Her reply read aloud, in any of the user's conversations with her, past and ended
-        ones too, cooling down or not: it is no turn."""
-        conversation = await conversation_or_404(conversation_id, user_id)
-        segments = await store.reply_said(conversation.id, message_id)
-        return await read_aloud(conversation, segments, body, user_id)
-
-    @app.post("/api/conversations/{conversation_id}/reach-outs/{reach_out_id}/read-aloud")
-    async def read_reach_out_aloud(
-        conversation_id: str, reach_out_id: int, body: ReadAloudInput, user_id: UserId
-    ) -> Response:
-        """Her reach-out read aloud, as her replies are."""
-        conversation = await conversation_or_404(conversation_id, user_id)
-        segments = await store.reach_out_said(conversation.id, reach_out_id)
-        return await read_aloud(conversation, segments, body, user_id)
 
     return app
 

@@ -1,14 +1,14 @@
 """Readings (GLOSSARY.md「读音」): how names are said in the characters' voices, e.g. 天井努
 as あまい つとむ, 283プロ as つばさプロ.
 
-They are in the readings file beside the character configuration (`readings.toml`),
-committed with it and kept by the deployer: each entry is a name as it is written, its
-reading in kana for people to read and change, and the phonemes Fish Audio is told
-(OpenJTalk's romaji with pitch digits, as `ha0shi1ga0`). `eidolon reading draft`
-(`reading_draft`) drafts the file and fills in phonemes left empty. The server reads it
-as it starts; the admin console cannot change it.
+They are in a readings file the deployer keeps (`readings.toml`): each entry is a name
+as it is written, its reading in kana for people to read and change, and the phonemes
+Fish Audio is told (OpenJTalk's romaji with pitch digits, as `ha0shi1ga0`). The bundled
+file and its drafting command are gone with the 283 content; the mechanism stays for
+names a deployment wants said right. The server reads it as it starts; the admin
+console cannot change it.
 
-Every request to Fish Audio, the greetings' (`greetings`) and the calls' (`call.FishTTS`),
+Every request to Fish Audio, read-alouds' (`read_aloud`) and the calls' (`call.FishTTS`),
 on the deployer's key or a user's own, carries every entry with phonemes as its
 pronunciation dictionary (`pronunciation_dictionary`). Fish Audio matches the keys in
 what it is told to say as written, so what it says, and what people see, keep the names

@@ -8,6 +8,7 @@ import httpx
 from tests.conftest import (
     ClientFactory,
     agree_to_terms,
+    character_id,
     github_identity,
     google_identity,
     sign_in_with,
@@ -32,8 +33,8 @@ async def methods(client: httpx.AsyncClient) -> list[tuple[str, str]]:
     return [(m["provider"], m["display_name"]) for m in res.json()["sign_in_methods"]]
 
 
-async def conversations(client: httpx.AsyncClient) -> list[str]:
-    res = await client.get("/api/conversations", params={"character_id": "mano"})
+async def conversations(client: httpx.AsyncClient, character: str = "mano") -> list[str]:
+    res = await client.get("/api/conversations", params={"character_id": character})
     return [c["id"] for c in res.json()]
 
 
@@ -58,7 +59,7 @@ async def test_an_identity_that_is_someone_elses_cannot_be_linked(
     theirs = make_client(FakeLLM(), user=None)
     await sign_in_with(theirs, google, google_identity())
     await agree_to_terms(theirs)
-    their_conversation = await start_conversation(theirs)
+    their_conversation = await start_conversation(theirs, character_id("mano", "Producer"))
     mine = await github_user(make_client, github)
 
     res = await sign_in_with(mine, google, google_identity(), link=True)
@@ -67,7 +68,7 @@ async def test_an_identity_that_is_someone_elses_cannot_be_linked(
     assert await methods(mine) == [("github", "producer")]
     again = make_client(FakeLLM(), user=None)
     await sign_in_with(again, google, google_identity())
-    assert await conversations(again) == [their_conversation]
+    assert await conversations(again, character_id("mano", "Producer")) == [their_conversation]
 
 
 async def test_linking_an_identity_already_yours_changes_nothing(
@@ -142,7 +143,7 @@ async def test_unlinking_one_of_two_identities_stops_it_signing_in_as_you(
     stranger = make_client(FakeLLM(), user=None)
     await sign_in_with(stranger, google, google_identity())  # a new user now
     await agree_to_terms(stranger)
-    assert await conversations(stranger) == []
+    assert await conversations(stranger, character_id("mano", "Producer")) == []
 
 
 async def test_the_last_way_to_sign_in_cannot_be_unlinked(
@@ -172,4 +173,6 @@ async def test_signing_out_everywhere_ends_every_session_of_the_user(
     for client in (desktop, phone):
         listed = await client.get("/api/conversations", params={"character_id": "mano"})
         assert listed.status_code == 401
-    assert (await friend.get("/api/conversations", params={"character_id": "mano"})).status_code == 200
+    assert (await friend.get(
+        "/api/conversations", params={"character_id": character_id("mano", "friend")}
+    )).status_code == 200

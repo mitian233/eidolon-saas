@@ -36,6 +36,7 @@ from eidolon.identity import Identity
 from eidolon.invites import Invites, NotInvited
 from eidolon.memory import Memories
 from eidolon.store import Admit, IdentityTaken, SignInMethod, Store, User
+from eidolon.characters import Character
 
 async def is_admin(store: Store, settings: Settings, user_id: str) -> bool:
     """Whether the user is an admin (`signs_in_as_admin`)."""
@@ -91,6 +92,7 @@ class Accounts:
     an invite link."""
     secret_key: str | None = None
     """The deployment's, from which the key the ban list is hashed with is derived."""
+    characters: dict[str, Character] = field(default_factory=dict)
     _ban_key: bytes | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -150,6 +152,8 @@ class Accounts:
             for m in await self.store.sign_in_methods(user_id)
         ])
         await self.calls.hang_up(user_id)  # any placed while memory was settling
+        for character_id in [c.id for c in self.characters.values() if c.owner_id == user_id]:
+            self.characters.pop(character_id, None)
 
     async def _check(self, identity: Identity) -> None:
         if await self.store.is_banned_identity(

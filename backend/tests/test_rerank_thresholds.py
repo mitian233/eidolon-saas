@@ -1,15 +1,10 @@
 """The reranker's thresholds go with its model: each known model has its own, an unknown
 model gets the newest's with a warning, and the environment overrides either."""
 
-import logging
-from pathlib import Path
-
 import pytest
 
-from eidolon.config import LLMSettings, RerankSettings, Settings
+from eidolon.config import RerankSettings
 from eidolon.rerank import KNOWN_THRESHOLDS, RerankThresholds, thresholds_for
-from tests.conftest import CharacterConfig
-from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeJudge, FakeLLM, FakeSpeech, build_faked
 
 
 def test_each_known_model_has_its_thresholds():
@@ -45,29 +40,3 @@ def test_a_threshold_out_of_range_stops_the_start(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(RuntimeError, match="RERANK_MIN_RELEVANCE"):
         RerankSettings.from_env()
-
-
-@pytest.mark.parametrize(("model", "warned"), [("BAAI/bge-reranker-v2-m3", True),
-                                               ("Qwen/Qwen3-Reranker-4B", False)])
-async def test_the_server_warns_of_an_unknown_model_at_start(
-    tmp_path: Path,
-    characters: CharacterConfig,
-    caplog: pytest.LogCaptureFixture,
-    model: str,
-    warned: bool,
-):
-    settings = Settings(
-        database_path=tmp_path / "eidolon.db",
-        characters_path=characters.path,
-        chat_llm=LLMSettings("http://llm.invalid/v1", "k", "m"),
-        rerank=RerankSettings("sk-test", model),
-    )
-
-    with caplog.at_level(logging.WARNING):
-        backend = build_faked(
-            settings, FakeLLM([]), background_llm=FakeBackgroundLLM(),
-            retrieval_judge=FakeJudge(), embedder=FakeEmbedder(), speech=FakeSpeech(),
-        )
-    await backend.aclose()
-
-    assert ("RERANK_MIN_RELEVANCE" in caplog.text) is warned

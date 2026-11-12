@@ -70,9 +70,6 @@ export function ShareCard({ card, byId, heatmap, site, ref }: Props) {
           {card.portrait && <p className="text-share-portrait">{card.portrait}</p>}
           <div className="mt-1.5 flex min-w-0 items-baseline gap-4.5 whitespace-nowrap">
             <span className="text-share-name">{hero.name}</span>
-            {hero.name_romaji && (
-              <span className="truncate text-share-romaji opacity-80">{hero.name_romaji.toUpperCase()}</span>
-            )}
           </div>
         </div>
       </header>

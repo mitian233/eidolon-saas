@@ -334,6 +334,8 @@ class Message:
         """The message as the browser is told it: as people see it, with its photo's id,
         status and reason if it has one, no key for it if not."""
         shown = asdict(self.without_cues())
+        if self.role == "character" and self.ja and not self.zh:
+            shown["text"] = shown["ja"]
         del shown["photo"]
         return shown | ({"photo": self.photo.shown()} if self.photo else {})
 
@@ -656,6 +658,11 @@ class Store:
         """Remove the user's sign-in method at `provider`; False if they have none there.
         Raises LastSignInMethod, removing nothing, if it is the only one they have."""
         return await self._db.write(_remove_sign_in_method, user_id, provider)
+
+    async def keep_call(
+        self, conversation_id: str, connected_at: datetime, duration_s: float
+    ) -> bool:
+        return await self._db.write(keep_call, conversation_id, connected_at, duration_s)
 
     async def delete_user(self, user_id: str, identities: Sequence[str] = ()) -> None:
         """Delete the user and everything of theirs, for good, all at once (see

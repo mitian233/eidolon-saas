@@ -8,7 +8,7 @@ import pytest
 
 from eidolon.config import TURN_CREDENTIAL_LIFETIME, Settings, TurnSettings
 from tests.browser import Browser
-from tests.conftest import ClientFactory, sign_in_as
+from tests.conftest import ClientFactory, character_id, sign_in_as
 from tests.fakes import FakeClock, FakeLLM, FakeSpeech
 from tests.test_text_turn import start_conversation
 
@@ -104,7 +104,7 @@ async def test_calling_needs_a_session(
 async def test_call_into_someone_elses_or_a_missing_conversation_is_refused(
     make_client: ClientFactory, speech: FakeSpeech, browser: Browser
 ):
-    theirs = await start_conversation(make_client(FakeLLM(), "stranger"))
+    theirs = await start_conversation(make_client(FakeLLM(), "stranger"), character_id("mano", "stranger"))
     client = make_client(FakeLLM())
 
     assert (await browser.call(client, conversation_id=theirs)).status_code == 404

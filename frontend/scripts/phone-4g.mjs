@@ -1,4 +1,4 @@
-// 手机 4G 下量 LCP：落地页检查（landing-check.mjs）和应用页检查（app-check.mjs）共用。
+// 手机 4G 下量 LCP：应用页检查（app-check.mjs）用。
 //
 // 节流照 Lighthouse 移动端默认：RTT 150 ms、下行 1.6 Mbps、上行 750 Kbps、CPU 4 倍降速；
 // 视口 390×844、DPR 3、触屏。每轮新开上下文，不带缓存。

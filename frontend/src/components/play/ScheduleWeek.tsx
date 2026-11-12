@@ -36,7 +36,6 @@ import {
   type Occupant,
   pendingJobs,
   type Placement,
-  shortName,
   startedNote,
   startsFor,
   toSave,
@@ -68,8 +67,8 @@ const CATEGORY_ICONS = {
 /** 工作块横跨几列。 */
 const SPANS = ["col-span-1", "col-span-2", "col-span-3"];
 
-/** 日程上的一位：不在名单里的（已经下线）名字是 id，没有短名、头像和颜色（`color` 是 null）。 */
-export type ScheduledCharacter = Pick<Character, "id" | "name" | "short_name" | "avatar_url"> & { color: string | null };
+/** 日程上的一位：不在名单里的（已经下线）名字是 id，没有头像和颜色（`color` 是 null）。 */
+export type ScheduledCharacter = Pick<Character, "id" | "name" | "avatar_url"> & { color: string | null };
 
 /** 角色 id → 她。 */
 export type CharacterOf = (id: string) => ScheduledCharacter;
@@ -495,7 +494,7 @@ function Block({
     <>
       <span className="flex min-w-0 items-center gap-1">
         <MarkedAvatar name={character.name} src={character.avatar_url} size="xs" />
-        <span className="truncate text-subtitle font-medium">{shortName(character)}</span>
+        <span className="truncate text-subtitle font-medium">{character.name}</span>
         {isSaved && <LockedIcon aria-hidden className="ml-auto size-3.5 shrink-0 text-muted-foreground" />}
       </span>
       <span className="flex min-w-0 items-center gap-1 text-meta text-muted-foreground">
@@ -680,7 +679,7 @@ function CellDrawer({
                       className={cn(ROW, "disabled:opacity-50 disabled:hover:bg-transparent")}
                     >
                       <MarkedAvatar name={character.name} src={character.avatar_url} size="sm" />
-                      <span className="shrink-0 text-body">{shortName(character)}</span>
+                      <span className="shrink-0 text-body">{character.name}</span>
                       <JobName job={job} aside={reason ?? undefined} />
                     </button>
                   </li>

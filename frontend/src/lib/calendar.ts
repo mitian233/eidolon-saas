@@ -29,10 +29,10 @@ export type DayJob<C> = {
   isSaved: boolean;
 };
 
-/** What the calendar is worked out from. `characters` in the idols' order, each with her
- * `birthday` as `MM-DD`; `producerBirthday` null when he has not set one; `holidays` of the years
- * read so far; `jobs` placed, in the order a day lists them (none where schedules are off). */
-export type CalendarData<C extends { birthday: string }> = {
+/** What the calendar is worked out from. `characters` each with her `birthday` as `MM-DD`, or null
+ * when unset; `producerBirthday` null when he has not set one; `holidays` of the years read so far;
+ * `jobs` placed, in the order a day lists them (none where schedules are off). */
+export type CalendarData<C extends { birthday: string | null }> = {
   characters: readonly C[];
   producerBirthday: Birthday | null;
   holidays: readonly Holiday[];
@@ -41,7 +41,7 @@ export type CalendarData<C extends { birthday: string }> = {
 
 /** The calendar as a page shows it: the producer's `today` (in his time zone), the data and the
  * kinds shown on this device. */
-export type CalendarView<C extends { birthday: string }> = {
+export type CalendarView<C extends { birthday: string | null }> = {
   today: string;
   data: CalendarData<C>;
   shown: readonly CalendarKind[];
@@ -64,7 +64,7 @@ export function calendarKinds(producerBirthday: Birthday | null, hasSchedule: bo
 
 /** The events on `date` of the kinds `shown`: her birthdays (in the idols' order), then the
  * producer's, then the holiday, then the jobs. */
-export function eventsOn<C extends { birthday: string }>(
+export function eventsOn<C extends { birthday: string | null }>(
   date: string,
   data: CalendarData<C>,
   shown: readonly CalendarKind[],
@@ -73,6 +73,7 @@ export function eventsOn<C extends { birthday: string }>(
   const events: CalendarEvent<C>[] = [];
   if (shown.includes("character")) {
     for (const character of data.characters) {
+      if (character.birthday === null) continue;
       const [month, day] = character.birthday.split("-").map(Number);
       if (birthdayIn(year, month, day) === date) events.push({ kind: "character", character });
     }
@@ -92,7 +93,7 @@ export function eventsOn<C extends { birthday: string }>(
 
 /** The first event on `today` or after, of the kinds `shown`, within a year; null when there is
  * none. Holidays are only found in the years `data` has. */
-export function nextEvent<C extends { birthday: string }>(
+export function nextEvent<C extends { birthday: string | null }>(
   today: string,
   data: CalendarData<C>,
   shown: readonly CalendarKind[],

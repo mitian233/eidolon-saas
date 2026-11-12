@@ -2,14 +2,8 @@ services:
   backend:
     build: ./backend
     env_file: .env
-    environment:
-      # npm run game:catalog 在主机上写进 corpus/game/；.env 里给主机设的路径到容器里不对
-      EIDOLON_GAME_CATALOG_PATH: /corpus/game/catalog.json
     volumes:
       - eidolon-data:/data
-      - ./characters:/characters:ro
-      - ./corpus:/corpus:ro
-      - ./deploy:/deploy:ro # 活动名对照表 event-names.toml（同步时读取）
     # 本机的代理在容器里叫 host.docker.internal（容器里的 127.0.0.1 是容器自己）；
     # Docker Desktop 本来就有，Linux 靠这一行
     extra_hosts:

@@ -6,7 +6,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -28,7 +27,6 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useWhileVisible } from "@/hooks/useWhileVisible";
 import { copy } from "@/i18n";
 import { getAffinity } from "@/lib/affinity";
-import { DEFAULT_APPEARANCE, keepAppearance, loadAppearance, withAppearance, type Appearance } from "@/lib/appearance";
 import {
   createConversation,
   getAccount,
@@ -47,7 +45,7 @@ import { startCall } from "@/lib/call";
 import { loadCallPreferences, saveCallPreferences } from "@/lib/callPreferences";
 import { CharacterVoice } from "@/lib/characterVoice";
 import { toFailure, type Failure } from "@/lib/failure";
-import { getGiftState, type GiftState } from "@/lib/gifts";
+import type { GiftState } from "@/lib/gifts";
 import { keepListPreferences, listPreferences, NO_PREFERENCES, type ListPreferences } from "@/lib/listPreferences";
 import { isLive, LiveConversation, NOT_OPEN, type LiveCall } from "@/lib/liveConversation";
 import { departure, isGiftsSubpageInView } from "@/lib/navShell";
@@ -71,7 +69,7 @@ export type Directory = {
   account: Account | null;
   /** 别处重新取到了登录的用户（例如设置里解绑了一种登录方式之后），换上它；或者按换上那一刻的值改一处（例如搭话的开关）。 */
   accountChanged: (change: Account | ((account: Account) => Account)) => void;
-  /** 还在载入时为 null。头像已经按外观换好（打开 SCSP 头像时是她的 SCSP 头像）。 */
+  /** 还在载入时为 null。 */
   characters: Character[] | null;
   /** 和每位最新一次对话的摘要；标签页在前台时每分钟重新拉一次。她的对话一读到，她那一行就先在本地记成搭话都看过了。 */
   latest: Record<string, LatestConversation>;
@@ -103,10 +101,6 @@ export type Directory = {
   preferences: ListPreferences;
   /** 整理列表（隐藏、显示、置顶…），立即生效并存下；存不进去时只在这次页面里生效。 */
   tidy: (change: (preferences: ListPreferences) => ListPreferences) => void;
-  /** 这台设备上的外观；和角色一起读出。 */
-  appearance: Appearance;
-  /** 改外观，立即生效（`characters` 的头像跟着换）并存下；存不进去时只在这次页面里生效。 */
-  changeAppearance: (appearance: Appearance) => void;
   call: CallInList;
   /**
    * 外壳持有的那段对话的实时状态（ADR-0018「通话属于外壳」）：她的对话页开着时就是那一页的；
@@ -181,8 +175,7 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
   const [configured, setConfigured] = useState<Character[] | null>(null);
   const [latest, setLatest] = useState<Record<string, LatestConversation>>({});
   const [preferences, setPreferences] = useState<ListPreferences>(NO_PREFERENCES);
-  const [appearance, setAppearance] = useState<Appearance>(DEFAULT_APPEARANCE);
-  const characters = useMemo(() => configured && withAppearance(configured, appearance), [configured, appearance]);
+  const characters = configured;
   const [failure, setFailure] = useState<Failure | null>(null);
   const [attempt, setAttempt] = useState(0);
   // 好感度和礼物开没开、最近一次到账；这台设备上看过的最近一次到账。
@@ -244,10 +237,6 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
   /** 回合带着到账：开关必然开着。 */
   const rewarded = useCallback((r: Rewarded) => giftsRead({ open: true, rewarded_at: r.rewarded_at }), [giftsRead]);
 
-  /** 拉一次礼物状态，只看开关和最近一次到账；拉不到时留着上一次的。 */
-  const checkRewards = useCallback(() => {
-    getGiftState().then(giftsRead, () => {});
-  }, [giftsRead]);
 
   /** 问一次朋友圈有没有新的；问不到时留着上一次的。 */
   const checkMoments = useCallback(() => {
@@ -303,10 +292,8 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
           setAccount(account);
           setConfigured(all);
           setPreferences(listPreferences(account.id, all.map((c) => c.id)));
-          setAppearance(loadAppearance(account.id));
           setRewardsSeenAt(rewardsSeenUpTo(account.id));
           setLatest(received(summaries, since));
-          checkRewards();
           if (account.moments === true && !momentsReread.current) checkMoments();
         },
         (e) => !cancelled && setFailure(toFailure(e)),
@@ -314,14 +301,13 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [attempt, received, checkRewards, checkMoments]);
+  }, [attempt, received, checkMoments]);
 
   // 开着网站时她到点的搭话、别处做完的任务、新露出的动态不用刷新就出现：载入了才拉，后台标签页不拉。
   useWhileVisible(
     () => {
       if (configured && !failure) {
         refresh();
-        checkRewards();
         // 朋友圈开着才拉：朋友圈页开着时重读时间线，否则问有没有新的。
         if (momentsOn) {
           if (momentsReread.current) momentsReread.current();
@@ -383,13 +369,6 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
     setAccount((current) => (typeof change === "function" ? current && change(current) : change));
   }, []);
 
-  const changeAppearance = useCallback(
-    (next: Appearance) => {
-      setAppearance(next);
-      if (userId) keepAppearance(userId, next);
-    },
-    [userId],
-  );
 
   /** 结束这一份：挂断通话（还在拨号的也算），停下她的声音；留着它画最后一刻。 */
   const end = useCallback((live: LiveConversation) => {
@@ -507,8 +486,6 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         latest,
         preferences,
         tidy,
-        appearance,
-        changeAppearance,
         failure,
         refresh,
         reload,
