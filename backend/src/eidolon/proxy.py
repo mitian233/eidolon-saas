@@ -23,7 +23,7 @@ from websockets.asyncio.client import ClientConnection
 
 from eidolon.config import ProxiedService, ProxySettings, split_proxy_password
 
-OwnAddressed = Literal["own_llm", "own_image"]
+OwnAddressed = Literal["own_llm", "own_image", "own_embedding", "own_rerank"]
 """Users' own services whose addresses are theirs to name."""
 
 REACH_TIMEOUT = httpx.Timeout(10)
