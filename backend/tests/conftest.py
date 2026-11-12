@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
+import uuid
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -10,6 +11,8 @@ from typing import Any, Literal, TypeVar
 
 import httpx
 import pytest
+import psycopg
+from psycopg import sql
 
 import eidolon.bailian
 import eidolon.data_access
@@ -48,6 +51,35 @@ from tests.stories import write_sample_stories
 eidolon.data_access.ON_THE_LOOP_RAISES = True
 
 T = TypeVar("T")
+
+
+@pytest.fixture(scope="session")
+def postgres_server(tmp_path_factory: pytest.TempPathFactory):
+    pgserver = pytest.importorskip("pgserver")
+    server = pgserver.get_server(tmp_path_factory.mktemp("postgres"), cleanup_mode="delete")
+    try:
+        yield server
+    finally:
+        server.cleanup()
+
+
+@pytest.fixture
+def postgres_url(postgres_server) -> Iterator[str]:
+    name = "test_" + uuid.uuid4().hex
+    with psycopg.connect(postgres_server.get_uri(), autocommit=True) as conn:
+        conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    try:
+        yield postgres_server.get_uri(database=name)
+    finally:
+        with psycopg.connect(postgres_server.get_uri(), autocommit=True) as conn:
+            conn.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def database_target(request: pytest.FixtureRequest, tmp_path: Path) -> Path | str:
+    if request.param == "postgres":
+        return request.getfixturevalue("postgres_url")
+    return tmp_path / "eidolon.db"
 
 
 def aside(work: Coroutine[Any, Any, T]) -> T:
