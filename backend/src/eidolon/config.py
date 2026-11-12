@@ -223,26 +223,6 @@ DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-2"
 DEFAULT_EMBEDDING_DIMENSIONS = 1536
 EMBEDDING_DIMENSIONS_RANGE = (128, 3072)
 
-DEFAULT_JEV_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_JEV_MODEL = "typesafe/jev-1.13"
-"""Pinned: a new Jev changes which turns retrieve, so moving to one is a choice, checked
-in a real conversation."""
-
-JudgeProvider = Literal["jev", "cloudflare", "bailian"]
-"""The services the judge model may be: Jev through a System One endpoint, Cloudflare's
-Clef on Workers AI, or Alibaba Cloud Model Studio's decision model."""
-
-JUDGE_PROVIDERS: tuple[JudgeProvider, ...] = get_args(JudgeProvider)
-
-CloudflareJudgeModel = Literal["clef", "clef-flash"]
-CLOUDFLARE_JUDGE_MODELS: tuple[CloudflareJudgeModel, ...] = get_args(CloudflareJudgeModel)
-DEFAULT_CLOUDFLARE_JUDGE_MODEL: CloudflareJudgeModel = "clef-flash"
-"""For now: the judge eval (ticket cloudflare-judge 03) decides."""
-
-DEFAULT_BAILIAN_JUDGE_MODEL = "decision-model-preview"
-DEFAULT_BAILIAN_JUDGE_REGION: BailianRegion = "beijing"
-BAILIAN_REGION_CODES: dict[BailianRegion, str] = {"beijing": "cn-beijing", "singapore": "ap-southeast-1"}
-"""Alibaba Cloud's names for the regions the decision model is served in."""
 
 DEFAULT_NOVELAI_BASE_URL = "https://image.novelai.net"
 DEFAULT_NOVELAI_MODEL = "nai-diffusion-5-curated"
@@ -497,10 +477,6 @@ class Settings:
     """The deployer's image generation (GLOSSARY.md「生图」), for photos; None without it."""
     gpt_image: "GptImageSettings | None" = None
     """GPT Image, for moments' pictures no one is in, beside `image`; None without it."""
-    judge: "JudgeSettings | None" = None
-    """The judge model (`JUDGE_PROVIDER`). Retrieval needs the embedding service, the
-    reranker and the judge model; without any of them, turns go unretrieved. Without the
-    judge model, neither is any emotion judged during calls."""
     emotion: "EmotionSettings" = field(default_factory=lambda: EmotionSettings())
     usage_limits: "UsageLimits" = field(default_factory=lambda: UsageLimits())
     history_turns: int | None = DEFAULT_HISTORY_TURNS
@@ -637,7 +613,6 @@ class Settings:
             image=ImageSettings.from_env(),
             gpt_image=GptImageSettings.from_env(),
             qweather=QWeatherSettings.from_env(),
-            judge=None,  # Judge requests use the LLM brought by the current user.
             emotion=EmotionSettings.from_env(),
             usage_limits=UsageLimits.from_env(),
             history_turns=history_turns_from_env(),
@@ -908,25 +883,6 @@ def _relevance(name: str) -> float | None:
     return relevance
 
 
-@dataclass(frozen=True)
-class JevSettings:
-    """Jev decides whether a turn needs retrieval, through TypeSafe's System One endpoint:
-    OpenRouter's by default, or Vercel AI Gateway's (`https://ai-gateway.vercel.sh/typesafe/v1`)
-    or TypeSafe's own (`https://api.typesafe.ai/v1`), which take the same requests."""
-
-    api_key: str
-    model: str = DEFAULT_JEV_MODEL
-    base_url: str = DEFAULT_JEV_BASE_URL
-
-    @classmethod
-    def from_env(cls) -> "JevSettings":
-        return cls(
-            api_key=_required("JEV_API_KEY"),
-            model=os.environ.get("JEV_MODEL") or DEFAULT_JEV_MODEL,
-            base_url=os.environ.get("JEV_BASE_URL") or DEFAULT_JEV_BASE_URL,
-        )
-
-
 QWEATHER_FIELDS = ("host", "developer_id", "project_id", "key_id", "private_key")
 """What the deployer's QWeather account takes, all of them, or it is none."""
 
@@ -1071,22 +1027,11 @@ class EmotionSettings:
 
     @classmethod
     def from_env(cls) -> "EmotionSettings":
-        for old, new in _RENAMED_EMOTION_SETTINGS.items():
-            if os.environ.get(old):
-                raise RuntimeError(
-                    f"环境变量 {old} 已改名为 {new}（判断模型不再只有 Jev），请改用新名字"
-                )
         timeout = (os.environ.get("JUDGE_EMOTION_TIMEOUT") or "").strip()
         return cls(
             min_probability=_relevance("JUDGE_EMOTION_MIN_PROBABILITY"),
             timeout=_seconds("JUDGE_EMOTION_TIMEOUT", timeout) if timeout else cls.timeout,
         )
-
-
-_RENAMED_EMOTION_SETTINGS = {
-    "JEV_EMOTION_MIN_PROBABILITY": "JUDGE_EMOTION_MIN_PROBABILITY",
-    "JEV_EMOTION_TIMEOUT": "JUDGE_EMOTION_TIMEOUT",
-}
 
 
 def _seconds(name: str, value: str) -> float:
@@ -1097,99 +1042,6 @@ def _seconds(name: str, value: str) -> float:
     if not seconds > 0:
         raise RuntimeError(f"环境变量 {name} 需要是大于 0 的秒数，而不是 {value}")
     return seconds
-
-
-@dataclass(frozen=True)
-class CloudflareJudgeSettings:
-    """Cloudflare's Clef or Clef-flash on Workers AI, called directly with an API token
-    that may use Workers AI on the account."""
-
-    api_token: str
-    account_id: str
-    model: CloudflareJudgeModel = DEFAULT_CLOUDFLARE_JUDGE_MODEL
-
-    @classmethod
-    def from_env(cls) -> "CloudflareJudgeSettings":
-        model = os.environ.get("CLOUDFLARE_JUDGE_MODEL") or DEFAULT_CLOUDFLARE_JUDGE_MODEL
-        if model not in CLOUDFLARE_JUDGE_MODELS:
-            raise RuntimeError(
-                f"环境变量 CLOUDFLARE_JUDGE_MODEL 只能是 {'、'.join(CLOUDFLARE_JUDGE_MODELS)}，"
-                f"而不是 {model}"
-            )
-        return cls(
-            api_token=_required("CLOUDFLARE_API_TOKEN"),
-            account_id=_required("CLOUDFLARE_ACCOUNT_ID"),
-            model=model,  # pyright: ignore[reportArgumentType]  # checked above
-        )
-
-
-@dataclass(frozen=True)
-class BailianJudgeSettings:
-    """Alibaba Cloud Model Studio's decision model, served over System One as Jev is, but
-    only at a workspace's own endpoint, with a key of that workspace."""
-
-    api_key: str
-    workspace_id: str
-    region: BailianRegion = DEFAULT_BAILIAN_JUDGE_REGION
-    model: str = DEFAULT_BAILIAN_JUDGE_MODEL
-
-    @property
-    def host(self) -> str:
-        """The region's host, the provider whichever workspace is in it."""
-        return f"{BAILIAN_REGION_CODES[self.region]}.maas.aliyuncs.com"
-
-    @property
-    def base_url(self) -> str:
-        return f"https://{self.workspace_id}.{self.host}/compatible-mode/v1"
-
-    @classmethod
-    def from_env(cls) -> "BailianJudgeSettings":
-        region = os.environ.get("BAILIAN_JUDGE_REGION") or DEFAULT_BAILIAN_JUDGE_REGION
-        if region not in BAILIAN_REGION_CODES:
-            raise RuntimeError(
-                f"环境变量 BAILIAN_JUDGE_REGION 只能是 {'、'.join(BAILIAN_REGION_CODES)}，而不是 {region}"
-            )
-        return cls(
-            api_key=_required("BAILIAN_JUDGE_API_KEY"),
-            workspace_id=_required("BAILIAN_JUDGE_WORKSPACE_ID"),
-            region=region,  # pyright: ignore[reportArgumentType]  # checked above
-            model=os.environ.get("BAILIAN_JUDGE_MODEL") or DEFAULT_BAILIAN_JUDGE_MODEL,
-        )
-
-
-JudgeSettings = JevSettings | CloudflareJudgeSettings | BailianJudgeSettings
-"""The judge model chosen, and how to reach it."""
-
-
-def judge_from_env(provider: str | None = None) -> JudgeSettings | None:
-    """The judge model `provider`, or else `JUDGE_PROVIDER`, chooses: Cloudflare's and
-    Model Studio's need their settings, and the `JEV_*` ones are then ignored; Jev, the
-    default, is off without its key."""
-    provider = provider or os.environ.get("JUDGE_PROVIDER") or "jev"
-    if provider not in JUDGE_PROVIDERS:
-        raise RuntimeError(
-            f"环境变量 JUDGE_PROVIDER 只能是 {'、'.join(JUDGE_PROVIDERS)}，而不是 {provider}"
-        )
-    if provider == "cloudflare":
-        return CloudflareJudgeSettings.from_env()
-    if provider == "bailian":
-        return BailianJudgeSettings.from_env()
-    return _jev_from_env()
-
-
-def _jev_from_env() -> JevSettings | None:
-    """Jev, given its key; without it there is no retrieval, but a key still set under its
-    old name stops the start rather than turn retrieval and memory off without a word."""
-    if os.environ.get("JEV_API_KEY"):
-        return JevSettings.from_env()
-    if os.environ.get("AI_GATEWAY_API_KEY"):
-        raise RuntimeError(
-            "环境变量 AI_GATEWAY_API_KEY 已改名为 JEV_API_KEY（Jev 默认经由 OpenRouter 调用，"
-            "填 OpenRouter 的 key；仍用 Vercel AI Gateway 的话，另设"
-            " JEV_BASE_URL=https://ai-gateway.vercel.sh/typesafe/v1，并把 JEV_MODEL 设成 Vercel 的模型名），"
-            "AI_GATEWAY_BASE_URL 也改名为 JEV_BASE_URL"
-        )
-    return None
 
 
 @dataclass(frozen=True)
