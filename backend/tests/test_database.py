@@ -270,3 +270,62 @@ async def test_updating_users_preserves_their_insertion_order(database_target: P
         assert [user.name for user in await store.list_users()] == ["updated", "second"]
     finally:
         await db.close()
+
+
+async def test_a_timed_out_write_lock_does_not_break_later_writes(postgres_url: str):
+    import psycopg
+
+    db = Database(postgres_url)
+    try:
+        store = Store(db)
+        db.prepare(lambda conn: conn.execute("SELECT set_config('statement_timeout', '50ms', false)"))
+        with psycopg.connect(postgres_url, autocommit=True) as locker:
+            locker.execute("SELECT pg_advisory_lock(1936287820)")
+            try:
+                with pytest.raises(sqlite3.OperationalError, match="statement timeout"):
+                    await store.create_user("Not committed")
+            finally:
+                locker.execute("SELECT pg_advisory_unlock(1936287820)")
+        assert (await store.create_user("After timeout")).name == "After timeout"
+        assert [user.name for user in await store.list_users()] == ["After timeout"]
+    finally:
+        await db.close()
+
+
+async def test_published_announcements_include_pinned_integer_flags(database_target: Path | str):
+    from eidolon.announcements import Announcements
+    from tests.fakes import FakeClock
+
+    db = Database(database_target)
+    try:
+        announcements = Announcements(db, FakeClock())
+        assert await announcements.published() == []
+        pinned = await announcements.write("Pinned")
+        await announcements.publish(pinned.id)
+        await announcements.pin(pinned.id)
+        latest = await announcements.write("Latest")
+        await announcements.publish(latest.id)
+        await announcements.write("Unpublished")
+        assert [item.body for item in await announcements.published()] == ["Pinned", "Latest"]
+    finally:
+        await db.close()
+
+
+async def test_unembedded_memories_accept_optional_user_parameters(database_target: Path | str):
+    from eidolon.memory import _open, _unembedded
+
+    db = Database(database_target)
+    try:
+        store = Store(db)
+        user = await store.create_user("Memory owner")
+        db.prepare(_open)
+        await db.write(lambda conn: conn.execute(
+            "INSERT INTO memories (user_id, source_character_id, text, created_at)"
+            " VALUES (?, 'character', 'Remember me', '2026-11-12')", (user.id,),
+        ))
+        for selected_user in (None, user.id):
+            assert await db.read(_unembedded, 0, selected_user, "test-model", 10) == [
+                (1, user.id, "Remember me")
+            ], selected_user
+    finally:
+        await db.close()
