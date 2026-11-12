@@ -181,11 +181,11 @@ def add_carried(db: sqlite3.Connection, user_id: str, carried: Sequence[CarriedM
 
 
 @dataclass(frozen=True)
-class _Services:
+class MemoryServices:
     """What memory needs to be on."""
 
     embedder: Embedder
-    reranker: Reranker
+    reranker: Reranker | None
     min_relevance: Callable[[], float]
 
 
@@ -205,10 +205,8 @@ class Memories:
         reranker: Reranker | None = None,
         min_relevance: Callable[[], float] = lambda: DEFAULT_THRESHOLDS.memories,
     ) -> None:
-        """Memories kept in `db`, next to the users and conversations they belong to; off
-        unless `embedder` and `reranker` are both given, though `embedder` alone is enough to
-        embed them again. A memory the reranker scores below what `min_relevance` says when
-        it is found is not (see `rerank.KNOWN_THRESHOLDS`)."""
+        """Memories kept in `db`; an embedder enables memory, with optional reranking.
+        Scores below `min_relevance` are excluded when a reranker is present."""
         self._db = db
         db.prepare(_open)
         self._jobs = JobRunner(Store(db))
@@ -216,9 +214,7 @@ class Memories:
         self._clock = clock
         self._embedder = embedder
         self._services = (
-            _Services(embedder, reranker, min_relevance)
-            if embedder is not None and reranker is not None
-            else None
+            MemoryServices(embedder, reranker, min_relevance) if embedder is not None else None
         )
         self._pending: dict[str, set[asyncio.Task[None]]] = {}  # user id → writing
         self._clearings: dict[str, int] = {}  # user id → how many times cleared
@@ -229,13 +225,19 @@ class Memories:
         timezone: str,
         llm: ChatLLM,
         hold: Callable[[], Callable[[], None]] | None = None,
+        *,
+        services: MemoryServices | None = None,
+        own: bool = False,
     ) -> "MemoryTurn":
         """Begin a turn of `conversation`, whose user is in `timezone`, once what their
         earlier turns are writing down is written (a while at most). The turn writes down
         with `llm`, held on to with `hold` (see `TurnLLMs.hold_background`) until written."""
         clearings = self._clearings.get(conversation.user_id, 0)
         await self._settle(conversation.user_id)
-        return MemoryTurn(self, conversation, timezone, clearings, llm, hold)
+        return MemoryTurn(
+            self, conversation, timezone, clearings, llm, hold,
+            services if own else self._services,
+        )
 
     async def entries(self, user_id: str) -> list[Memory]:
         """All of the user's memories, newest first, including what their turns so far
@@ -334,8 +336,11 @@ class Memories:
         if pending := self._pending.get(user_id):
             await asyncio.wait(set(pending), timeout=SETTLE_TIMEOUT)
 
-    async def _candidates(self, user_id: str, query_vector: Sequence[float]) -> list[Memory]:
-        if (services := self._services) is None:
+    async def _candidates(
+        self, user_id: str, query_vector: Sequence[float], services: MemoryServices | None = None,
+    ) -> list[Memory]:
+        services = services or self._services
+        if services is None:
             return []
         try:
             return await self._nearest(services.embedder, user_id, query_vector, CANDIDATES)
@@ -349,16 +354,20 @@ class Memories:
         timezone: str,
         query_text: str,
         candidates: Sequence[Memory],
+        services: MemoryServices | None = None,
     ) -> str | None:
-        found = await self._relevant(query_text, candidates)
+        found = await self._relevant(query_text, candidates, services)
         character = self._characters[conversation.character_id]
         return _memories_prompt(found, character, timezone, _FOUND) if found else None
 
-    async def _relevant(self, query_text: str, candidates: Sequence[Memory]) -> list[Memory]:
-        """As many as `MAX_FOUND` of the `candidates` relevant to `query_text`, most relevant
-        first; none if memory is off or reranking failed."""
-        if (services := self._services) is None or not candidates:
+    async def _relevant(
+        self, query_text: str, candidates: Sequence[Memory], services: MemoryServices | None = None,
+    ) -> list[Memory]:
+        services = services or self._services
+        if services is None or not candidates:
             return []
+        if services.reranker is None:
+            return list(candidates[:MAX_FOUND])
         try:
             best = await services.reranker.rerank(
                 query_text, [m.text for m in candidates], len(candidates)
@@ -462,8 +471,9 @@ class Memories:
         text: str,
         reply: Message,
         query_vector: Sequence[float] | None,
+        services: MemoryServices | None,
     ) -> None:
-        if (services := self._services) is None:
+        if services is None:
             return
         now = self._clock().astimezone(ZoneInfo(timezone))
         release = hold() if hold is not None else None
@@ -491,7 +501,7 @@ class Memories:
 
     async def _write(
         self,
-        services: _Services,
+        services: MemoryServices,
         llm: ChatLLM,
         conversation: Conversation,
         clearings: int,
@@ -743,6 +753,7 @@ class MemoryTurn:
         clearings: int,
         llm: ChatLLM,
         hold: Callable[[], Callable[[], None]] | None = None,
+        services: MemoryServices | None = None,
     ) -> None:
         self._memories = memories
         self._conversation = conversation
@@ -750,19 +761,28 @@ class MemoryTurn:
         self._clearings = clearings
         self._llm = llm
         self._hold = hold
+        self._services = services
 
     async def candidates(self, query_vector: Sequence[float]) -> list[Memory]:
         """As many as `CANDIDATES` of the user's holding memories nearest the turn's query
         (see `memory_query`) embedded with the memories' embedder, nearest first, for
         `find`; none if memory is off or the memories not embedded yet cannot be."""
-        return await self._memories._candidates(self._conversation.user_id, query_vector)
+        if self._services is None:
+            return []
+        return await self._memories._candidates(
+            self._conversation.user_id, query_vector, self._services,
+        )
 
     async def find(self, query: str, candidates: Sequence[Memory]) -> str | None:
         """The prompt section carrying those of the `candidates` relevant to `query`, the
         turn's query, most relevant first, each labelled with who it was told to and to be
         passed on as hearsay when that was someone else; None if none are relevant, memory
         is off or reranking failed."""
-        return await self._memories._find(self._conversation, self._timezone, query, candidates)
+        if self._services is None:
+            return None
+        return await self._memories._find(
+            self._conversation, self._timezone, query, candidates, self._services,
+        )
 
     def write_down(
         self,
@@ -776,7 +796,7 @@ class MemoryTurn:
         already, if it was, so it is not embedded again."""
         self._memories._write_down(
             self._conversation, self._timezone, self._clearings, self._llm, self._hold,
-            history, text, reply, query_vector,
+            history, text, reply, query_vector, self._services,
         )
 
 
