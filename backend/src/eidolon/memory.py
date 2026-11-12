@@ -50,9 +50,10 @@ from eidolon.clock import Clock
 from eidolon.corpus import REEMBED_BATCH
 from eidolon.data_access import Database
 from eidolon.embedding import Document, Embedder, EmbeddingError, nearest, to_blob
+from eidolon.jobs import JobRunner
 from eidolon.llm import ChatLLM, ChatMessage
 from eidolon.rerank import DEFAULT_THRESHOLDS, Reranker, RerankError
-from eidolon.store import Conversation, Message
+from eidolon.store import Conversation, Message, Store
 
 log = logging.getLogger(__name__)
 
@@ -210,6 +211,7 @@ class Memories:
         it is found is not (see `rerank.KNOWN_THRESHOLDS`)."""
         self._db = db
         db.prepare(_open)
+        self._jobs = JobRunner(Store(db))
         self._characters = characters
         self._clock = clock
         self._embedder = embedder
@@ -465,11 +467,11 @@ class Memories:
             return
         now = self._clock().astimezone(ZoneInfo(timezone))
         release = hold() if hold is not None else None
-        task = asyncio.create_task(
-            self._write(
+        task = self._jobs.submit(
+            reply.id, "memory",
+            lambda: self._write(
                 services, llm, conversation, clearings, history, text, reply, query_vector, now
             ),
-            context=detached(),  # after the turn, not part of it (see `activity`)
         )
         self._hold(conversation.user_id, task)
         if release is not None:
@@ -500,30 +502,21 @@ class Memories:
         now: datetime,
     ) -> None:
         user_id = conversation.user_id
-        try:
-            character = self._characters[conversation.character_id]
-            shown = await self._shown(
-                services.embedder, user_id, memory_query(history, text), query_vector
-            )
-            prompt = _extraction_prompt(character, history, text, reply, shown, now)
-            answer = "".join([
-                chunk async for chunk in llm.stream(prompt)
-                if isinstance(chunk, str)
-            ])
-            written = parse_memories(answer)
-            if written is None:
-                log.warning(  # its length only: the answer is about the user
-                    "background model wrote no memories JSON (%d characters) in conversation %s",
-                    len(answer), conversation.id,
-                )
-                return
-            if self._clearings.get(user_id, 0) != clearings:
-                return  # cleared since the turn began
-            added = await self._db.write(self._add, conversation, written, shown, now)
-        except Exception:
-            log.warning("writing memories failed in conversation %s", conversation.id,
-                        exc_info=True)
-            return
+        character = self._characters[conversation.character_id]
+        shown = await self._shown(
+            services.embedder, user_id, memory_query(history, text), query_vector
+        )
+        prompt = _extraction_prompt(character, history, text, reply, shown, now)
+        answer = "".join([
+            chunk async for chunk in llm.stream(prompt)
+            if isinstance(chunk, str)
+        ])
+        written = parse_memories(answer)
+        if written is None:
+            raise ValueError("memory extraction returned invalid JSON")
+        if self._clearings.get(user_id, 0) != clearings:
+            return  # cleared since the turn began
+        added = await self._db.write(self._add, conversation, written, shown, now)
         try:
             if added:
                 model = services.embedder.model
