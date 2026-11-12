@@ -13,6 +13,7 @@ from tests.conftest import ClientFactory
 from tests.fakes import FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, context_of, system_of
 from tests.stories import corpus_in, sample_episodes
 from tests.test_text_turn import send_turn, start_conversation
+from tests.fakes import RETRIEVAL_KEYS
 
 PARK_LINE = "公園で鳩と一緒に歌っていました"
 ANSWER = ["<ja>公園でピーちゃんたちと歌ってたんです</ja><zh>我在公园和小皮它们唱歌</zh>"]
@@ -45,7 +46,7 @@ async def test_the_reply_is_based_on_the_recalled_episode_and_its_place_in_the_c
     )
     conversation_id = await start_conversation(client)
 
-    events = await send_turn(client, conversation_id, "那次在公园唱歌是怎么回事？")
+    events = await send_turn(client, conversation_id, "那次在公园唱歌是怎么回事？", own_keys=RETRIEVAL_KEYS)
 
     assert llm.tools[0][0].name == "recall_story"  # first of what she may look up
     # Told she recalls as the model calls the tool, not as Jev saw no need to.
@@ -82,8 +83,8 @@ async def test_what_the_model_thought_goes_back_with_its_calls_within_the_turn_a
     )
     conversation_id = await start_conversation(client)
 
-    events = await send_turn(client, conversation_id, "公园那次呢？")
-    await send_turn(client, conversation_id, "后来呢？")
+    events = await send_turn(client, conversation_id, "公园那次呢？", own_keys=RETRIEVAL_KEYS)
+    await send_turn(client, conversation_id, "后来呢？", own_keys=RETRIEVAL_KEYS)
 
     call = llm.prompts[1][-2]
     assert (call.content, call.tool_calls, call.reasoning) == (
@@ -103,7 +104,7 @@ async def test_a_character_only_recalls_episodes_she_is_cast_in(
     client = make_client(llm, retrieval_judge=FakeJudge(answer="nothing"), embedder=embedder, reranker=reranker)
     conversation_id = await start_conversation(client, "kogane")
 
-    await send_turn(client, conversation_id, "那次在公园和鸽子唱歌是怎么回事？")
+    await send_turn(client, conversation_id, "那次在公园和鸽子唱歌是怎么回事？", own_keys=RETRIEVAL_KEYS)
 
     # Mano's park episode is never a candidate for Kogane, and nothing of hers is about it.
     assert not any(PARK_LINE in doc for _, docs in reranker.calls for doc in docs)
@@ -131,7 +132,7 @@ async def test_what_she_says_before_calling_the_tool_is_part_of_the_reply(
     )
     conversation_id = await start_conversation(client)
 
-    events = await send_turn(client, conversation_id, "公园那次呢？")
+    events = await send_turn(client, conversation_id, "公园那次呢？", own_keys=RETRIEVAL_KEYS)
 
     assert llm.prompts[1][-2].content == "<ja>えっと……</ja><zh>嗯……</zh>"
     assert events[-1]["message"]["segments"] == [
@@ -150,7 +151,7 @@ async def test_tool_calls_stop_after_a_few_rounds_and_a_call_made_then_goes_unan
     )
     conversation_id = await start_conversation(client)
 
-    events = await send_turn(client, conversation_id, "公园那次呢？")
+    events = await send_turn(client, conversation_id, "公园那次呢？", own_keys=RETRIEVAL_KEYS)
 
     # The last round offers the same tools, as some models drop what they thought once the
     # tools change (Claude 5.5), but forbids calling them, so the model has to answer; a
@@ -180,7 +181,7 @@ async def test_a_failed_or_malformed_call_is_answered_and_the_turn_goes_on(
     conversation_id = await start_conversation(client)
     embedder.down = True
 
-    events = await send_turn(client, conversation_id, "公园那次呢？")
+    events = await send_turn(client, conversation_id, "公园那次呢？", own_keys=RETRIEVAL_KEYS)
 
     malformed, unknown, failed = tool_results(llm.prompts[-1])
     assert "query" in malformed
@@ -198,8 +199,8 @@ async def test_the_note_is_never_recorded_or_seen_again_in_later_turns(
     )
     conversation_id = await start_conversation(client)
 
-    events = await send_turn(client, conversation_id, "公园那次呢？")
-    await send_turn(client, conversation_id, "后来呢？")
+    events = await send_turn(client, conversation_id, "公园那次呢？", own_keys=RETRIEVAL_KEYS)
+    await send_turn(client, conversation_id, "后来呢？", own_keys=RETRIEVAL_KEYS)
 
     assert events[-1]["message"]["segments"] == [
         {"ja": "公園でピーちゃんたちと歌ってたんです", "zh": "我在公园和小皮它们唱歌"}
@@ -218,7 +219,7 @@ async def test_with_more_tool_rounds_only_the_last_results_carry_the_note(
     )
     conversation_id = await start_conversation(client)
 
-    await send_turn(client, conversation_id, "公园那次呢？")
+    await send_turn(client, conversation_id, "公园那次呢？", own_keys=RETRIEVAL_KEYS)
 
     assert len(llm.tools) == 3
     assert llm.forbidden == [False, False, True]
@@ -231,7 +232,7 @@ async def test_when_jev_sees_a_recall_question_the_episode_is_recalled_before_th
     client = make_client(llm, retrieval_judge=FakeJudge(answer="recall"), embedder=embedder, reranker=reranker)
     conversation_id = await start_conversation(client)
 
-    events = await send_turn(client, conversation_id, "那次在公园唱歌是怎么回事？")
+    events = await send_turn(client, conversation_id, "那次在公园唱歌是怎么回事？", own_keys=RETRIEVAL_KEYS)
 
     # One model call: the episode is already in the prompt, and the tool, offered as on every
     # turn so the prompt opens the same, is not to be called again.
@@ -266,10 +267,10 @@ async def test_with_the_reranker_down_the_nearest_episode_is_recalled(
     client = make_client(llm, retrieval_judge=judge, embedder=embedder, reranker=reranker)
     conversation_id = await start_conversation(client)
 
-    events = await send_turn(client, conversation_id, "公園の鳩と歌ったの、覚えてる？")
+    events = await send_turn(client, conversation_id, "公園の鳩と歌ったの、覚えてる？", own_keys=RETRIEVAL_KEYS)
     judged = system_of(llm.prompts[-1])
     judge.answer = "nothing"
-    await send_turn(client, conversation_id, "那次是怎么回事？")
+    await send_turn(client, conversation_id, "那次是怎么回事？", own_keys=RETRIEVAL_KEYS)
     [called] = tool_results(llm.prompts[-1])
 
     assert events[-1]["type"] == "done"
@@ -293,10 +294,10 @@ async def test_a_recall_question_after_her_reply_is_recalled_with_both(
     llm = FakeLLM(PARK_REPLY, ANSWER)
     client = make_client(llm, retrieval_judge=jev, embedder=embedder, reranker=reranker)
     conversation_id = await start_conversation(client)
-    await send_turn(client, conversation_id, "还记得那天吗？")
+    await send_turn(client, conversation_id, "还记得那天吗？", own_keys=RETRIEVAL_KEYS)
     jev.answer = "recall"
 
-    await send_turn(client, conversation_id, "那次后来怎么样了？")
+    await send_turn(client, conversation_id, "那次后来怎么样了？", own_keys=RETRIEVAL_KEYS)
 
     assert [query for query, _ in reranker.calls] == [AFTER_PARK]
     assert AFTER_PARK in embedder.queries
@@ -316,9 +317,9 @@ async def test_the_tool_looks_up_what_the_model_wrote_alone(
         llm, retrieval_judge=FakeJudge(answer="nothing"), embedder=embedder, reranker=reranker
     )
     conversation_id = await start_conversation(client)
-    await send_turn(client, conversation_id, "还记得那天吗？")
+    await send_turn(client, conversation_id, "还记得那天吗？", own_keys=RETRIEVAL_KEYS)
 
-    await send_turn(client, conversation_id, "那次后来怎么样了？")
+    await send_turn(client, conversation_id, "那次后来怎么样了？", own_keys=RETRIEVAL_KEYS)
 
     assert [query for query, _ in reranker.calls] == ["公園で鳩と歌った日"]
     assert "公園で鳩と歌った日" in embedder.queries
@@ -336,7 +337,7 @@ async def test_a_recall_question_about_someone_elses_episode_recalls_nothing(
     )
     conversation_id = await start_conversation(client, "kogane")
 
-    await send_turn(client, conversation_id, "那次你在公园和鸽子一起唱歌是怎么回事？")
+    await send_turn(client, conversation_id, "那次你在公园和鸽子一起唱歌是怎么回事？", own_keys=RETRIEVAL_KEYS)
 
     system = system_of(llm.prompts[0])
     assert PARK_LINE not in system
