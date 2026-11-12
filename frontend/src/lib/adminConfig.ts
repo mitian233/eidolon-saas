@@ -174,6 +174,8 @@ export const PROXIED_SERVICES = [
   "own_tts",
   "own_stt",
   "own_image",
+  "own_embedding",
+  "own_rerank",
 ] as const;
 
 export type ProxiedService = (typeof PROXIED_SERVICES)[number];
