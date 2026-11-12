@@ -29,7 +29,7 @@ from eidolon.config import Settings
 from tests.browser import TIMEOUT, Browser, open_browser
 from tests.conftest import ClientFactory
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     START,
     FakeClock,
     FakeIdentityProvider,
@@ -66,9 +66,7 @@ OUT_OF_LINE = level(1, out_of_line=True)
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """With an admin, the judge model, and affinity on in `.env`."""
-    return replace(
-        settings, admins=frozenset({ADMIN}), judge=FAKE_JUDGE, affinity_and_gifts=True
-    )
+    return replace(settings, admins=frozenset({ADMIN}), affinity_and_gifts=True)
 
 
 async def say(speech: FakeSpeech, browser: Browser, text: str) -> list[dict]:
@@ -85,14 +83,14 @@ async def test_the_turn_that_cools_her_has_her_hang_up_once_she_has_said_it(
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0)]
+    clients.user_judge.judgings = [level(0)]
     llm = FakeLLM(REPLY)
     client = make_client(llm, clients=clients, clock=clock)
     conversation = await start_conversation(client)
     keep(settings.database_path, "producer", 1, clock.now)
 
     async with admin_beside(client, github) as admin, open_browser() as browser:
-        await browser.call(client, conversation_id=conversation)
+        await browser.call(client, conversation_id=conversation, own_keys=JUDGED_KEYS)
         await browser.connect()
         turn = await say(speech, browser, "随便你")
         ended = await browser.next_server_message("ended")
@@ -120,21 +118,21 @@ async def test_out_of_line_twice_in_a_call_she_hangs_up_and_the_next_call_starts
     speech: FakeSpeech,
 ):
     clients = FakeServiceClients()
-    clients.judge.judgings = [OUT_OF_LINE] * 3
+    clients.user_judge.judgings = [OUT_OF_LINE] * 3
     llm = FakeLLM(REPLY, REPLY, REPLY)
     client = make_client(llm, clients=clients, clock=FakeClock())
     conversation = await start_conversation(client)
 
     async with admin_beside(client, github) as admin:
         async with open_browser() as first:
-            await first.call(client, conversation_id=conversation)
+            await first.call(client, conversation_id=conversation, own_keys=JUDGED_KEYS)
             await first.connect()
             await say(speech, first, "你这个废物")
             await say(speech, first, "废物")
             ended = await first.next_server_message("ended")
             await first.hung_up()
         async with open_browser() as second:
-            await second.call(client, conversation_id=conversation)
+            await second.call(client, conversation_id=conversation, own_keys=JUDGED_KEYS)
             await second.connect()
             again = await say(speech, second, "废物")
             await second.hang_up()
