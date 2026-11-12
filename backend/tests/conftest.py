@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +27,7 @@ from eidolon.clock import Clock
 from eidolon.config import LLMSettings, Settings
 from eidolon.data_access import Database
 from eidolon.identity import Identity
+from eidolon.own_keys import OwnRetrievalService
 from eidolon.producer import Birthday
 from eidolon.sessions import SESSION_COOKIE
 from eidolon.store import Store
@@ -504,6 +506,24 @@ def speech() -> FakeSpeech:
 def own_llm() -> FakeLLMService:
     """The LLM services users bring their own keys to, faked."""
     return FakeLLMService()
+
+
+@pytest.fixture
+async def own_vectors() -> AsyncIterator[OwnRetrievalService]:
+    """A user's OpenAI embedding endpoint, without contacting an external service."""
+    def handle(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        dimensions = body["dimensions"]
+        return httpx.Response(200, json={"data": [
+            {"index": i, "embedding": [1.0] + [0.0] * (dimensions - 1)}
+            for i, _ in enumerate(body["input"])
+        ]})
+
+    service = OwnRetrievalService(public_only=False, transport=httpx.MockTransport(handle))
+    try:
+        yield service
+    finally:
+        await service.aclose()
 
 
 @pytest.fixture
