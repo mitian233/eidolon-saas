@@ -3,15 +3,15 @@ an unknown model gets, that retrieval and emotion judging use them, and how the 
 settings override them."""
 
 import logging
+import asyncio
+import json
 from dataclasses import replace
 
-import httpx
 import pytest
 
 import eidolon.judge
 import eidolon.live_config
-from eidolon.assembly import Backend
-from eidolon.config import CloudflareJudgeSettings, EmotionSettings, JevSettings, Settings
+from eidolon.config import EmotionSettings, Settings
 from eidolon.judge import (
     JUDGE_THRESHOLDS,
     JudgeThresholds,
@@ -21,9 +21,10 @@ from eidolon.judge import (
     warn_if_uncalibrated,
 )
 from eidolon.retrieval import ModelRetrievalJudge
-from tests.fakes import build_faked
-from tests.test_assembly import Services
-from tests.test_retrieval_services import MANO, client
+from eidolon.account_api import OwnKeysInput
+from tests.fakes import JUDGED_KEYS, FakeLLM, FakeLLMService, build_faked
+from tests.test_emotion_judge import EMOTION, NOD, SEGMENT
+from tests.test_retrieval_services import MANO
 
 ODD = JudgeThresholds(
     needs_retrieval=0.3, recall=0.7, about_producer=0.9, emotion=0.8, out_of_line=0.6,
@@ -101,77 +102,59 @@ async def test_retrieval_judges_by_the_thresholds_it_is_given(
         "recall": {"type": "noul", "noul": recall},
         "about_producer": {"type": "noul", "noul": about_producer},
     }
-    judge_model = eidolon.judge.JevJudge(
-        "k", "typesafe/jev-1.13", "http://jev.test/api/v1",
-        client(lambda _: httpx.Response(200, json={"answers": answers})),
-    )
+    judge_model = eidolon.judge.LLMJudge(FakeLLM([json.dumps(answers)]))
 
     assert await ModelRetrievalJudge(judge_model, ODD).judge(MANO, [], "那次比赛") == (expected, None, False)
 
 
-@pytest.fixture
-async def built(settings: Settings):
-    made: list[Backend] = []
-
-    def make(settings: Settings) -> Backend:
-        services = Services()
-        backend = build_faked(
-            settings, services.chat, background_llm=services.background,
-            embedder=services.embedder, reranker=services.reranker,
-        )
-        made.append(backend)
-        return backend
-
-    yield make
-    for backend in made:
+@pytest.mark.parametrize("model, explicit, expected", [
+    ("unknown-user-model", None, "calm"),
+    ("unknown-user-model", 0.3, "shy"),
+    ("typesafe/clef", None, "shy"),
+    ("typesafe/clef", 0.9, "calm"),
+])
+async def test_user_emotion_prefers_explicit_settings_over_model_and_fallback(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, model: str,
+    explicit: float | None, expected: str,
+):
+    monkeypatch.setitem(JUDGE_THRESHOLDS, "jev", replace(ODD, emotion=0.8))
+    monkeypatch.setitem(JUDGE_THRESHOLDS, "clef", replace(ODD, emotion=0.5))
+    own = FakeLLMService(FakeLLM([json.dumps({"emotion": EMOTION, "nod": NOD})]))
+    backend = build_faked(replace(settings, emotion=EmotionSettings(explicit, 0.2)), own_llm_service=own)
+    keys = JUDGED_KEYS | {"llm": {**JUDGED_KEYS["llm"], "model": model}}
+    call = backend.own_keys.for_call(OwnKeysInput.model_validate(keys).brought())
+    try:
+        assert call.emotions is not None
+        message = await call.emotions.message(1, 0, SEGMENT)
+        assert message is not None and message["emotion"] == expected
+        assert own.llm.keys == ["test-user-secret"]
+    finally:
+        call.release()
         await backend.aclose()
 
 
-def emotion_threshold(backend: Backend) -> float:
-    """What the next call judges her emotions by."""
-    lease = backend.config.lease()
-    lease.release()
-    assert lease.keys.emotions is not None
-    return lease.keys.emotions.min_probability
+async def test_user_emotion_stops_at_the_configured_timeout(settings: Settings):
+    cancelled = asyncio.Event()
 
+    class WaitingLLM(FakeLLM):
+        async def stream_with(self, key, messages, tools=(), *, forbid_calls=False):
+            try:
+                await asyncio.Event().wait()
+                yield "unreachable"
+            finally:
+                cancelled.set()
 
-async def test_emotions_are_judged_by_the_models_threshold(
-    settings: Settings, built, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setitem(JUDGE_THRESHOLDS, "clef", ODD)
-
-    backend = built(replace(settings, judge=CloudflareJudgeSettings("t", "a", "clef")))
-
-    assert emotion_threshold(backend) == 0.8
-
-
-async def test_retrieval_is_judged_by_the_models_thresholds(
-    settings: Settings, built, monkeypatch: pytest.MonkeyPatch
-):
-    monkeypatch.setitem(JUDGE_THRESHOLDS, "clef-flash", ODD)
-    judges: list[ModelRetrievalJudge] = []
-    real = eidolon.live_config.ModelRetrievalJudge
-
-    def recording(judge_model, thresholds):
-        judges.append(real(judge_model, thresholds))
-        return judges[-1]
-
-    monkeypatch.setattr(eidolon.live_config, "ModelRetrievalJudge", recording)
-
-    backend = built(replace(settings, judge=CloudflareJudgeSettings("t", "a", "clef-flash")))
-    assert backend.engine._retrieval is not None
-    await backend.engine._retrieval._judge.judge(MANO, [], "那次比赛")
-
-    [judge] = judges
-    assert judge.thresholds == ODD
-
-
-async def test_the_emotion_setting_overrides_every_models_threshold(settings: Settings, built):
-    backend = built(replace(
-        settings, judge=JevSettings("k"), emotion=EmotionSettings(min_probability=0.35)
-    ))
-
-    assert emotion_threshold(backend) == 0.35
+    backend = build_faked(replace(settings, emotion=EmotionSettings(timeout=0.01)), own_llm_service=FakeLLMService(WaitingLLM()))
+    keys = JUDGED_KEYS | {"llm": {**JUDGED_KEYS["llm"], "model": "unknown-user-model"}}
+    call = backend.own_keys.for_call(OwnKeysInput.model_validate(keys).brought())
+    try:
+        assert call.emotions is not None
+        assert call.emotions.timeout == 0.01
+        assert await call.emotions.message(1, 0, SEGMENT) is None
+        assert cancelled.is_set()
+    finally:
+        call.release()
+        await backend.aclose()
 
 
 def test_judging_is_tuned_from_the_environment(monkeypatch: pytest.MonkeyPatch):
@@ -202,11 +185,14 @@ def test_judging_tuned_out_of_range_stops_the_start(
         EmotionSettings.from_env()
 
 
-def test_the_old_names_stop_the_start_naming_the_new(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("JEV_EMOTION_TIMEOUT", "2")
+@pytest.mark.parametrize("name", ["JEV_EMOTION_TIMEOUT", "JEV_EMOTION_MIN_PROBABILITY"])
+def test_legacy_emotion_names_are_ignored(monkeypatch: pytest.MonkeyPatch, name: str):
+    monkeypatch.setenv(name, "invalid-retired-value")
+    monkeypatch.delenv("JUDGE_EMOTION_TIMEOUT", raising=False)
+    monkeypatch.delenv("JUDGE_EMOTION_MIN_PROBABILITY", raising=False)
+    assert EmotionSettings.from_env() == EmotionSettings()
+    assert Settings.from_env().emotion == EmotionSettings()
 
-    with pytest.raises(RuntimeError, match="JEV_EMOTION_TIMEOUT 已改名为 JUDGE_EMOTION_TIMEOUT"):
-        EmotionSettings.from_env()
 
 
 def test_the_old_names_left_empty_are_no_matter(monkeypatch: pytest.MonkeyPatch):
