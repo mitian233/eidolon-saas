@@ -405,7 +405,7 @@ async def test_the_turns_of_a_call_are_recorded_under_it_as_they_turned_out(
     assert (turns["total"], turns["in_calls"]) == (2, 2)
     assert turns["by_result"] == {"success": 2, "failed": 0, "rejected": 0, "left": 0}
     assert board["calls"]["total"] == 1
-    judge = health(board, "judge")
+    judge = health(board, "judge", own_key=True)
     assert judge is not None and judge["calls"] >= 1
 
 
