@@ -731,7 +731,7 @@ class ConversationEngine:
             return
         memory.write_down(history, text, reply, retrieved.query_vector)
         turn = sum(m.role == "user" for m in messages) + 1
-        self._titles.after_turn(conversation, turn, llms.background, llms.hold_background)
+        self._titles.after_turn(conversation, turn, reply.id, llms.background, llms.hold_background)
         ended = await self._store.ended(conversation.id) if ends_conversation else None
         if ended is not None and ending is not None:
             for listener in self._ended_listeners:
