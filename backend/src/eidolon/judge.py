@@ -3,11 +3,9 @@ each with probabilities, and writes nothing. Retrieval asks it what a turn needs
 and calls ask it how she feels in each segment of a reply; what is asked is theirs, how it
 is asked is here.
 
-The deployer chooses one service for the whole deployment (`JUDGE_PROVIDER`): Jev through
-any endpoint that serves TypeSafe's System One API, OpenRouter's by default; Cloudflare's
-Clef or Clef-flash on Workers AI, which take the same questions; or Alibaba Cloud Model
-Studio's decision model, served over System One itself. None stands in for another when it
-fails.
+Turns and calls use a small request to the user's own LLM. Legacy provider adapters
+remain for the admin configuration until its separate migration; they are not selected
+by the conversation runtime.
 """
 
 import json
@@ -26,6 +24,7 @@ from eidolon.config import (
     EmotionSettings,
     JudgeSettings,
 )
+from eidolon.llm import ChatLLM, ChatMessage
 from eidolon.store import Message
 
 log = logging.getLogger(__name__)
@@ -202,6 +201,48 @@ class JudgeModel(Protocol):
         ...
 
     async def aclose(self) -> None: ...
+
+
+class LLMJudge:
+    """Ask the user's LLM all questions once, keeping the existing answer shape."""
+
+    def __init__(self, llm: ChatLLM) -> None:
+        self._llm = llm
+
+    async def ask(self, state: dict[str, Any], questions: dict[str, dict]) -> dict[str, Any]:
+        prompt = [
+            ChatMessage("system", (
+                "根据 state 回答 questions。只输出一个 JSON 对象，以每道题的键为键。"
+                "noul 题返回 {\"noul\": 0到1的概率}；choice 题返回"
+                " {\"probabilities\": {选项名: 0到1的概率}}。逐题作答，不输出解释或代码块。"
+                "score 题的 probabilities 以 criteria 的编号为键，编号从 0 开始。"
+            )),
+            ChatMessage("user", json.dumps({"state": state, "questions": questions}, ensure_ascii=False)),
+        ]
+        try:
+            text = "".join([chunk async for chunk in self._llm.stream(prompt) if isinstance(chunk, str)])
+            answers = json.loads(text)
+            if not isinstance(answers, dict):
+                raise ValueError("not an object")
+            for key, question in questions.items():
+                answer = answers[key]
+                if question["type"] == "noul":
+                    probabilities = [answer["noul"]]
+                else:
+                    options = (
+                        [str(i) for i in range(len(question["criteria"]))]
+                        if question["type"] == "score" else question["criteria"]
+                    )
+                    probabilities = [answer["probabilities"][option] for option in options]
+                if not all(type(p) in (int, float) and 0 <= p <= 1 for p in probabilities):
+                    raise ValueError("invalid probability")
+            return answers
+        except Exception:
+            # Service failures can contain credentials or the user's prompt.
+            raise JudgeError("用户判断模型没有返回可用的回答") from None
+
+    async def aclose(self) -> None:
+        pass  # The user's LLM service owns the shared client.
 
 
 JUDGE_TIMEOUT = httpx.Timeout(5, connect=3)
