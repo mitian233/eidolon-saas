@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from eidolon.activity import judge_origin
-from eidolon.config import BailianJudgeSettings, Settings
+from eidolon.config import BailianJudgeSettings, judge_from_env
 from eidolon.judge import BailianJudge, JudgeError, check_judge, open_judge
 from eidolon.retrieval import ModelRetrievalJudge
 from tests.test_retrieval_services import MANO, Handler, client, recording
@@ -83,13 +83,13 @@ def env(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
     return monkeypatch
 
 
-def test_bailian_is_chosen_with_its_own_key_and_workspace(env: pytest.MonkeyPatch):
+def test_legacy_bailian_config_has_its_own_key_and_workspace(env: pytest.MonkeyPatch):
     env.setenv("JEV_API_KEY", "or-key")  # ignored
-    assert Settings.from_env().judge == SETTINGS
+    assert judge_from_env() == SETTINGS
 
     env.setenv("BAILIAN_JUDGE_REGION", "singapore")
     env.setenv("BAILIAN_JUDGE_MODEL", "decision-model")
-    assert Settings.from_env().judge == BailianJudgeSettings(
+    assert judge_from_env() == BailianJudgeSettings(
         "sk-bl", "llm-ws1", "singapore", "decision-model"
     )
 
@@ -101,7 +101,7 @@ def test_bailian_is_chosen_with_its_own_key_and_workspace(env: pytest.MonkeyPatc
         ((), {"BAILIAN_JUDGE_REGION": "hangzhou"}, "BAILIAN_JUDGE_REGION"),
     ],
 )
-def test_bailian_misconfigured_stops_the_start(
+def test_invalid_legacy_bailian_config_is_refused(
     env: pytest.MonkeyPatch, unset: tuple[str, ...], overrides: dict[str, str], named: str
 ):
     for name in unset:
@@ -110,7 +110,7 @@ def test_bailian_misconfigured_stops_the_start(
         env.setenv(name, value)
 
     with pytest.raises(RuntimeError, match=named):
-        Settings.from_env()
+        judge_from_env()
 
 
 @pytest.mark.parametrize(
