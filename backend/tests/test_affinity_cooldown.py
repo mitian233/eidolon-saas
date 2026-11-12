@@ -19,7 +19,7 @@ from eidolon.config import Settings, UsageLimits
 from tests.browser import open_browser
 from tests.conftest import ClientFactory
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     START,
     FakeClock,
     FakeIdentityProvider,
@@ -43,13 +43,8 @@ UNTIL = (START + timedelta(days=1)).isoformat()
 def settings(settings: Settings) -> Settings:
     """With an admin, the judge model, affinity on in `.env`, and one turn and one call an
     hour."""
-    return replace(
-        settings,
-        admins=frozenset({ADMIN}),
-        judge=FAKE_JUDGE,
-        affinity_and_gifts=True,
-        usage_limits=UsageLimits(turns_per_hour=1, calls_per_hour=1),
-    )
+    return replace(settings, admins=frozenset({ADMIN}), affinity_and_gifts=True,
+    usage_limits=UsageLimits(turns_per_hour=1, calls_per_hour=1),)
 
 
 def ask_before_calling(client: httpx.AsyncClient, conversation_id: str):
@@ -69,7 +64,7 @@ async def test_the_turn_that_takes_it_to_0_has_her_part_and_begins_a_cooldown(
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0), level(0)]
+    clients.user_judge.judgings = [level(0), level(0)]
     llm = FakeLLM(REPLY, REPLY)
     unlimited = replace(settings, usage_limits=UsageLimits())
     client = make_client(llm, clients=clients, clock=clock, settings=unlimited)
@@ -78,8 +73,8 @@ async def test_the_turn_that_takes_it_to_0_has_her_part_and_begins_a_cooldown(
     conversation = await start_conversation(client)
     keep(settings.database_path, "producer", 1, clock.now)
 
-    staying = await send_turn(client, other, "随便你")
-    parting = await send_turn(client, conversation, "随便你")
+    staying = await send_turn(client, other, "随便你", own_keys=JUDGED_KEYS)
+    parting = await send_turn(client, conversation, "随便你", own_keys=JUDGED_KEYS)
 
     assert staying[-1]["affinity"]["cooldown_until"] is None
     assert parting[-1]["message"]["affinity"]["cooldown"] is True
@@ -94,7 +89,7 @@ async def test_in_a_cooldown_turns_and_calls_are_refused_counting_towards_nothin
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(1, out_of_line=True), level(0)]
+    clients.user_judge.judgings = [level(1, out_of_line=True), level(0)]
     llm = FakeLLM(REPLY, REPLY)
     client = make_client(llm, clients=clients, clock=clock)
     conversation = await start_conversation(client)
@@ -112,9 +107,9 @@ async def test_in_a_cooldown_turns_and_calls_are_refused_counting_towards_nothin
         clock.advance(minutes=15)
         thawed = (await status(client)).json()
         # Had the refused turn counted, the hour's one turn would be used up.
-        again = await send_turn(client, conversation, "你这个废物")
+        again = await send_turn(client, conversation, "你这个废物", own_keys=JUDGED_KEYS)
         clock.advance(hours=1)
-        fell_again = await send_turn(client, conversation, "随便你")
+        fell_again = await send_turn(client, conversation, "随便你", own_keys=JUDGED_KEYS)
         cooling_again = await post_turn(client, conversation)
 
     for res in (turn, asked, call):
@@ -134,7 +129,7 @@ async def test_a_cooldown_is_hers_alone(make_client: ClientFactory, settings: Se
     other = await start_conversation(client, "kogane")
     keep(settings.database_path, "producer", 0, START, cooling=True)
 
-    events = await send_turn(client, other, "在吗")
+    events = await send_turn(client, other, "在吗", own_keys=JUDGED_KEYS)
 
     assert events[-1]["type"] == "done"
 
@@ -151,7 +146,7 @@ async def test_off_nothing_is_refused_whatever_is_kept(
     keep(settings.database_path, "producer", 0, START, cooling=True)
 
     asked = await ask_before_calling(client, conversation)
-    events = await send_turn(client, conversation, "在吗")
+    events = await send_turn(client, conversation, "在吗", own_keys=JUDGED_KEYS)
 
     assert asked.status_code == 200
     assert events[-1]["type"] == "done"
