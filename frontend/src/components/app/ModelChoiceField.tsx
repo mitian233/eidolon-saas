@@ -5,7 +5,9 @@ import { useState } from "react";
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { CUSTOM_MODEL, modelChoice } from "@/lib/adminConfig";
+
+const CUSTOM_MODEL = "__custom__";
+const modelChoice = (models: string[], value: string) => models.includes(value) ? value : CUSTOM_MODEL;
 
 /**
  * 模型：下拉里是常用的几个，最后一项「其他（手填）」。选了它，下拉下面出一个框填模型名；表单里存的始终是模型名本身，
