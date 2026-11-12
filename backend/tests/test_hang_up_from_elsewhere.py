@@ -22,7 +22,7 @@ from eidolon.config import Settings
 from tests.browser import open_browser
 from tests.conftest import ClientFactory
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     START,
     FakeClock,
     FakeIdentityProvider,
@@ -56,9 +56,7 @@ UNTIL = START + timedelta(days=1)
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """With an admin, the judge model, and affinity on in `.env`."""
-    return replace(
-        settings, admins=frozenset({ADMIN}), judge=FAKE_JUDGE, affinity_and_gifts=True
-    )
+    return replace(settings, admins=frozenset({ADMIN}), affinity_and_gifts=True)
 
 
 async def test_a_cooldown_begun_elsewhere_has_her_hang_up_an_idle_call(
@@ -68,7 +66,7 @@ async def test_a_cooldown_begun_elsewhere_has_her_hang_up_an_idle_call(
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0)]
+    clients.user_judge.judgings = [level(0)]
     client = make_client(FakeLLM(REPLY), clients=clients, clock=clock)
     in_call = await start_conversation(client)
     elsewhere = await start_conversation(client)
@@ -77,7 +75,7 @@ async def test_a_cooldown_begun_elsewhere_has_her_hang_up_an_idle_call(
     async with admin_beside(client, github) as admin, open_browser() as mano:
         await mano.call(client, conversation_id=in_call)
         await mano.connect()
-        await send_turn(client, elsewhere, "随便你")
+        await send_turn(client, elsewhere, "随便你", own_keys=JUDGED_KEYS)
         ended = await mano.next_server_message("ended")
         await mano.hung_up()
         board = await call_recorded(admin)
