@@ -102,7 +102,7 @@ async def test_a_service_without_calls_is_tried_twice_before_it_is_down_and_once
     retrieving = replace(
         settings,
         judge=FAKE_JUDGE,
-        embedding=EmbeddingSettings("siliconflow", "sk-embed", "embed", "https://embed.example"),
+        embedding=EmbeddingSettings("https://embed.example", "embed", 1536, "sk-embed"),
         rerank=RerankSettings("sk-rerank"),
     )
     client = make_client(
