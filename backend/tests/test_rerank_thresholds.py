@@ -23,7 +23,8 @@ def test_an_unknown_model_gets_the_4b_thresholds():
 
 
 def test_the_environment_overrides_either_threshold(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SILICONFLOW_API_KEY", "sk-test")
+    monkeypatch.setenv("RERANK_API_KEY", "sk-test")
+    monkeypatch.setenv("RERANK_BASE_URL", "https://rerank.example/v1")
     monkeypatch.setenv("RERANK_MODEL", "Qwen/Qwen3-Reranker-0.6B")
     monkeypatch.setenv("RERANK_MEMORY_MIN_RELEVANCE", "0.05")
 
@@ -35,7 +36,9 @@ def test_the_environment_overrides_either_threshold(monkeypatch: pytest.MonkeyPa
 
 @pytest.mark.parametrize("value", ["high", "1.5", "-0.1"])
 def test_a_threshold_out_of_range_stops_the_start(monkeypatch: pytest.MonkeyPatch, value: str):
-    monkeypatch.setenv("SILICONFLOW_API_KEY", "sk-test")
+    monkeypatch.setenv("RERANK_API_KEY", "sk-test")
+    monkeypatch.setenv("RERANK_BASE_URL", "https://rerank.example/v1")
+    monkeypatch.setenv("RERANK_MODEL", "Qwen/Qwen3-Reranker-4B")
     monkeypatch.setenv("RERANK_MIN_RELEVANCE", value)
 
     with pytest.raises(RuntimeError, match="RERANK_MIN_RELEVANCE"):
