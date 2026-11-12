@@ -32,7 +32,7 @@ from eidolon.config import Settings, UsageLimits
 from tests.browser import TIMEOUT, open_browser, until_gone
 from tests.conftest import ClientFactory
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     FakeClock,
     FakeLLM,
     FakeServiceClients,
@@ -56,7 +56,7 @@ FINE = level(2)
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """With the judge model, and affinity on in `.env`."""
-    return replace(settings, judge=FAKE_JUDGE, affinity_and_gifts=True)
+    return replace(settings, affinity_and_gifts=True)
 
 
 def client_judging(
@@ -64,14 +64,14 @@ def client_judging(
 ) -> tuple[httpx.AsyncClient, FakeLLM]:
     """A client whose judge model judges the turns as `judgings` says, one reply for each."""
     clients = FakeServiceClients()
-    clients.judge.judgings = list(judgings)
+    clients.user_judge.judgings = list(judgings)
     llm = FakeLLM(*[REPLY] * len(judgings))
     return make_client(llm, clients=clients, clock=FakeClock(), **kwargs), llm
 
 
 async def say_each(client: httpx.AsyncClient, conversation: str, n: int) -> list[list[dict]]:
     """`n` typed turns, one after another; each one's events."""
-    return [await send_turn(client, conversation, f"第{i}句") for i in range(n)]
+    return [await send_turn(client, conversation, f"第{i}句", own_keys=JUDGED_KEYS) for i in range(n)]
 
 
 def ended_by(turn: list[dict]) -> bool:
@@ -108,12 +108,12 @@ async def test_once_ended_turns_are_rejected_counting_towards_nothing_and_calls_
     conversation = await start_conversation(client)
     await say_each(client, conversation, 6)
 
-    rejected = await send_turn(client, conversation, "对不起")
+    rejected = await send_turn(client, conversation, "对不起", own_keys=JUDGED_KEYS)
     asked = await ask_before_calling(client, conversation)
     async with open_browser() as browser:
-        call = await browser.call(client, conversation_id=conversation)
+        call = await browser.call(client, conversation_id=conversation, own_keys=JUDGED_KEYS)
     recorded = await record(client, conversation)
-    elsewhere = await send_turn(client, await start_conversation(client), "重新开始吧")
+    elsewhere = await send_turn(client, await start_conversation(client), "重新开始吧", own_keys=JUDGED_KEYS)
 
     assert [e["type"] for e in rejected] == ["user", "error"]
     assert rejected[-1]["message"] == ENDED
@@ -173,7 +173,7 @@ async def test_a_calls_turns_count_in_it_alone_and_her_hanging_up_leaves_the_con
     conversation = await start_conversation(client)
 
     async with open_browser() as browser:
-        await browser.call(client, conversation_id=conversation)
+        await browser.call(client, conversation_id=conversation, own_keys=JUDGED_KEYS)
         await browser.connect()
         await say(speech, browser, "你这个废物")
         await say(speech, browser, "废物")
@@ -182,7 +182,7 @@ async def test_a_calls_turns_count_in_it_alone_and_her_hanging_up_leaves_the_con
     async with asyncio.timeout(TIMEOUT):
         while "hung_up" not in shape(await record(client, conversation)):
             await asyncio.sleep(0.05)
-    typed = await send_turn(client, conversation, "刚才说过头了")
+    typed = await send_turn(client, conversation, "刚才说过头了", own_keys=JUDGED_KEYS)
 
     assert typed[-1]["type"] == "done"
     assert not ended_by(typed)
@@ -230,18 +230,18 @@ async def test_the_turn_that_cools_her_ends_it_saying_till_when_and_the_cooldown
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0), FINE]
+    clients.user_judge.judgings = [level(0), FINE]
     llm = FakeLLM(REPLY, REPLY)
     client = make_client(llm, clients=clients, clock=clock)
     other = await start_conversation(client)
     conversation = await start_conversation(client)
     keep(settings.database_path, "producer", 1, clock.now)
 
-    [*_, done] = await send_turn(client, conversation, "随便你")
+    [*_, done] = await send_turn(client, conversation, "随便你", own_keys=JUDGED_KEYS)
     recorded = await record(client, conversation)
     clock.advance(days=2)
-    rejected = await send_turn(client, conversation, "对不起")
-    elsewhere = await send_turn(client, other, "还在吗")
+    rejected = await send_turn(client, conversation, "对不起", own_keys=JUDGED_KEYS)
+    elsewhere = await send_turn(client, other, "还在吗", own_keys=JUDGED_KEYS)
 
     assert done["ended"] == recorded[-1]
     assert done["affinity"]["cooldown_until"] == UNTIL
@@ -257,20 +257,20 @@ async def test_cooling_her_in_a_call_ends_no_conversation(
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(0), FINE]
+    clients.user_judge.judgings = [level(0), FINE]
     llm = FakeLLM(REPLY, REPLY)
     client = make_client(llm, clients=clients, clock=clock)
     conversation = await start_conversation(client)
     keep(settings.database_path, "producer", 1, clock.now)
 
     async with open_browser() as browser:
-        await browser.call(client, conversation_id=conversation)
+        await browser.call(client, conversation_id=conversation, own_keys=JUDGED_KEYS)
         await browser.connect()
         await say(speech, browser, "随便你")
         ended = await browser.next_server_message("ended")
         await browser.hung_up()
     clock.advance(days=2)
-    typed = await send_turn(client, conversation, "刚才说过头了")
+    typed = await send_turn(client, conversation, "刚才说过头了", own_keys=JUDGED_KEYS)
 
     assert ended["reason"] == "cooldown"
     assert typed[-1]["type"] == "done"
@@ -297,7 +297,7 @@ async def test_a_turn_under_way_as_it_is_ended_elsewhere_is_rejected_and_counts_
 ):
     ending: list[str] = []  # the conversation ended as the model replies, while there is one
     clients = FakeServiceClients()
-    clients.judge.judgings = [HURT, FINE]
+    clients.user_judge.judgings = [HURT, FINE]
     llm = EndedElsewhere(lambda: end(settings.database_path, *ending), REPLY, REPLY)
     client = make_client(
         llm, clients=clients, clock=FakeClock(),
@@ -306,10 +306,10 @@ async def test_a_turn_under_way_as_it_is_ended_elsewhere_is_rejected_and_counts_
     conversation = await start_conversation(client)
     ending.append(conversation)
 
-    turn = await send_turn(client, conversation, "随便你")
+    turn = await send_turn(client, conversation, "随便你", own_keys=JUDGED_KEYS)
     recorded = await record(client, conversation)
     ending.clear()
-    elsewhere = await send_turn(client, await start_conversation(client), "重新开始吧")
+    elsewhere = await send_turn(client, await start_conversation(client), "重新开始吧", own_keys=JUDGED_KEYS)
 
     assert turn[-1] == {"type": "error", "message": ENDED}
     assert shape(recorded) == ["ended"]
@@ -324,7 +324,7 @@ async def test_a_call_in_it_as_she_ends_it_she_hangs_up_telling_it_she_ended_it(
     conversation = await start_conversation(client)
 
     async with open_browser() as browser:
-        await browser.call(client, conversation_id=conversation)
+        await browser.call(client, conversation_id=conversation, own_keys=JUDGED_KEYS)
         await browser.connect()
         assert browser.pc_id is not None
         typed = await say_each(client, conversation, 2)
