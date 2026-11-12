@@ -40,7 +40,7 @@ SttProvider = Literal["soniox", "bailian"]
 
 STT_PROVIDERS: tuple[SttProvider, ...] = get_args(SttProvider)
 
-Service = Literal["llm", "tts", "stt", "image"]
+Service = Literal["llm", "tts", "stt", "image", "embedding", "rerank"]
 """A service users may bring their own key for (GLOSSARY.md「自带密钥」)."""
 SERVICES: tuple[Service, ...] = get_args(Service)
 EXEMPTING_SERVICES: tuple[Service, ...] = ("llm", "tts", "stt")
@@ -54,7 +54,7 @@ REGISTRATIONS: tuple[Registration, ...] = get_args(Registration)
 
 ProxiedService = Literal[
     "chat_llm", "memory_llm", "judge", "embedding", "rerank", "tts", "stt", "image",
-    "gpt_image", "own_llm", "own_tts", "own_stt", "own_image",
+    "gpt_image", "own_llm", "own_tts", "own_stt", "own_image", "own_embedding", "own_rerank",
 ]
 """What may reach its provider through the proxy (GLOSSARY.md「网络代理」): the deployer's
 services, the chat model, in text turns and calls alike; the memory model; the judge
@@ -67,6 +67,7 @@ recognition they chose; image generation, though only to NovelAI's own address."
 PROXIED_SERVICES: tuple[ProxiedService, ...] = get_args(ProxiedService)
 OWN_KEYS_PROXIED: dict[Service, ProxiedService] = {
     "llm": "own_llm", "tts": "own_tts", "stt": "own_stt", "image": "own_image",
+    "embedding": "own_embedding", "rerank": "own_rerank",
 }
 """What users' own key for each service goes through the proxy as."""
 
@@ -509,8 +510,7 @@ class Settings:
     towards no limit (GLOSSARY.md「免限额密钥」), at least one; all three unless `.env`
     turns some off, and the admin console may override it. Text turns go by the LLM alone."""
     affinity_and_gifts: bool = True
-    """Whether affinity and gifts are on (GLOSSARY.md「好感度」), as they are only with the
-    judge model; on unless `.env` turns them off, and the admin console may override it."""
+    """Platform affinity switch; new judgments require the user's per-request opt-in."""
     reach_outs: bool = False
     """Whether characters reach out to users (GLOSSARY.md「搭话」), on the deployer's chat
     model; off unless `.env` turns it on, and the admin console may override it."""
@@ -637,7 +637,7 @@ class Settings:
             image=ImageSettings.from_env(),
             gpt_image=GptImageSettings.from_env(),
             qweather=QWeatherSettings.from_env(),
-            judge=judge_from_env(),
+            judge=None,  # Judge requests use the LLM brought by the current user.
             emotion=EmotionSettings.from_env(),
             usage_limits=UsageLimits.from_env(),
             history_turns=history_turns_from_env(),
@@ -835,81 +835,43 @@ class OAuthSettings:
         return cls(_required(f"{provider}_CLIENT_ID"), _required(f"{provider}_CLIENT_SECRET"))
 
 
-EmbeddingProvider = Literal["siliconflow", "gemini"]
-EMBEDDING_PROVIDERS: tuple[EmbeddingProvider, ...] = get_args(EmbeddingProvider)
-
-
 @dataclass(frozen=True)
 class EmbeddingSettings:
-    """The service that builds and searches the vector index, chosen at deploy time
-    (ADR-0005): SiliconFlow's Qwen3-Embedding or Google's Gemini Embedding."""
+    """An OpenAI-compatible endpoint brought by the user, never saved by the server."""
 
-    provider: EmbeddingProvider
-    api_key: str
-    model: str
     base_url: str
-    dimensions: int | None = None
-    """How long Gemini's vectors are; SiliconFlow's are as long as the model makes them."""
+    model: str
+    dimensions: int
+    api_key: str
 
     @classmethod
     def from_env(cls) -> "EmbeddingSettings | None":
-        """None if the chosen service's key is not set; a bad choice raises all the same."""
-        provider = _embedding_provider()
-        if not os.environ.get(_EMBEDDING_KEYS[provider]):
+        """Optional explicit settings for local commands; never used by user turns."""
+        if not os.environ.get("EMBEDDING_BASE_URL"):
             return None
         return cls.required_from_env()
 
     @classmethod
     def required_from_env(cls) -> "EmbeddingSettings":
-        """For the commands that cannot do without embedding: a missing key raises."""
-        provider = _embedding_provider()
-        api_key = _required(_EMBEDDING_KEYS[provider])
-        model = os.environ.get("EMBEDDING_MODEL") or None
-        if provider == "siliconflow":
-            return cls(
-                provider,
-                api_key,
-                model or DEFAULT_EMBEDDING_MODEL,
-                os.environ.get("SILICONFLOW_BASE_URL") or DEFAULT_SILICONFLOW_BASE_URL,
-            )
         return cls(
-            provider,
-            api_key,
-            model or DEFAULT_GEMINI_EMBEDDING_MODEL,
-            os.environ.get("GEMINI_BASE_URL") or DEFAULT_GEMINI_BASE_URL,
-            _embedding_dimensions(),
+            _required("EMBEDDING_BASE_URL"), _required("EMBEDDING_MODEL"),
+            _embedding_dimensions(), _required("EMBEDDING_API_KEY"),
         )
-
-
-_EMBEDDING_KEYS: dict[EmbeddingProvider, str] = {
-    "siliconflow": "SILICONFLOW_API_KEY",
-    "gemini": "GEMINI_API_KEY",
-}
-
-
-def _embedding_provider() -> EmbeddingProvider:
-    provider = os.environ.get("EMBEDDING_PROVIDER") or "siliconflow"
-    if provider not in EMBEDDING_PROVIDERS:
-        raise RuntimeError(
-            f"环境变量 EMBEDDING_PROVIDER 只能是 {'、'.join(EMBEDDING_PROVIDERS)}，而不是 {provider}"
-        )
-    return provider  # pyright: ignore[reportReturnType]  # checked above
 
 
 def _embedding_dimensions() -> int:
     value = (os.environ.get("EMBEDDING_DIMENSIONS") or "").strip()
     if not value:
         return DEFAULT_EMBEDDING_DIMENSIONS
-    low, high = EMBEDDING_DIMENSIONS_RANGE
-    if not (value.isascii() and value.isdigit() and low <= int(value) <= high):
-        raise RuntimeError(f"环境变量 EMBEDDING_DIMENSIONS 需要是 {low}–{high} 之间的整数，而不是 {value}")
+    if not (value.isascii() and value.isdigit() and int(value) > 0):
+        raise RuntimeError(f"环境变量 EMBEDDING_DIMENSIONS 需要是正整数，而不是 {value}")
     return int(value)
 
 
 @dataclass(frozen=True)
 class RerankSettings:
-    """SiliconFlow's Qwen3-Reranker, which reranks what the vector search finds, whichever
-    service embeds. The thresholds, unless set here, are the model's (see `rerank`)."""
+    """A user's endpoint speaking the SiliconFlow rerank request/response format.
+    Thresholds, unless overridden, are calibrated by model name (see `rerank`)."""
 
     api_key: str
     model: str = DEFAULT_RERANK_MODEL
@@ -921,13 +883,13 @@ class RerankSettings:
 
     @classmethod
     def from_env(cls) -> "RerankSettings | None":
-        """None if SiliconFlow's key is not set."""
-        if not os.environ.get("SILICONFLOW_API_KEY"):
+        """Optional explicit settings for local commands, independent of embedding."""
+        if not os.environ.get("RERANK_BASE_URL"):
             return None
         return cls(
-            api_key=_required("SILICONFLOW_API_KEY"),
-            model=os.environ.get("RERANK_MODEL") or DEFAULT_RERANK_MODEL,
-            base_url=os.environ.get("SILICONFLOW_BASE_URL") or DEFAULT_SILICONFLOW_BASE_URL,
+            api_key=_required("RERANK_API_KEY"),
+            model=_required("RERANK_MODEL"),
+            base_url=_required("RERANK_BASE_URL"),
             min_relevance=_relevance("RERANK_MIN_RELEVANCE"),
             memory_min_relevance=_relevance("RERANK_MEMORY_MIN_RELEVANCE"),
         )
