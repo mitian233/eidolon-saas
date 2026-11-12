@@ -1,4 +1,4 @@
-"""The SiliconFlow embedder speaks the OpenAI-compatible embeddings protocol. A query,
+"""The generic embedder speaks the OpenAI-compatible embeddings protocol. A query,
 which holds up a turn, is given a few seconds and asked again once if it fails in
 passing; documents are given longer."""
 
@@ -10,12 +10,12 @@ from typing import Any
 import httpx
 import pytest
 
-from eidolon.embedding import Document, EmbeddingError, SiliconFlowEmbedder
+from eidolon.embedding import Document, EmbeddingError, OpenAIEmbedder
 
 Handler = Callable[[httpx.Request], Coroutine[Any, Any, httpx.Response]]
 
 
-def embedder(requests: list[dict], status: int = 200) -> SiliconFlowEmbedder:
+def embedder(requests: list[dict], status: int = 200) -> OpenAIEmbedder:
     def handle(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         requests.append({"auth": request.headers["Authorization"], **body})
@@ -24,7 +24,7 @@ def embedder(requests: list[dict], status: int = 200) -> SiliconFlowEmbedder:
         return httpx.Response(status, json={"data": data[::-1]})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
-    return SiliconFlowEmbedder("sk-test", "Qwen/Qwen3-Embedding-0.6B", "http://sf.test/v1", client)
+    return OpenAIEmbedder("sk-test", "Qwen/Qwen3-Embedding-0.6B", "http://sf.test/v1", client)
 
 
 async def test_documents_are_embedded_in_batches_and_kept_in_order():
@@ -41,13 +41,12 @@ async def test_documents_are_embedded_in_batches_and_kept_in_order():
     assert [v[0] for v in vectors] == [float(i) for i in range(16)] + [0.0, 1.0, 2.0, 3.0]
 
 
-async def test_queries_carry_an_instruction_documents_do_not():
+async def test_queries_are_sent_without_provider_specific_instructions():
     requests: list[dict] = []
 
     await embedder(requests).embed_query("那次拍写真集是怎么回事")
 
-    assert requests[0]["input"][0].startswith("Instruct: ")
-    assert requests[0]["input"][0].endswith("Query: 那次拍写真集是怎么回事")
+    assert requests[0]["input"] == ["那次拍写真集是怎么回事"]
 
 
 async def test_a_service_error_is_reported():
@@ -60,7 +59,7 @@ async def test_an_unreachable_service_is_reported():
         raise httpx.ConnectError("connection refused")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(refuse))
-    embedder = SiliconFlowEmbedder("sk-test", "m", "http://sf.test/v1", client)
+    embedder = OpenAIEmbedder("sk-test", "m", "http://sf.test/v1", client)
 
     with pytest.raises(EmbeddingError, match="无法连接"):
         await embedder.embed_query("在吗")
@@ -95,9 +94,9 @@ def vectors(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"data": [{"index": i, "embedding": [1.0]} for i in range(count)]})
 
 
-def scripted_embedder(answers: list[Answer], query_timeout: float = 0.05) -> SiliconFlowEmbedder:
+def scripted_embedder(answers: list[Answer], query_timeout: float = 0.05) -> OpenAIEmbedder:
     client = httpx.AsyncClient(transport=httpx.MockTransport(scripted(answers, vectors)))
-    return SiliconFlowEmbedder(
+    return OpenAIEmbedder(
         "sk-test", "m", "http://sf.test/v1", client, query_timeout=query_timeout
     )
 
@@ -156,7 +155,7 @@ async def test_documents_take_longer_than_a_query_may():
         return vectors(request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(slow))
-    embedder = SiliconFlowEmbedder("sk-test", "m", "http://sf.test/v1", client, query_timeout=0.05)
+    embedder = OpenAIEmbedder("sk-test", "m", "http://sf.test/v1", client, query_timeout=0.05)
 
     assert await embedder.embed_documents([Document("doc")]) == [[1.0]]
     with pytest.raises(EmbeddingError, match="没有回应"):
