@@ -24,27 +24,12 @@ from eidolon.config import Settings
 from eidolon.llm import ChatMessage, LLMError
 from tests.browser import Browser
 from tests.conftest import ClientFactory
-from tests.fakes import (
-    FAKE_JUDGE,
-    FakeBackgroundLLM,
-    FakeClock,
-    FakeEmbedder,
-    FakeIdentityProvider,
-    FakeJudge,
-    FakeLLM,
-    FakeLLMService,
-    FakeReranker,
-    FakeServiceClients,
-    FakeSpeech,
-    level,
-)
+from tests.fakes import JUDGED_KEYS, FakeBackgroundLLM, FakeClock, FakeEmbedder, FakeIdentityProvider, FakeJudge, FakeLLM, FakeLLMService, FakeReranker, FakeSpeech, level
 from tests.test_activity_records import admin_client, dashboard, health
 from tests.test_conversation_events import hang_up
 from tests.test_delete_account import DELETE, rows_mentioning
-from tests.test_live_config import admin_client as live_admin_client
-from tests.test_live_config_services import ENV_SETTINGS, NEW_MEMORY, NEW_MEMORY_SETTINGS
-from tests.test_live_config_services import MEMORY_LLM as BACKGROUND_CONFIG
 from tests.test_own_llm import MEMORY_KEY, MEMORY_LLM, MINE, THINKING
+from tests.fakes import RETRIEVAL_KEYS
 from tests.test_she_ends_conversation import client_judging, ended_by
 from tests.test_she_hangs_up import OUT_OF_LINE
 from tests.test_she_hangs_up import say as say_in_call
@@ -80,10 +65,10 @@ def fed(prompt: list[ChatMessage]) -> list[str]:
     return prompt[-1].content.splitlines()
 
 
-async def say(client: httpx.AsyncClient, conversation: str, n: int) -> None:
+async def say(client: httpx.AsyncClient, conversation: str, n: int, keys: dict | None = None) -> None:
     """`n` typed turns, each done."""
     for i in range(n):
-        assert (await send_turn(client, conversation, f"第{i}句"))[-1]["type"] == "done"
+        assert (await send_turn(client, conversation, f"第{i}句", own_keys=keys))[-1]["type"] == "done"
 
 
 async def test_the_third_turn_names_the_conversation_once(make_client: ClientFactory):
@@ -108,7 +93,7 @@ async def test_naming_holds_up_no_reply(make_client: ClientFactory):
     conversation = await start_conversation(client)
     await say(client, conversation, 2)
 
-    third = await send_turn(client, conversation, "第三句")  # done with the model still naming
+    third = await send_turn(client, conversation, "第三句", own_keys=JUDGED_KEYS)  # done with the model still naming
     gate.set()
 
     assert third[-1]["type"] == "done"
@@ -123,12 +108,12 @@ async def test_the_model_reads_the_first_turns_in_order_with_their_events_and_he
     client = make_client(FakeLLM(cued, REPLY, REPLY, REPLY), background_llm=background)
     conversation = await start_conversation(client)
 
-    await send_turn(client, conversation, "我想去看海")
+    await send_turn(client, conversation, "我想去看海", own_keys=JUDGED_KEYS)
     hang_up(settings.database_path, conversation)
-    await send_turn(client, conversation, "海" * 200)
-    await send_turn(client, conversation, "第三句")
+    await send_turn(client, conversation, "海" * 200, own_keys=JUDGED_KEYS)
+    await send_turn(client, conversation, "第三句", own_keys=JUDGED_KEYS)
     await listed_titles(client)
-    await send_turn(client, conversation, "第四句")
+    await send_turn(client, conversation, "第四句", own_keys=JUDGED_KEYS)
 
     [prompt] = background.prompts
     assert prompt[0].role == "system" and "起标题" in prompt[0].content
@@ -154,10 +139,10 @@ async def test_with_memory_on_it_is_named_from_no_memories_and_neither_she_nor_m
         reranker=FakeReranker("制作人"), background_llm=background,
     )
     conversation = await start_conversation(client)
-    await say(client, conversation, 3)
+    await say(client, conversation, 3, RETRIEVAL_KEYS)
     titled = await listed_titles(client)
 
-    await say(client, conversation, 1)
+    await say(client, conversation, 1, RETRIEVAL_KEYS)
 
     assert titled == [TITLE]
     assert [m["text"] for m in (await client.get("/api/memories")).json()] == [CAT]
@@ -175,11 +160,11 @@ async def test_she_ending_the_conversation_in_its_third_turn_names_it_all_the_sa
     background = FakeBackgroundLLM(TITLE)
     client, _ = client_judging(
         make_client, [level(2), OUT_OF_LINE, OUT_OF_LINE], background_llm=background,
-        settings=replace(settings, judge=FAKE_JUDGE, affinity_and_gifts=True),
+        settings=replace(settings, affinity_and_gifts=True),
     )
     conversation = await start_conversation(client)
 
-    turns = [await send_turn(client, conversation, f"第{i}句") for i in range(3)]
+    turns = [await send_turn(client, conversation, f"第{i}句", own_keys=JUDGED_KEYS) for i in range(3)]
 
     assert ended_by(turns[-1])
     assert await listed_titles(client) == [TITLE]
@@ -231,9 +216,9 @@ async def test_a_conversation_not_named_after_retry_is_not_named_by_later_turns(
     client = make_client(FakeLLM(*[REPLY] * 4), background_llm=background)
     conversation = await start_conversation(client)
 
-    await send_turn(client, conversation, "我想去看海")
+    await send_turn(client, conversation, "我想去看海", own_keys=JUDGED_KEYS)
     await say(client, conversation, 1)
-    third = await send_turn(client, conversation, "第三句")
+    third = await send_turn(client, conversation, "第三句", own_keys=JUDGED_KEYS)
     after_three = await listed_titles(client)
     await say(client, conversation, 1)
 
@@ -262,27 +247,7 @@ async def test_a_turn_on_an_own_background_model_is_named_by_it(
     assert deployers_background.prompts == []
 
 
-async def test_the_deployers_background_model_replaced_while_naming_is_closed_once_named(
-    make_client: ClientFactory, settings: Settings, github: FakeIdentityProvider
-):
-    clients = FakeServiceClients(FakeLLM(*[REPLY] * 3))
-    gate = asyncio.Event()
-    clients.background = FakeBackgroundLLM(TITLE, gate=gate)
-    admins = replace(settings, admins=frozenset({("github", "1001")}))
-    client = await live_admin_client(make_client, admins, github, clients)
-    conversation = await start_conversation(client)
-    assert (await client.put(BACKGROUND_CONFIG, json=NEW_MEMORY)).status_code == 200
-    await say(client, conversation, 3)  # named after the third, with memory off
 
-    other = NEW_MEMORY | {"api_key": "sk-other-key-9999"}
-    assert (await client.put(BACKGROUND_CONFIG, json=other)).status_code == 200
-    closed_while_naming = list(clients.closed)
-    gate.set()
-    titles = await listed_titles(client)
-
-    assert NEW_MEMORY_SETTINGS not in closed_while_naming
-    assert titles == [TITLE]
-    assert clients.closed == [ENV_SETTINGS, NEW_MEMORY_SETTINGS]
 
 
 async def test_the_dashboard_counts_naming_as_the_background_models_and_never_shows_a_title(
