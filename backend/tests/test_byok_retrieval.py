@@ -11,7 +11,7 @@ from eidolon.account_api import OwnKeysInput
 from eidolon.config import Settings
 from eidolon.judge import JudgeError
 from eidolon.llm import LLMError
-from tests.fakes import FAKE_JUDGE, FakeLLM, FakeLLMService, FakeSpeech, build_faked
+from tests.fakes import FakeLLM, FakeLLMService, FakeSpeech, build_faked
 
 
 def payload(**extra):
@@ -72,7 +72,7 @@ async def test_unreachable_user_judge_raises_judge_error():
 async def test_own_judge_uses_user_key_even_with_platform_judge_configured(settings: Settings):
     own_llm = FakeLLM([json.dumps({"check": {"noul": 1.0}})])
     own_service = FakeLLMService(own_llm)
-    backend = build_faked(replace(settings, judge=FAKE_JUDGE), own_llm_service=own_service, speech=FakeSpeech())
+    backend = build_faked(replace(settings, ), own_llm_service=own_service, speech=FakeSpeech())
     try:
         brought = OwnKeysInput.model_validate(payload(embedding=None, rerank=None)).brought()
         turn = backend.own_keys.for_turn(brought)
@@ -92,7 +92,7 @@ def test_platform_judge_environment_never_requires_credentials(monkeypatch: pyte
     monkeypatch.setenv("JUDGE_PROVIDER", "cloudflare")
     monkeypatch.delenv("CLOUDFLARE_API_TOKEN", raising=False)
     monkeypatch.delenv("CLOUDFLARE_ACCOUNT_ID", raising=False)
-    assert Settings.from_env().judge is None
+    assert not hasattr(Settings.from_env(), "judge")
 
 
 async def test_generic_embeddings_use_endpoint_model_dimensions_and_plain_query():
@@ -129,7 +129,7 @@ async def test_user_endpoint_keeps_memories_without_rerank_and_disabled_judge(ma
     vectors = OwnRetrievalService(public_only=False, transport=httpx.MockTransport(handle))
     own = FakeLLMService(FakeLLM(["<ja>好的</ja><zh>好的</zh>"], ['{"memories":[{"text":"用户喜欢茶","supersedes":[]}]}']))
     try:
-        client = make_client(FakeLLM(), settings=replace(settings, chat_llm=None, background_llm=None, judge=FAKE_JUDGE), own_llm_service=own, own_retrieval_service=vectors)
+        client = make_client(FakeLLM(), settings=replace(settings, chat_llm=None, background_llm=None), own_llm_service=own, own_retrieval_service=vectors)
         body = payload(judge_enabled=False, rerank=None)
         events = await send_turn(client, await start_conversation(client), "我喜欢茶", own_keys=body)
         assert events[-1]["type"] == "done"
@@ -143,7 +143,7 @@ async def test_user_endpoint_keeps_memories_without_rerank_and_disabled_judge(ma
 
 
 async def test_disabled_judge_uses_default_call_expression(settings):
-    backend = build_faked(replace(settings, judge=FAKE_JUDGE), own_llm_service=FakeLLMService(), speech=FakeSpeech())
+    backend = build_faked(replace(settings, ), own_llm_service=FakeLLMService(), speech=FakeSpeech())
     try:
         body = payload(judge_enabled=False, embedding=None, rerank=None)
         body.update(tts={"api_key": "fish-own"}, stt={"api_key": "soniox-own"})
@@ -224,7 +224,7 @@ async def test_disabling_user_judge_keeps_affinity_and_cannot_bypass_existing_co
     from tests.fakes import FakeClock, START
     from tests.test_affinity import keep, status
     from tests.test_text_turn import start_conversation
-    client = make_client(FakeLLM(), settings=replace(settings, judge=None, affinity_and_gifts=True), clock=FakeClock())
+    client = make_client(FakeLLM(), settings=replace(settings, affinity_and_gifts=True), clock=FakeClock())
     conversation = await start_conversation(client)
     keep(settings.database_path, "producer", 0, START, cooling=True)
     assert (await status(client)).json()["tier"] == "cold"
