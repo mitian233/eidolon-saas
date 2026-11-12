@@ -29,9 +29,9 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypeVar, TypeVarTuple, Unpack
+from typing import Any, TypeVar, TypeVarTuple, Unpack, cast
 
-from eidolon.database import connect
+from eidolon.database import connect, postgres_url
 
 log = logging.getLogger(__name__)
 
@@ -87,8 +87,9 @@ class Database:
     """The database at `path`, read on `readers` read-only connections and written on one
     connection on a thread of its own."""
 
-    def __init__(self, path: Path, readers: int = READERS) -> None:
-        self.path = path
+    def __init__(self, path: Path | str, readers: int = READERS) -> None:
+        self.path = cast(Path, path)
+        self._postgres = postgres_url(path) is not None
         self._writer = connect(path)
         self._readers: list[sqlite3.Connection] = []
         try:
@@ -111,7 +112,7 @@ class Database:
         self._waiting = 0
         """How many reads wait for a connection."""
         self._closed = False
-        self._checkpoint_due: float | None = time.monotonic()
+        self._checkpoint_due: float | None = None if self._postgres else time.monotonic()
         """When the checkpoint left undone is to be tried again, on the monotonic clock;
         None if none is. On the writing thread only, which first tries one at once."""
         self._undone_since: float | None = None
@@ -149,6 +150,8 @@ class Database:
         in now but not waited for, which waits `CHECKPOINT_BUSY` at most for readers; left
         undone, it is tried again every `CHECKPOINT_RETRY` until it is done, and logged as
         an error once overdue."""
+        if self._postgres:
+            return  # Postgres manages its WAL; SQLite's truncation has no equivalent.
         self._submit(self._checkpoint, (), in_transaction=False)
 
     def prepare(self, body: Callable[[sqlite3.Connection, Unpack[A]], T], *args: Unpack[A]) -> T:
