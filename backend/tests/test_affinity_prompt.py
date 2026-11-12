@@ -20,7 +20,7 @@ import pytest
 from eidolon.config import Settings
 from tests.conftest import ClientFactory
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     FakeClock,
     FakeLLM,
     FakeServiceClients,
@@ -61,7 +61,7 @@ TIER_NAMES = ("冷淡", "疏远", "信任", "亲近", "亲密")
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """With the judge model, and affinity on in `.env`."""
-    return replace(settings, judge=FAKE_JUDGE, affinity_and_gifts=True)
+    return replace(settings, affinity_and_gifts=True)
 
 
 def about_now(llm: FakeLLM, turn: int = -1) -> str:
@@ -83,14 +83,14 @@ async def prompted(
     the chat model, with the prompts it got."""
     llm = FakeLLM(*[REPLY] * len(judgings))
     clients = FakeServiceClients()
-    clients.judge.judgings = list(judgings)
+    clients.user_judge.judgings = list(judgings)
     clock = FakeClock()
     client = make_client(llm, clients=clients, clock=clock, settings=settings)
     conversation = await start_conversation(client)
     if kept is not None:
         keep(settings.database_path, "producer", kept, clock.now)
     for i in range(len(judgings)):
-        await send_turn(client, conversation, f"第{i}句")
+        await send_turn(client, conversation, f"第{i}句", own_keys=JUDGED_KEYS)
     return llm, client
 
 
@@ -102,7 +102,7 @@ async def test_in_trust_and_wherever_affinity_is_off_the_prompt_is_as_it_was(
     off, _ = await prompted(
         make_client, [level(0)], kept=10, settings=replace(settings, affinity_and_gifts=False)
     )
-    no_judge, _ = await prompted(make_client, [level(0)], settings=replace(settings, judge=None))
+    no_judge, _ = await prompted(make_client, [level(0)], settings=replace(settings, ))
 
     # Each takes its turn in the same database, after the one before: but for when that was.
     told_on, told_off, told_no_judge = (
