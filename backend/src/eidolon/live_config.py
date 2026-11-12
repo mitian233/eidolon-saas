@@ -783,18 +783,10 @@ def _any_exempting(values: Values) -> bool:
 
 
 class _Affinity(_Item):
-    """Whether affinity and gifts are on (GLOSSARY.md「好感度」), as `.env` has it (on by
-    default); not tried. Only with the judge model, which `.env` alone sets up."""
+    """Platform affinity switch; user judge availability is decided per request."""
 
     name = AFFINITY
     fields = ("enabled",)
-    unavailable_reason = (
-        ".env 里没有配置判断模型，好感度要靠它判断，在启动时就关掉了；"
-        "要启用，请在 .env 里配置判断模型后重启"
-    )
-
-    def available(self) -> bool:
-        return self.c.settings.judge is not None
 
     def env(self) -> Values:
         return {"enabled": self.c.settings.affinity_and_gifts}
@@ -979,6 +971,8 @@ PROXY_LABELS: dict[ProxiedService, str] = {
     "own_tts": "自带的语音合成",
     "own_stt": "自带的语音识别",
     "own_image": "自带的生图",
+    "own_embedding": "自带的向量化",
+    "own_rerank": "自带的重排",
 }
 """What may go through the proxy, as the admin console names it."""
 
@@ -1265,10 +1259,8 @@ class LiveConfig:
 
     @property
     def affinity_on(self) -> bool:
-        """Whether affinity is on now: the deployment has the judge model, and the switch
-        is on."""
-        item = self._items[AFFINITY]
-        return item.available() and self.effective(AFFINITY)["enabled"]
+        """Whether the platform permits affinity state, independent of user credentials."""
+        return self.effective(AFFINITY)["enabled"]
 
     @property
     def reach_outs(self) -> ReachOutSettings:
@@ -1874,7 +1866,7 @@ class LiveConfig:
         turn = s.turn.urls if s.turn else []
         ice = [u for server in s.ice_servers for u in _urls(server["urls"])]
         embedding = (
-            f"{s.embedding.provider} · {s.embedding.model}" if s.embedding else None
+            f"{s.embedding.model}@{s.embedding.dimensions}" if s.embedding else None
         )
         values: dict[str, Any] = {
             "admins": "everyone" if s.everyone_admin
