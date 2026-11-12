@@ -107,7 +107,6 @@ def _serve() -> int:
     try:  # missing settings, an unusable DashScope key or Cloudflare token
         settings = Settings.from_env()
         settings = asyncio.run(_find_dashscope_region(settings))
-        asyncio.run(_check_judge(settings))
         backend = build(settings)
     except RuntimeError as e:
         print(e, file=sys.stderr)
@@ -147,14 +146,6 @@ async def _find_dashscope_region(settings: Settings) -> Settings:
         raise RuntimeError(f"阿里云百炼的 DASHSCOPE_API_KEY 用不了：{e}") from None
     return replace(settings, dashscope_region=region)
 
-
-async def _check_judge(settings: Settings) -> None:
-    """Tries Cloudflare's credentials, through the proxy or direct, as `.env` has it."""
-    from eidolon.judge import JUDGE_TIMEOUT, check_judge
-    from eidolon.proxy import open_client
-
-    async with open_client(settings.proxy.proxy_for("judge"), JUDGE_TIMEOUT) as client:
-        await check_judge(settings.judge, client)
 
 
 async def _check_chat_llm(settings: Settings) -> None:
