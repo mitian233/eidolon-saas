@@ -90,12 +90,11 @@ async def test_with_every_service_turns_retrieve_and_remember(
     assert [m.text for m in await backend.memories.entries(user_id)] == [CAT]
 
 
-@pytest.mark.parametrize("missing", ("embedder", "reranker"))
-async def test_without_the_embedder_or_reranker_retrieval_and_memory_are_off(
-    settings: Settings, characters: Characters, backends: list[Backend], missing: str
+async def test_without_the_embedder_retrieval_and_memory_are_off(
+    settings: Settings, characters: Characters, backends: list[Backend]
 ):
     services = Services()
-    given = {name: getattr(services, name) for name in ALL if name != missing}
+    given = {name: getattr(services, name) for name in ALL if name != "embedder"}
     backend = build_faked(
         settings, services.chat, background_llm=services.background,
         characters=characters, clock=lambda: NOW, **given,
@@ -111,7 +110,7 @@ async def test_without_the_embedder_or_reranker_retrieval_and_memory_are_off(
     assert services.background.prompts == []  # nothing was written down
 
 
-async def test_without_the_judge_retrieval_is_off_but_memory_still_writes(
+async def test_without_the_judge_recall_tool_and_memory_still_work(
     settings: Settings, characters: Characters, backends: list[Backend]
 ):
     services = Services()
@@ -126,7 +125,7 @@ async def test_without_the_judge_retrieval_is_off_but_memory_still_writes(
 
     assert events[-1]["type"] == "done"
     assert services.retrieval_judge.asked == []
-    assert RECALL_STORY_TOOL not in services.chat.tools[0]
+    assert RECALL_STORY_TOOL in services.chat.tools[0]
     assert [m.text for m in await backend.memories.entries(user_id)] == [CAT]
 
 
