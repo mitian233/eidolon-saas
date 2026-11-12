@@ -16,7 +16,7 @@ from eidolon.llm.listing import MAX_LIST_BYTES, list_models
 from eidolon.own_keys import ProviderLLMService
 from eidolon.throttle import PER_MINUTE
 from tests.conftest import ClientFactory, agree_to_terms, github_identity, sign_in_with
-from tests.fakes import DEPLOYER_KEY, FakeClock, FakeIdentityProvider, FakeLLM, FakeLLMService, FakeServiceClients
+from tests.fakes import FakeClock, FakeIdentityProvider, FakeLLM, FakeLLMService, FakeServiceClients
 
 MINE = "sk-my-own-key-1234"
 OWN = "/api/account/keys/llm/models"
@@ -201,7 +201,7 @@ async def admin(make_client: ClientFactory, github: FakeIdentityProvider, client
     return client
 
 
-async def test_an_admin_is_told_the_models_on_the_key_in_effect_at_its_own_address_only(
+async def test_admin_model_listing_is_retired_without_contacting_platform_services(
     make_client: ClientFactory, github: FakeIdentityProvider
 ):
     clients = FakeServiceClients()
@@ -214,17 +214,8 @@ async def test_an_admin_is_told_the_models_on_the_key_in_effect_at_its_own_addre
     memory = await client.post("/api/admin/config/memory_llm/models", json=at)
     judge = await client.post("/api/admin/config/judge/models", json=at)
 
-    assert kept.json() == {"models": ["model-a", "model-b"]}
-    assert elsewhere.status_code == 422
-    assert elsewhere.json()["detail"] == "获取模型失败：换了接口地址，要先填这家的 API key"
-    assert given.status_code == 200
-    assert memory.status_code == 200
-    assert judge.status_code == 404
-    assert [(s, url, key) for s, _, url, key in clients.listed] == [
-        ("chat_llm", "http://llm.invalid/v1/", DEPLOYER_KEY),
-        ("chat_llm", "https://other.example/v1", "sk-other-key"),
-        ("memory_llm", "http://llm.invalid/v1/", DEPLOYER_KEY),
-    ]
+    assert all(response.status_code == 404 for response in (kept, elsewhere, given, memory, judge))
+    assert clients.listed == []
 
 
 async def test_only_an_admin_may_ask_for_the_deployers(make_client: ClientFactory):
