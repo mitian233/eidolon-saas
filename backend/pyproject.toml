@@ -13,8 +13,10 @@ dependencies = [
     "numpy>=2.4.6",
     "pillow>=13.0.0",
     "pipecat-ai[fish,soniox,webrtc]>=1.12.0",
+    "psycopg[binary]>=3.3.8",
     "pyrage>=1.4.0",
     "python-socks[asyncio]>=3.1.1",
+    "sqlglot>=30.31.0",
     "tzdata>=2026.5",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -28,6 +30,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "pgserver>=0.1.4; sys_platform == 'linux' or sys_platform == 'darwin'",
     "pyopenjtalk-plus>=0.4.1.post9",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
