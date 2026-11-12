@@ -86,6 +86,7 @@ async def test_small_talk_retrieves_no_memories(make_client: ClientFactory):
 
     await turn(client, await start_conversation(client, "mano"), "我家的猫叫小白哦")
     await turn(client, await start_conversation(client, "kogane"), "早上好")
+    await client.get("/api/memories")  # wait for the second turn's background job too
 
     assert memories_section(context_of(llm.prompts[-1])) == ""
     assert reranker.calls == []
