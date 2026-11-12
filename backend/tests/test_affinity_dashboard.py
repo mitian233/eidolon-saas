@@ -20,11 +20,11 @@ from dataclasses import replace
 import httpx
 import pytest
 
-from eidolon.config import JevSettings, Settings, UsageLimits
+from eidolon.config import Settings, UsageLimits
 from eidolon.llm import LLMError
 from tests.conftest import Characters, ClientFactory
 from tests.fakes import (
-    FAKE_JUDGE,
+    JUDGED_KEYS,
     FakeClock,
     FakeIdentityProvider,
     FakeLLM,
@@ -50,18 +50,13 @@ def characters(characters: Characters) -> Characters:
 @pytest.fixture
 def settings(settings: Settings) -> Settings:
     """With an admin, the judge model, affinity on in `.env`, and no limits."""
-    return replace(
-        settings,
-        admins=frozenset({ADMIN}),
-        judge=FAKE_JUDGE,
-        affinity_and_gifts=True,
-        usage_limits=UsageLimits(),
-    )
+    return replace(settings, admins=frozenset({ADMIN}), affinity_and_gifts=True,
+    usage_limits=UsageLimits(),)
 
 
 async def talk(client: httpx.AsyncClient, conversation: str, times: int) -> None:
     for _ in range(times):
-        events = await send_turn(client, conversation, "今天怎么样")
+        events = await send_turn(client, conversation, "今天怎么样", own_keys=JUDGED_KEYS)
         assert events[-1]["type"] in ("done", "error")
 
 
@@ -70,7 +65,7 @@ async def test_the_section_sums_up_the_judged_turns_and_ranks_the_characters_by_
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [
+    clients.user_judge.judgings = [
         # Mano: 20 judged, 2 lowering (10%), 1 raising (5%), one that would have but tried to
         # dictate it; one judged but failed, one the judge failed on.
         *[level(1)] * 2, level(3, manipulation=True), level(4), *[level(2)] * 16,
@@ -128,7 +123,7 @@ async def test_the_conversations_she_ended_are_counted_whatever_for(
     # Those she ended as she cooled are counted in the test above.
     clients = FakeServiceClients()
     # Hurt turn after turn in one conversation, out of line twice in another.
-    clients.judge.judgings = [*[level(1)] * 6, OUT_OF_LINE, OUT_OF_LINE]
+    clients.user_judge.judgings = [*[level(1)] * 6, OUT_OF_LINE, OUT_OF_LINE]
     client = make_client(FakeLLM(*[REPLY] * 8), clients=clients, clock=FakeClock())
 
     async with admin_beside(client, github) as admin:
@@ -145,7 +140,7 @@ async def test_the_section_follows_the_dashboards_range(
 ):
     clock = FakeClock()
     clients = FakeServiceClients()
-    clients.judge.judgings = [level(4), level(0)]
+    clients.user_judge.judgings = [level(4), level(0)]
     client = make_client(FakeLLM(REPLY, REPLY), clients=clients, clock=clock)
     conversation = await start_conversation(client)
 
@@ -160,14 +155,14 @@ async def test_the_section_follows_the_dashboards_range(
     assert week["levels"] == [1, 0, 0, 0, 1]
 
 
-@pytest.mark.parametrize("judge", [FAKE_JUDGE, None])
+@pytest.mark.parametrize("judge_enabled", [True, False])
 async def test_with_affinity_off_there_is_no_section(
     make_client: ClientFactory,
     settings: Settings,
     github: FakeIdentityProvider,
-    judge: JevSettings | None,
+    judge_enabled: bool,
 ):
-    off = replace(settings, affinity_and_gifts=False, judge=judge)
+    off = replace(settings, affinity_and_gifts=False)
     client = make_client(FakeLLM(REPLY), clients=FakeServiceClients(), settings=off)
     conversation = await start_conversation(client)
 
@@ -201,43 +196,5 @@ def judging(out_of_line: float, manipulation: float) -> Judging:
     return Probable({4: 1.0})
 
 
-async def test_the_affinity_thresholds_are_set_restored_and_cleared_with_another_judge_model(
-    make_client: ClientFactory, settings: Settings, github: FakeIdentityProvider
-):
-    clients = FakeServiceClients()
-    # Neither by Jev's (0.7, 0.4) thresholds; both by those saved (0.6, 0.3); then neither
-    # again, back to Jev's; then out of line by Clef-flash's 0.6, the saved ones cleared.
-    clients.judge.judgings = [judging(0.65, 0.35)] * 4
-    client = make_client(FakeLLM(*[REPLY] * 4), clients=clients)
-    conversation = await start_conversation(client)
 
-    async with admin_beside(client, github) as admin:
-        await talk(client, conversation, 1)
-        saved = await admin.put(
-            JUDGE_THRESHOLDS, json=JEV | {"out_of_line": 0.6, "manipulation": 0.3}
-        )
-        assert saved.status_code == 200, saved.text
-        await talk(client, conversation, 1)
-        restored = await admin.delete(JUDGE_THRESHOLDS)
-        assert restored.status_code == 200, restored.text
-        await talk(client, conversation, 1)
-        resaved = await admin.put(JUDGE_THRESHOLDS, json=JEV | {"out_of_line": 0.9})
-        assert resaved.status_code == 200, resaved.text
-        changed = await admin.put(JUDGE, json={
-            "provider": "cloudflare", "api_key": "cf-token", "model": "clef-flash",
-            "account_id": "account-1", "emotion_timeout": 1.5,
-        })
-        assert changed.status_code == 200, changed.text
-        await talk(client, conversation, 1)
-        board = await dashboard(admin)
-
-    thresholds = saved.json()["judge_thresholds"]
-    assert thresholds["env"] == JEV
-    assert thresholds["effective"] == JEV | {"out_of_line": 0.6, "manipulation": 0.3}
-    assert restored.json()["judge_thresholds"]["status"] == "env"
-    cleared = changed.json()["judge_thresholds"]
-    assert cleared["status"] == "env" and cleared["effective"] == CLEF_FLASH
-    section = board["affinity"]
-    assert (section["out_of_line"], section["manipulation"]) == (2, 1)
-    assert section["levels"] == [0, 0, 0, 0, 4]
 
