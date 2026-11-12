@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Fragment, type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import { AdminPage } from "@/components/app/admin/AdminPage";
 import { MetadataList, MetadataListItem } from "@/components/app/admin/MetadataList";
@@ -8,9 +8,6 @@ import { Notice } from "@/components/app/admin/Notice";
 import { NumberInput } from "@/components/app/admin/NumberInput";
 import { StatusDot } from "@/components/app/StatusDot";
 import { FailureNotice } from "@/components/app/FailureNotice";
-import { LLMProviderPicker, type ModelLister } from "@/components/app/LLMProviderPicker";
-import { ModelChoiceField } from "@/components/app/ModelChoiceField";
-import { EffortField, ExtraBodyField, useEffortHint } from "@/components/app/ReasoningEffortFields";
 import { OpenFormProvider, useOpenForm } from "@/components/admin/OpenForm";
 import { AdminInvites } from "@/components/admin/AdminInvites";
 import { AdminSponsor } from "@/components/admin/AdminSponsor";
@@ -30,27 +27,22 @@ import {
   FieldLabel,
   FieldTitle,
 } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { copy } from "@/i18n";
 import {
   changeOf,
   CONFIG_TABS,
-  CUSTOM_MODEL,
   formOf,
   getAdminConfig,
   isAvailable,
   isConfigTab,
   ITEM_SPECS,
   lockedOn,
-  MAX_COUNT,
-  readOnlyValue,
   restoreItem,
   rows,
   saveItem,
@@ -62,15 +54,10 @@ import {
   type ConfigTab,
   type ConfigItem,
   type FieldRow,
-  type FieldSpec,
   type Form,
   type ItemName,
-  type ReadOnlyItem,
   UNLIMITED,
-  listItemModels,
 } from "@/lib/adminConfig";
-import type { FishAudioModel, LLMProtocol } from "@/lib/localOwnKeys";
-import { EFFORT_UNSET, effortLabel } from "@/lib/reasoningEffort";
 import { toFailure, type Failure } from "@/lib/failure";
 import { FailureIcon } from "@/theme/icons";
 
@@ -131,7 +118,6 @@ export function AdminConfig({ initialTab }: { initialTab: ConfigTab }) {
                 {name === "registration" && <AdminInvites />}
                 {name === "sponsor" && <AdminSponsor />}
                 {name === "prices" && <AdminPrices />}
-                {name === "read_only" && <ReadOnlyCard items={config.read_only} />}
               </TabsContent>
             ))}
           </Tabs>
@@ -246,22 +232,11 @@ function Values({ name, rows: fieldRows }: { name: ItemName; rows: FieldRow[] })
  * 额外请求参数是一行 JSON，服务、地域、语音合成的模型和注册方式用界面上的叫法，限额的 0 是不限，开关是打开或关闭。
  */
 function shown(name: ItemName, field: string, value: FieldRow["env"]): string {
-  if (ITEM_SPECS[name].form.some((spec) => spec.name === field && spec.kind === "effort")) {
-    return effortLabel(value === null ? EFFORT_UNSET : String(value));
-  }
-  if (field === "extra_body" && value !== null) return JSON.stringify(value);
-  if (value === null || value === "") return field === "max_tokens" ? t.defaultMaxTokens : t.none;
+  if (value === null || value === "") return t.none;
   if (typeof value === "boolean") return value ? t.switchOn : t.switchOff;
-  if (ITEM_SPECS[name].secrets.includes(field)) return t.last4(String(value));
-  if (field === "protocol") return t.protocols[value as LLMProtocol] ?? String(value);
-  if (field === "provider") return t.providers[String(value)] ?? String(value);
-  if (field === "region") return t.regions[String(value)] ?? String(value);
-  if (field === "api_format") return t.imageFormats[String(value)] ?? String(value);
-  if (name === "tts" && field === "model") return optionLabel(name, field, String(value));
   if (name === "registration") return optionLabel(name, field, String(value));
   if (name === "moments" && field === "map") return optionLabel(name, field, String(value));
   if (name === "limits" && value === 0) return t.unlimited;
-  if (field === "window_minutes") return t.minutes(String(value));
   return String(value);
 }
 
@@ -270,37 +245,11 @@ function fieldLabel(name: ItemName, field: string): string {
   return t.itemFields[name]?.[field] ?? t.fields[field] ?? field;
 }
 
-/** 表单里一个字段的说明：key 留空不改，其余按字段给出取值范围；代理的开关里，这个部署没配置的服务注明不起作用。 */
-function fieldHint(name: ItemName, spec: FieldSpec, keysEditable: boolean, item?: ConfigItem): string | undefined {
-  if (spec.kind === "secret") {
-    if (!keysEditable) return t.keysReadOnly;
-    if (name === "proxy") return t.formHints.proxy_password;
-    return name === "stt" ? t.formHints.stt_api_key : name === "judge" ? t.formHints.judge_api_key : t.apiKeyHint;
-  }
-  if (name === "proxy" || name === "service_status") {
-    if (item?.unconfigured?.some((service) => service === spec.name)) return t.formHints[`${name}_unconfigured`];
-    if (name === "service_status") return t.formHints[`service_status_${spec.name}`];
-    return t.formHints[`proxy_${spec.name}`];
-  }
-  if (spec.kind === "maxTokens") return t.maxTokensHint;
-  if (spec.kind === "probability") return t.formHints.probability;
-  if (name === "judge" && spec.name === "model") return t.formHints.judge_model;
-  if (name === "image" && spec.name === "base_url") return t.formHints.image_base_url;
-  return t.formHints[spec.name];
-}
 
 function optionLabel(name: ItemName, field: string, option: string): string {
   if (name === "registration") return t.registrations[option] ?? option;
   if (name === "moments" && field === "map") return t.mapSites[option] ?? option;
-  if (field === "protocol") return t.protocols[option as LLMProtocol] ?? option;
-  if (field === "api_format") return t.imageFormats[option] ?? option;
-  if (field === "region") return t.regions[option] ?? option;
-  if (field === "window_minutes") return t.minutes(option);
-  // 生图的模型：下拉里是官方模型的短名，最后一项是手填。
-  if (name === "image" && field === "model") return option === CUSTOM_MODEL ? t.customModel : (t.imageModels[option] ?? option);
-  // 语音合成的模型，和设置页一个叫法。
-  if (field === "model") return copy.settings.ownKeys.ttsModels[option as FishAudioModel] ?? option;
-  return t.providers[option] ?? option;
+  return option;
 }
 
 /**
@@ -334,26 +283,12 @@ function ItemCard({
     );
   }
   return (
-    <AvailableItem name={name} item={item} keysEditable={config.keys_editable} onChange={onChange}>
+    <AvailableItem name={name} item={item} onChange={onChange}>
       {children}
     </AvailableItem>
   );
 }
 
-/**
- * 向服务商查模型槽能用的模型（ADR-0027）：没填 key 时用正在生效的那把，只在它生效的地址上用。
- * 还没填地址时是 null；不是模型槽是 undefined。
- */
-function modelLister(name: ItemName, form: Form): ModelLister | null | undefined {
-  if (name !== "chat_llm" && name !== "memory_llm") return undefined;
-  const base_url = form.base_url?.trim() ?? "";
-  const api_key = form.api_key?.trim() ?? "";
-  if (!base_url) return null;
-  return {
-    key: `${name} ${form.protocol} ${base_url} ${api_key}`,
-    ask: () => listItemModels(name, { protocol: form.protocol, base_url, ...(api_key && { api_key }) }),
-  };
-}
 
 /**
  * 一项能改的配置：状态 Badge、各个值，卡里展开的修改表单（全页同一时间只开一张），CardFooter 里的
@@ -363,13 +298,11 @@ function modelLister(name: ItemName, form: Form): ModelLister | null | undefined
 function AvailableItem({
   name,
   item,
-  keysEditable,
   onChange,
   children,
 }: {
   name: ItemName;
   item: ConfigItem;
-  keysEditable: boolean;
   onChange: (config: Config) => void;
   children?: ReactNode;
 }) {
@@ -383,19 +316,17 @@ function AvailableItem({
   const [busy, setBusy] = useState<"save" | "restore" | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const result = changeOf(spec, form, keysEditable);
+  const result = changeOf(spec, form);
   // 不先报错：点过一次保存才标出不对的项（见 useSubmitCheck）。
   const check = useSubmitCheck<HTMLFormElement>();
   const problemOf = (field: string) =>
     check.shown && "problems" in result ? (result.problems.find((p) => p.field === field) ?? null) : null;
   const fieldRows = rows(item, spec);
   const overridden = fieldRows.some((row) => row.overridden);
-  const saveKind = spec.tried ? "tried" : "plain";
+  const saveKind = "plain";
   const display = statusDisplay(item);
   const canRestore = display.canRestore;
   const formRef = check.ref;
-  // 档位提示只在改模型时查，按表单里正在填的地址和模型名；不是模型的项没有地址，不查。
-  const catalogHint = useEffortHint(form.protocol ?? "", editing ? (form.base_url ?? "") : "", form.model ?? "");
 
   // 打开表单时焦点移到第一个能填的框（「修改」随表单打开收起，焦点不移就落回页首）。
   const editRef = useRef<HTMLButtonElement>(null);
@@ -475,8 +406,6 @@ function AvailableItem({
         )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {item.follows_chat && <p className="text-muted-foreground">{t.followsChat}</p>}
-        {item.model && <p className="text-muted-foreground">{t.forModel(item.model)}</p>}
         {display.failure && (
           <Alert>
             <FailureIcon />
@@ -508,7 +437,7 @@ function AvailableItem({
                   );
                 }
                 if (field.kind === "switch") {
-                  const hint = fieldHint(name, field, keysEditable, item);
+                  const hint = t.formHints[field.name];
                   const locked = lockedOn(form, field.name);
                   return (
                     <Field key={field.name} orientation="horizontal" data-disabled={locked ? true : undefined}>
@@ -526,51 +455,8 @@ function AvailableItem({
                     </Field>
                   );
                 }
-                if (field.kind === "effort") {
-                  return (
-                    <EffortField
-                      key={field.name}
-                      id={fieldId}
-                      label={label}
-                      hint={fieldHint(name, field, keysEditable)}
-                      protocol={form.protocol}
-                      choice={form[field.name]}
-                      onChoose={set(field.name)}
-                      problem={problem ? t.problems[problem.reason](label) : undefined}
-                      catalogHint={catalogHint}
-                      showCatalogNote={field.name === "reasoning_effort"}
-                    />
-                  );
-                }
-                if (field.kind === "extraBody") {
-                  return (
-                    <ExtraBodyField
-                      key={field.name}
-                      id={fieldId}
-                      label={label}
-                      hint={fieldHint(name, field, keysEditable)}
-                      text={form[field.name]}
-                      onChange={set(field.name)}
-                      problem={problem ? t.problems[problem.reason](label) : undefined}
-                    />
-                  );
-                }
-                if (field.kind === "modelChoice") {
-                  return (
-                    <ModelChoiceField
-                      key={field.name}
-                      id={fieldId}
-                      label={label}
-                      options={(field.options ?? []).map((o) => ({ value: o, label: optionLabel(name, field.name, o) }))}
-                      customLabel={optionLabel(name, field.name, CUSTOM_MODEL)}
-                      value={form[field.name]}
-                      onChange={set(field.name)}
-                      error={problem ? t.problems[problem.reason](label) : null}
-                    />
-                  );
-                }
-                if (field.kind === "count" || field.kind === "positive") {
-                  const hint = fieldHint(name, field, keysEditable);
+                if (field.kind === "positive") {
+                  const hint = t.formHints[field.name];
                   return (
                     <Field key={field.name} data-invalid={problem ? true : undefined}>
                       {/* NumberInput 自己带读屏名，没有能指的 id：标题用 FieldTitle，和限额一样。 */}
@@ -580,7 +466,6 @@ function AvailableItem({
                         value={form[field.name] === "" ? null : Number(form[field.name])}
                         onChange={(count) => set(field.name)(count === null ? "" : String(count))}
                         min={1}
-                        max={field.kind === "count" ? MAX_COUNT : undefined}
                         isIntegerOnly
                         isInvalid={problem !== null}
                       />
@@ -592,7 +477,7 @@ function AvailableItem({
                 /** 一项下拉选择。 */
                 const selectField = () => {
                   const options = (field.options ?? []).map((o) => ({ value: o, label: optionLabel(name, field.name, o) }));
-                  const hint = fieldHint(name, field, keysEditable);
+                  const hint = t.formHints[field.name];
                   return (
                     <Field key={field.name}>
                       <FieldLabel htmlFor={fieldId}>{label}</FieldLabel>
@@ -616,45 +501,7 @@ function AvailableItem({
                     </Field>
                   );
                 };
-                // 模型的几项上面先放服务商和模型的下拉，选了填进协议、地址和模型名（ADR-0027）。
-                if (field.name === "protocol" && "base_url" in form && "model" in form) {
-                  return (
-                    <Fragment key={field.name}>
-                      <LLMProviderPicker
-                        id={fieldId}
-                        baseUrl={form.base_url}
-                        model={form.model}
-                        onPick={(pick) => setForm((f) => ({ ...f, ...pick }))}
-                        lister={modelLister(name, form)}
-                      />
-                      {selectField()}
-                    </Fragment>
-                  );
-                }
-                if (field.kind === "select" || field.kind === "minutes") return selectField();
-                const secret = field.kind === "secret";
-                const hint = fieldHint(name, field, keysEditable);
-                return (
-                  <Field key={field.name} data-invalid={problem ? true : undefined} data-disabled={secret && !keysEditable ? true : undefined}>
-                    <FieldLabel htmlFor={fieldId}>
-                      {label}
-                      {(field.kind === "optionalText" || field.kind === "clearableText") && (
-                        <span className="font-normal text-muted-foreground">{copy.common.optional}</span>
-                      )}
-                    </FieldLabel>
-                    <Input
-                      id={fieldId}
-                      type={secret ? "password" : "text"}
-                      value={form[field.name]}
-                      onChange={(event) => set(field.name)(event.target.value)}
-                      disabled={secret && !keysEditable}
-                      aria-invalid={problem ? true : undefined}
-                      autoComplete="off"
-                    />
-                    {hint && <FieldDescription>{hint}</FieldDescription>}
-                    {problem && <FieldError>{t.problems[problem.reason](label)}</FieldError>}
-                  </Field>
-                );
+                return selectField();
               })}
             </FieldGroup>
             <div className="flex flex-wrap gap-2">
@@ -746,72 +593,3 @@ function LimitInput({
   );
 }
 
-/** 「EIDOLON_SECRET_KEY」这类名字窄列里放不下时只在下划线后折行，不从词中间断开。 */
-function BreakAtUnderscores({ text }: { text: string }) {
-  const parts = text.split("_");
-  return (
-    <>
-      {parts.map((part, i) => (
-        <Fragment key={i}>
-          {part}
-          {i < parts.length - 1 && (
-            <>
-              _<wbr />
-            </>
-          )}
-        </Fragment>
-      ))}
-    </>
-  );
-}
-
-/** 只能查看的项：当前的值（密钥只说设没设）和为什么不能在后台改。宽屏（≥ 1024px）是表，更窄时换成行。 */
-function ReadOnlyCard({ items }: { items: ReadOnlyItem[] }) {
-  const wide = useMediaQuery("(min-width: 1024px)", true);
-  const value = (row: ReadOnlyItem) =>
-    row.name === "admins" && row.value === "everyone"
-      ? t.readOnly.everyone
-      : readOnlyValue(row.value, { ...t.readOnly, none: t.none });
-  return (
-    <Card>
-      <CardHeader>
-        <ItemTitle title={t.readOnly.title} />
-        <CardDescription>{t.readOnly.hint}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        {wide ? (
-          <Table className="table-fixed">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-1/6">{t.readOnly.columns.name}</TableHead>
-                <TableHead className="w-1/3">{t.readOnly.columns.value}</TableHead>
-                <TableHead>{t.readOnly.columns.why}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((row) => (
-                <TableRow key={row.name}>
-                  <TableCell className="align-top whitespace-normal">
-                    <BreakAtUnderscores text={t.readOnly.names[row.name] ?? row.name} />
-                  </TableCell>
-                  <TableCell className="align-top whitespace-normal break-all">{value(row)}</TableCell>
-                  <TableCell className="align-top whitespace-normal text-muted-foreground">{row.why}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <ul className="flex flex-col divide-y">
-            {items.map((row) => (
-              <li key={row.name} className="flex flex-col gap-0.5 py-2.5 first:pt-0 last:pb-0">
-                <span className="font-medium">{t.readOnly.names[row.name] ?? row.name}</span>
-                <span className="break-all">{value(row)}</span>
-                <span className="text-xs text-muted-foreground">{row.why}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
