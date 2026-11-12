@@ -155,12 +155,10 @@ async def test_the_section_follows_the_dashboards_range(
     assert week["levels"] == [1, 0, 0, 0, 1]
 
 
-@pytest.mark.parametrize("judge_enabled", [True, False])
 async def test_with_affinity_off_there_is_no_section(
     make_client: ClientFactory,
     settings: Settings,
     github: FakeIdentityProvider,
-    judge_enabled: bool,
 ):
     off = replace(settings, affinity_and_gifts=False)
     client = make_client(FakeLLM(REPLY), clients=FakeServiceClients(), settings=off)
