@@ -28,6 +28,8 @@ from sqlglot import exp, parse_one
 USER_DATA = [
     ("memory_vectors", "user_id = ?"),
     ("memories", "user_id = ?"),
+    ("jobs", "turn_id IN (SELECT id FROM messages WHERE conversation_id IN"
+     " (SELECT id FROM conversations WHERE user_id = ?))"),
     ("photos", "conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)"),
     ("messages", "conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)"),
     ("conversation_events",
@@ -74,6 +76,7 @@ USER_DATA = [
 what refers to a row before the row."""
 
 CONVERSATION_DATA = [
+    ("jobs", "turn_id IN (SELECT id FROM messages WHERE conversation_id = ?)"),
     ("photos", "conversation_id = ?"),
     ("messages", "conversation_id = ?"),
     ("conversation_events", "conversation_id = ?"),
