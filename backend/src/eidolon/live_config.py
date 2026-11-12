@@ -524,7 +524,7 @@ class _Rerank(_Item):
     name = RERANK
     fields = ("references", "memories")
     stored = (FOR_MODEL,)
-    unavailable_reason = ".env 里没有配置重排（SILICONFLOW_API_KEY），检索和记忆在启动时就关掉了"
+    unavailable_reason = ".env 里没有配置重排（RERANK_BASE_URL、RERANK_MODEL、RERANK_API_KEY），检索和记忆在启动时就关掉了"
 
     def available(self) -> bool:
         return self.c.settings.rerank is not None
@@ -1017,9 +1017,6 @@ class LiveConfig:
             Swappable(clients.memory_llm(memory), memory) if memory is not None else None
         )
 
-    @property
-    def keys_editable(self) -> bool:
-        return self._cipher is not None
 
     @property
     def chat_model(self) -> ChatModelSettings | None:
@@ -1589,28 +1586,6 @@ class LiveConfig:
         self._overrides.pop(name, None)
         self._failures.pop(name, None)
 
-    def _read_only(self) -> list[dict[str, Any]]:
-        """What is only shown, with why: never a key, only whether it is set; the admins,
-        `everyone` while everyone is one (`Settings.everyone_admin`)."""
-        s = self.settings
-        turn = s.turn.urls if s.turn else []
-        ice = [u for server in s.ice_servers for u in _urls(server["urls"])]
-        embedding = (
-            f"{s.embedding.model}@{s.embedding.dimensions}" if s.embedding else None
-        )
-        values: dict[str, Any] = {
-            "admins": "everyone" if s.everyone_admin
-            else sorted(f"{p}:{subject}" for p, subject in s.admins),
-            "secret_key": s.secret_key is not None,
-            "oauth": [name for name, o in (("github", s.github), ("google", s.google)) if o],
-            "domain": s.domain,
-            "webrtc": {"ice_servers": ice, "turn": turn},
-            "backup": _backup_shown(),
-            "paths": {"database": str(s.database_path)}
-            | ({"characters": str(s.characters_path)} if s.characters_path is not None else {}),
-            "embedding": embedding,
-        }
-        return [{"name": k, "value": values[k], "why": why} for k, why in READ_ONLY.items()]
 
 
 
