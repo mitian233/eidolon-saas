@@ -47,6 +47,7 @@ from tests.fakes import (
 )
 from tests.test_embedding import Answer, scripted
 from tests.test_retrieval_services import ranked
+from tests.fakes import RETRIEVAL_KEYS
 from tests.test_service_status import backend_of
 from tests.test_delete_account import rows_mentioning, user_id
 from tests.conftest import character_id
@@ -156,19 +157,19 @@ async def test_a_failing_judge_shows_in_health_though_the_turn_goes_on(
     admin = await admin_client(make_client, github, clock)
     conversation_id = await start_conversation(client)
 
-    await send_turn(client, conversation_id, SAID)
+    await send_turn(client, conversation_id, SAID, own_keys=RETRIEVAL_KEYS)
     assert [m["text"] for m in (await client.get("/api/memories")).json()] == [CAT]
-    events = await send_turn(client, conversation_id, "你还记得我的猫吗")
+    events = await send_turn(client, conversation_id, "你还记得我的猫吗", own_keys=RETRIEVAL_KEYS)
     board = await dashboard(admin)
 
     assert events[-1]["type"] == "done"
     assert board["turns"]["by_result"]["success"] == 2
-    judge = health(board, "judge")
+    judge = health(board, "judge", own_key=True)
     assert judge is not None and (judge["calls"], judge["errors"]) == (2, 2)
     # Retrieving anyway, the turns looked up references and memories, the second finding
     # and reranking the one the first wrote down with the background model, embedding it.
     for service in ["embedding", "rerank", "memory_llm", "chat_llm"]:
-        row = health(board, service)
+        row = health(board, service, own_key=True)
         assert row is not None and row["calls"] >= 1 and row["errors"] == 0, service
     assert CAT not in str(board)
 
@@ -191,13 +192,13 @@ async def test_a_request_made_again_counts_as_a_call_of_its_own(
     admin = await admin_client(make_client, github, clock)
     conversation_id = await start_conversation(client)
 
-    await send_turn(client, conversation_id, SAID)
-    events = await send_turn(client, conversation_id, "你还记得我的猫吗")
+    await send_turn(client, conversation_id, SAID, own_keys=RETRIEVAL_KEYS)
+    events = await send_turn(client, conversation_id, "你还记得我的猫吗", own_keys=RETRIEVAL_KEYS)
     board = await dashboard(admin)
 
     assert events[-1]["type"] == "done"
     assert CAT in context_of(llm.prompts[-1])  # found once asked again
-    rerank = health(board, "rerank")
+    rerank = health(board, "rerank", own_key=True)
     assert rerank is not None
     assert (rerank["calls"], rerank["errors"], rerank["errors_by_kind"]) == (
         2, 1, {"server_error": 1}
@@ -485,8 +486,7 @@ async def test_the_dashboard_shows_an_llm_at_every_effort_on_one_row_with_its_fi
     assert chat["first_token_ms"]["p50"] is not None
     assert chat["first_token_ms"]["p95"] is not None
     judge = health(board, "judge")
-    assert judge is not None and judge["calls"] == 1
-    assert "first_token_ms" not in judge
+    assert judge is None  # No user judge was enabled; platform judgement is retired.
 
 
 async def test_a_database_from_before_first_words_were_timed_takes_them_now(
@@ -561,7 +561,7 @@ async def test_the_dashboard_shows_each_llms_cache_hit_rate(
     assert chat["cache_hit_rate"] == pytest.approx(0.3)
     assert own["cache_hit_rate"] == pytest.approx(0.25)
     judge = health(board, "judge")
-    assert judge is not None and "cache_hit_rate" not in judge
+    assert judge is None
 
 
 async def test_an_llm_that_said_nothing_of_its_input_has_no_cache_hit_rate(
