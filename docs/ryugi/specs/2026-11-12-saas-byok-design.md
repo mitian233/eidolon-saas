@@ -1,6 +1,6 @@
 # Eidolon-SaaS（工作名）公益 BYOK 版改造设计
 
-日期：2026-11-12　状态：已确认；M0 实现中（第二轮，含实现者检查修订）
+日期：2026-11-12　状态：已确认；M0 已完成（提交 `9df63455`），M1 已完成（提交 `2a4362e3`，本地 `saas/main`，均未开 PR），M2 待实现
 代码位置：fork `mitian233/eidolon-saas`，本地 worktree `/home/leonid/myproj/eidolon-saas`，分支 `saas/main`（起点 `5875cdff`，与上游 main 一致）。
 
 ## 1. 意图与缘由
@@ -42,7 +42,7 @@
 1. **AGPL-3.0-or-later**：修改后通过网络提供服务必须向用户公开源码；`LICENSE`、`LICENSING.md` 原样保留（含 Spine Runtimes 与 VA-11 HALL-A 的豁免声明文字，虽然酒吧不进本版）。
 2. **素材三规矩**：不诱导（不提供获取渠道）；通知-删除（举报入口 + 后台能删能封）；外链优先（平台只存 URL，不托管素材文件）。
 3. **BYOK 范围**：上游自带密钥覆盖 `llm/tts/stt/image`（`config.py:43`，ADR-0017，key 浏览器持有、回合期间内存持有）。本设计扩展到 `embedding/rerank`；判断模型走用户自带 LLM 的小请求（见 D14）；平台不再有任何后台模型。
-4. **key 不落库**：不做服务端保存用户 key；浏览器持有 + 回合/通话期间内存持有，维持上游安全姿态（ADR-0017，`own_keys.py:9-12`）。
+4. **key 不落库**：不做服务端保存用户 key；浏览器持有 + 回合/通话内存持有，维持上游安全姿态（ADR-0017，`own_keys.py:9-12`）。向量化与重排的端点、模型名与 key 同属用户自带，凭据与端点都不落库。
 5. **运行形态**：容器化部署，不重写 serverless。架构三步：SQLite → Postgres；后台副作用沿用上游「回合后进程内任务」模式（见 D7）；通话可拆独立入口（见 D8）。
 6. **上游跟进**：分支大改后不再 merge 上游 main；引擎级修复按需 cherry-pick。
 
@@ -51,8 +51,7 @@
 | # | 决策 | 理由 |
 |---|---|---|
 | D1 | 公益免费先行，计费只留数据不建系统 | 先试免费路线能不能走通 |
-| D2 | 平台零 key，BYOK 扩到 embedding/rerank | 成本和责任全在用户侧；硅基流动一把 key 同时覆盖向量化与重排。上游 `engine.py:49`「Retrieval is always the deployer's」这一行随之改写 |
-| D3 | 没配判断模型时：照常聊天；资料召回只靠 `recall_story` 工具兜底（模型自己发起查询），不再有每回合的主动召回 | 保留上游的兜底机制，比「完全无召回」可用 |
+| D2 | 平台零 key，BYOK 扩到 embedding/rerank | 成本和责任全在用户侧；用户自带的向量与重排端点即平台之外的凭据（D16）。上游 `engine.py:49`「Retrieval is always the deployer's」这一行随之改写 |
 | D4 | 记忆提炼、对话起标题沿用上游现状：回合结束后在**本进程内**、用该回合所用 key（用户自带 LLM 即用户的 key）继续做（`memory.py:33`、`own_keys.py:11`） | 这就是上游行为，SaaS 零改动即符合 BYOK |
 | D5 | key 只在浏览器 + 回合/通话内存，不做服务端保存 | 维持 ADR-0017；公益目标用户（自带 key 群体）接受这个 UX |
 | D6 | SQLite → Postgres：`store.py` 的存储层外层已全是 `async def`，SQLite 藏在 `Database` 包装层里线程执行；迁移 = 换 `Database` 内核（asyncpg，或沿用线程卸载 + psycopg），`Store` 接口与全部调用方不动 | 实现者检查确认的最低改动路径 |
@@ -65,6 +64,7 @@
 | D13 | **角色私有**：v1 角色仅创建者自己可见，无分享、无发现。记忆归属用户，跨该用户自己的角色共享（沿用上游跨角色「听某某说」的转述语义，限定在同一用户的名下） | 保守起步；分享/广场牵扯音色归属（Fish Audio 音色绑账号）与内容审核，是独立功能 |
 | D14 | 判断模型 = 用户自带 LLM 发的小请求（同一把 key，低推理档），设置里可整体关闭。关闭或未配时按上游语义：好感度/礼物停用（上游本就要求判断模型，`configuration.md:368`）、照片停用、通话表情走默认值、召回退到 D3 | 上游判断模型本就是「一次请求答三个是非题」的轻量用法；用用户的模型加一次小请求是最自然的等价物 |
 | D15 | M0 必须包含「清除仓库 283 内容」提交：删除 `characters/`（人设、facts、头像、world.json）、`frontend/public/bar/` 图、酒吧代码页、corpus/mirror/stand/天气/greetings 的代码路径；`LICENSE` 与 `LICENSING.md` 保留 | 分支从上游 main 切出，283 内容全在工作树里；不清除则反目标第一条是空话 |
+| D16 | **向量化与重排走用户指定的端点，不绑定提供方**：embedding 用 OpenAI 兼容的 `POST {base_url}/embeddings`，用户填 base_url、模型名、维度与自己的 key；`EMBEDDING_PROVIDER` 枚举与 Gemini 原生分支退场。OpenRouter 可用（`https://openrouter.ai/api/v1` + `/embeddings`，2026-11-12 实测列出 40 个向量模型，含 qwen3-embedding、gemini-embedding-2、text-embedding-3、bge-m3、若干免费模型），硅基流动、本机 TEI 等任何 OpenAI 兼容端点同样可用。**rerank 没有通用格式**：OpenRouter 不提供重排接口（`/api/v1/rerank*` 均 404），所以重排保留「一种格式」的实现，用户填 base_url + 模型名 + key，格式按 SiliconFlow 的 `/rerank`（`model`/`query`/`documents`/`top_n`）为准；填不出可用端点时重排视为未配置，召回退到「按余弦相似度取前几条」 | 用户自带 key 必须能连自己常用的端点；提供方枚举是部署者概念，与「平台零 key」冲突。OpenRouter 有向量接口，方案里原先「OpenRouter 不提供 embedding」的判断不成立（2026-11-12 复核）；但重排确实无通用接口，不能假装它有 |
 
 ## 5. 里程碑
 
@@ -88,10 +88,10 @@
 |---|---|
 | SQLite → Postgres：换 `Database` 内核，`Store` 接口不动（D6） | `database.py`、`store.py` 调用方 |
 | jobs 表：记录回合后的后台动作（记忆提炼、起标题），进程内执行、失败可见、可重试；不建独立 worker（D7） | `memory.py`、`titles.py`、`store.py` |
-| BYOK 扩展：`Service` 与 `OWN_KEYS_PROXIED`（`config.py:43,68`）增加 embedding/rerank；向量化与重排调用改走用户 key（回合请求带来、导入请求带来）；判断模型改为用户 LLM 小请求，设置可关（D14） | `config.py`、`embedding.py`、`rerank.py`、`judge.py`、`assembly.py`、代理路由 |
+| BYOK 扩展：`Service` 与 `OWN_KEYS_PROXIED`（`config.py:43,68`）增加 embedding/rerank；向量化与重排调用改走用户 key（回合请求带来、导入请求带来），端点、模型名、维度由用户指定（D16）；判断模型改为用户 LLM 小请求，设置可关（D14） | `config.py`、`embedding.py`、`rerank.py`、`judge.py`、`assembly.py`、代理路由 |
 | 后台配置页改为平台零 key 形态：平台凭据区块退场，限额与玩法开关保留 | `live_config.py`、admin 前端 |
 
-完成判据：两个 api 实例容器共用一个 Postgres 并发服务文字回合无串数据；一个只带 LLM key + SiliconFlow key 的用户能获得带记忆（自带 key 提炼）、带 `recall_story` 工具召回的对话。
+完成判据：两个 api 实例容器共用一个 Postgres 并发服务文字回合无串数据；一个只带 LLM key 与自有向量端点（OpenRouter 或其他 OpenAI 兼容端点）的用户能获得带记忆（自带 key 提炼）、带 `recall_story` 工具召回的对话；换向量模型或维度后重嵌入不与旧向量混用。
 
 ### M2 角色编辑与资料导入
 
