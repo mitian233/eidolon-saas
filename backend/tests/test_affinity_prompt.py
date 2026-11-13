@@ -121,11 +121,13 @@ async def test_in_trust_and_wherever_affinity_is_off_the_prompt_is_as_it_was(
 async def test_without_judging_existing_affinity_is_kept_and_no_new_judgment_runs(
     make_client: ClientFactory, settings: Settings
 ):
-    await prompted(make_client, [level(0)], kept=30, settings=settings, judge_enabled=False)
+    """She keeps what she feels, but nothing is judged anew, and she does not speak as
+    any tier: with no judge model there is no affinity to speak of (`spec D14`)."""
+    llm, _ = await prompted(make_client, [level(0)], kept=30, settings=settings, judge_enabled=False)
 
     assert judge_calls(settings.database_path) == 0
     assert value(settings.database_path) == 30
-
+    assert "你现在对对方态度很冷" not in about_now(llm)
 
 async def test_each_tier_but_trust_has_her_speak_as_its_own_in_her_own_way(
     make_client: ClientFactory, settings: Settings
