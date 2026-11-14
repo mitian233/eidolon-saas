@@ -1,8 +1,18 @@
+import gzip
+
 import httpx
 import pytest
 
 from eidolon import avatar
 from eidolon.own_keys import NotPublic
+
+
+class RawStream(httpx.AsyncByteStream):
+    def __init__(self, content: bytes):
+        self.content = content
+
+    async def __aiter__(self):
+        yield self.content
 
 
 @pytest.mark.asyncio
@@ -25,7 +35,7 @@ async def test_rejects_non_public_address(monkeypatch, address):
 ])
 async def test_rejects_unsafe_responses(monkeypatch, status, content_type, body):
     monkeypatch.setattr(avatar, "_transport", lambda: httpx.MockTransport(
-        lambda request: httpx.Response(status, headers={"content-type": content_type, "location": "http://127.0.0.1/"}, content=body)
+        lambda request: httpx.Response(status, headers={"content-type": content_type, "location": "http://127.0.0.1/"}, stream=RawStream(body))
     ))
     with pytest.raises(avatar.InvalidAvatar):
         await avatar.fetch_avatar("https://example.com/avatar")
@@ -35,8 +45,20 @@ async def test_rejects_unsafe_responses(monkeypatch, status, content_type, body)
 async def test_fetches_image_without_sending_cookies(monkeypatch):
     def handle(request):
         assert "cookie" not in request.headers
-        return httpx.Response(200, headers={"content-type": "image/png", "set-cookie": "secret=1"}, content=b"image")
+        return httpx.Response(200, headers={"content-type": "image/png", "set-cookie": "secret=1"}, stream=RawStream(b"image"))
     monkeypatch.setattr(avatar, "_transport", lambda: httpx.MockTransport(handle))
     assert await avatar.fetch_avatar("https://example.com/image") == (b"image", "image/png")
     with pytest.raises(avatar.InvalidAvatar):
         await avatar.fetch_avatar("file:///etc/passwd")
+
+
+@pytest.mark.asyncio
+async def test_rejects_compressed_avatar(monkeypatch):
+    monkeypatch.setattr(avatar, "_transport", lambda: httpx.MockTransport(
+        lambda request: httpx.Response(
+            200, headers={"content-type": "image/png", "content-encoding": "gzip"},
+            stream=RawStream(gzip.compress(b"image")),
+        )
+    ))
+    with pytest.raises(avatar.InvalidAvatar):
+        await avatar.fetch_avatar("https://example.com/avatar")

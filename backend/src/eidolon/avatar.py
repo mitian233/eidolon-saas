@@ -50,8 +50,11 @@ async def fetch_avatar(url: str) -> tuple[bytes, str]:
                     # SVG can contain active content; reject it rather than serve it from our origin.
                     if response.status_code != 200 or not content_type.startswith("image/") or content_type == "image/svg+xml":
                         raise InvalidAvatar()
+                    encoding = response.headers.get("content-encoding", "").strip().lower()
+                    if encoding not in ("", "identity"):
+                        raise InvalidAvatar()
                     content = bytearray()
-                    async for chunk in response.aiter_bytes():
+                    async for chunk in response.aiter_raw():
                         content.extend(chunk)
                         if len(content) > MAX_AVATAR_BYTES:
                             raise InvalidAvatar()
