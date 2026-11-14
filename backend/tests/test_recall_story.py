@@ -1,17 +1,14 @@
-"""The recall-story tool, driven through the text turn API: the model calls it with a
-general question, the engine looks the episode up through the story catalog, and the
-model answers from what comes back."""
+"""The recall-story tool and judge recall use character document passages."""
 
 import pytest
 
-from eidolon.config import Settings
 from eidolon import engine
 from eidolon.engine import MAX_TOOL_ROUNDS
 from eidolon.llm import ChatMessage, Reasoning, ToolCall
 from eidolon.retrieval import RECALL_STORY_TOOL
 from tests.conftest import ClientFactory
 from tests.fakes import FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, context_of, system_of
-from tests.stories import corpus_in, sample_episodes
+from tests.document_sources import FakeDocuments
 from tests.test_text_turn import send_turn, start_conversation
 from tests.fakes import RETRIEVAL_KEYS
 
@@ -24,12 +21,12 @@ def recall(query: str, id: str = "call_1") -> ToolCall:
 
 
 @pytest.fixture
-async def embedder(settings: Settings) -> FakeEmbedder:
-    """The embedder the sample stories were seeded with."""
-    embedder = FakeEmbedder()
-    async with corpus_in(settings.database_path, embedder) as corpus:
-        await corpus.save(sample_episodes({"真乃": "mano", "恋鐘": "kogane"}))
-    return embedder
+async def embedder(monkeypatch: pytest.MonkeyPatch) -> FakeEmbedder:
+    import eidolon.assembly
+
+    documents = FakeDocuments()
+    monkeypatch.setattr(eidolon.assembly, "EmptyDocumentSource", lambda: documents)
+    return FakeEmbedder()
 
 
 def tool_results(prompt: list[ChatMessage]) -> list[str]:
@@ -59,9 +56,8 @@ async def test_the_reply_is_based_on_the_recalled_episode_and_its_place_in_the_c
     assert (call.role, call.tool_calls) == ("assistant", (recall("公園で鳩と歌った日"),))
     assert (result.role, result.tool_call_id) == ("tool", "call_1")
     # Where the episode sits in her catalog, the other episodes there, and what happened.
-    assert "培育剧情 / W.I.N.G.編 /「公園の歌声」" in result.content
-    assert "「決勝後コミュ」" in result.content
-    assert f"真乃：{PARK_LINE}" in result.content
+    assert PARK_LINE in result.content
+    assert "「決勝後コミュ」" not in result.content
     assert "歌が好きなのか？" not in result.content  # the producer's choices never were
 
     assert events[-1]["type"] == "done"
@@ -240,13 +236,12 @@ async def test_when_jev_sees_a_recall_question_the_episode_is_recalled_before_th
     assert [tools[0] for tools in llm.tools] == [RECALL_STORY_TOOL]
     assert llm.forbidden == [True]
     system = system_of(prompt)
-    assert "# 回顾剧情：那次在公园唱歌是怎么回事？" in system
-    assert "培育剧情 / W.I.N.G.編 /「公園の歌声」" in system
-    assert f"真乃：{PARK_LINE}" in system
+    assert "# 回顾资料：那次在公园唱歌是怎么回事？" in system
+    assert PARK_LINE in system
     # Recalling takes the place of the turn's general retrieval.
-    assert "# 回忆与资料" not in system
+    assert "# 回忆与资料" in system
     assert [query for query, _ in reranker.calls] == ["那次在公园唱歌是怎么回事？"]
-    assert "（W.I.N.G.編中你出场的剧情依次是：" in system and "「決勝後コミュ」" in system
+    assert "「決勝後コミュ」" not in system
     # Embedded once, as the turn began, for recalling and writing down alike.
     assert embedder.queries == ["那次在公园唱歌是怎么回事？"]
     # The browser is told she is recalling, as if she had called the tool herself.
@@ -275,11 +270,10 @@ async def test_with_the_reranker_down_the_nearest_episode_is_recalled(
 
     assert events[-1]["type"] == "done"
     assert len(reranker.calls) == 2  # each asked, each failing
-    for recalled in [judged[judged.index("# 回顾剧情") :], called]:
+    for recalled in [judged[judged.index("# 回顾资料") :], called]:
         assert recalled.count("\n## ") == 1  # the nearest episode alone
-        assert "培育剧情 / W.I.N.G.編 /「公園の歌声」" in recalled
-        assert "（W.I.N.G.編中你出场的剧情依次是：" in recalled and "「決勝後コミュ」" in recalled
-        assert f"真乃：{PARK_LINE}" in recalled
+        assert "「決勝後コミュ」" not in recalled
+        assert PARK_LINE in recalled
 
 
 PARK_REPLY = ["<ja>[happy] 公園で鳩さんと歌った日ですね</ja><zh>[happily] 是和鸽子一起在公园唱歌的那天吧</zh>"]
@@ -304,8 +298,8 @@ async def test_a_recall_question_after_her_reply_is_recalled_with_both(
     assert "那次后来怎么样了？" not in embedder.queries
     system = context_of(llm.prompts[-1])
     # She is reminded of what the user asked; her reply is right there in the conversation.
-    assert "# 回顾剧情：那次后来怎么样了？\n" in system
-    assert f"真乃：{PARK_LINE}" in system
+    assert "# 回顾资料：那次后来怎么样了？\n" in system
+    assert PARK_LINE in system
 
 
 async def test_the_tool_looks_up_what_the_model_wrote_alone(
@@ -324,7 +318,7 @@ async def test_the_tool_looks_up_what_the_model_wrote_alone(
     assert [query for query, _ in reranker.calls] == ["公園で鳩と歌った日"]
     assert "公園で鳩と歌った日" in embedder.queries
     [result] = tool_results(llm.prompts[-1])
-    assert f"真乃：{PARK_LINE}" in result
+    assert PARK_LINE in result
 
 
 async def test_a_recall_question_about_someone_elses_episode_recalls_nothing(

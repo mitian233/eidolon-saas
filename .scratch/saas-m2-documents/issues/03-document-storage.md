@@ -19,3 +19,8 @@ Status: ready-for-agent
 ### 票 01 交接
 
 使用 `eidolon.document_text.passages` 切块、`text_hash` 对规范化文本生成 SHA-256。默认每块最多 1200 个 Unicode 字符、无重叠；相同段落只保留首次出现。文档级重复导入可对整份文本调用 `text_hash`，持久化仍须按角色及模型/维度区分。
+
+
+### 票 02 交接
+
+`eidolon.retrieval.CharacterDocumentSource` 定义 `async search(query_vector: Sequence[float], character_id: str, limit: int) -> list[DocumentPassage]`；段落带 `text`、`origin` 和余弦相似度 `similarity`，须按当前角色过滤、相似度降序，且向量模型和维度须与本次查询匹配。`open_reference_sources(embedder, source)` 将其用于普通召回与两条回顾路径。`assembly.build` 的部署者和用户自带向量服务两条装配现在都使用 `EmptyDocumentSource`，所以票 03 接好真实存储前不会返回资料；请在两处按当前 embedder 构造真实来源，处理资源生命周期及模型/维度变更。票 02 的内存假来源只验证召回契约，不验证持久化和重新向量化。

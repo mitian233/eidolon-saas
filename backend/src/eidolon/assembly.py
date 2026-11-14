@@ -36,7 +36,7 @@ from eidolon.price_catalog import Catalog
 from eidolon.prices import Prices
 from eidolon.proxy import ProxyRoutes, reach as reach_provider
 from eidolon.rerank import Reranker
-from eidolon.retrieval import ModelRetrievalJudge, Retrieval, open_reference_sources
+from eidolon.retrieval import EmptyDocumentSource, ModelRetrievalJudge, Retrieval, open_reference_sources
 from eidolon.service_clients import ProviderClients, ServiceClients
 from eidolon.service_status import ServiceStatus, probes
 from eidolon.sponsor import Sponsor
@@ -174,9 +174,7 @@ def build(
     retrieval = None
     corpus = None
     if embedder is not None:
-        references = open_reference_sources(database, embedder, characters.values(), None)
-        corpus = references.corpus
-        closers.append(corpus.aclose)
+        references = open_reference_sources(embedder, EmptyDocumentSource())
         retrieval = Retrieval(
             None, references, reranker, lambda: config.rerank_thresholds.references
         )
@@ -184,10 +182,7 @@ def build(
     async def retrieval_for(services: TurnServices, character_id: str) -> Retrieval | None:
         if services.embedder is None:
             return None
-        sources = await asyncio.to_thread(
-            open_reference_sources, database, services.embedder, (characters[character_id],), None, warn=False,
-        )
-        await sources.corpus.prepare_character(character_id)
+        sources = open_reference_sources(services.embedder, EmptyDocumentSource())
         judge = (
             ModelRetrievalJudge(services.judge, services.judge_thresholds)
             if services.judge is not None and services.judge_thresholds is not None else None

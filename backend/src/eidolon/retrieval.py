@@ -1,54 +1,14 @@
-"""Retrieval for a conversation turn: whether to look anything up, and what to bring back.
+"""Retrieve character document passages and the user's separate long-term memories.
 
-The judge model (`judge`) first judges what the user just said needs: nothing, so small
-talk costs no retrieval latency; memories only, when the user talks about their
-own life, for which the turn finds the memories of what they have told any of the
-characters; references, for which the reference sources (the story corpus, only episodes
-the character is cast in; the character's facts; and the work facts all characters share,
-when there is a world setting) are searched with the same query vector, the candidates
-reranked together, and the best few that are relevant enough go into the prompt, each
-under its source's heading, while the turn finds the user's memories alongside; or
-recall, for a question about how some past episode went, for which the episodes are
-recalled as the recall-story tool would, the lives and releases of the work facts
-reranked along with them, and the result goes into the prompt, saving the chat model a
-round of calling it. The story not telling how something went does not mean she never
-went through it: she may have stood on that stage all the same.
-
-References, memories and recall alike are looked up with what the user said after the
-character's reply before it, as people see it (`memory.memory_query`): 「那时候累吗」 alone
-finds nothing, her reply says what 「那时候」 is. Embedding and reranking both use it; the
-judge model is told what it always was, the latest messages and what the user said.
-
-The judge model takes longest, so the turn does not wait for it to start looking: as it
-judges, the query is embedded, once, and the candidates found with the vector, the
-nearest of each reference source and of the user's memories. Once it has judged, only
-the candidates the turn needs are reranked, so no more often than if the turn had
-waited: the references' and the memories', the memories' alone, or the story's with the
-work facts' lives and releases to recall. A turn needing nothing drops them, and
-whatever is still being looked up. The vector goes on to the writing down, which shows
-the background model the memories nearest the same query (`MemoryTurn.write_down`).
-
-Retrieval never fails a turn, nor holds it up for long: embedding and reranking are given
-a few seconds and asked again once (`retry`). If the judge model cannot answer, the turn
-retrieves anyway; if the query cannot be embedded, it goes on without references or
-memories. If reranking fails, the nearest few references by their vectors go into the
-prompt instead, unthresholded, as do the nearest episode (and live or release) for recall;
-memories do not, as one the reranker never judged might be what the user never said.
-
-Where affinity is on, the judge model is asked what the turn does to it in the same
-request (`affinity_judge.QUESTIONS`); failing, it fails both. So too, in a turn that could
-have a photo, whether the user asks her for one (`photo_judge`), no if it fails.
-
-The chat model can also look an episode up itself with the recall-story tool, for
-general questions like "what happened that time with the photo book" that the judge
-model did not catch: the best matching episodes she is cast in come back with where they
-sit in her story catalog (card or event, and its other episodes) and what happened in them.
-The tool looks only in the story.
+The judge chooses ordinary retrieval, recall, memories, or no lookup. Embedding and
+candidate search start while the judge runs; selected passages are reranked and
+filtered, with a similarity fallback if reranking is unavailable. The recall_story
+tool uses the same character-scoped document source.
 """
 
 import asyncio
 import logging
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
 
@@ -56,7 +16,6 @@ from eidolon.affinity import Days, Judged
 from eidolon.affinity_judge import affinity_questions, read_judged
 from eidolon.characters import Character
 from eidolon.corpus import CatalogSource, Episode, StoryCorpus
-from eidolon.data_access import Database
 from eidolon.embedding import Embedder, EmbeddingError, Reembeddable
 from eidolon.facts import CharacterFacts
 from eidolon.judge import (
@@ -75,7 +34,7 @@ from eidolon.references import Reference, ReferenceKind, ReferenceSource
 from eidolon.rerank import Reranker, RerankError
 from eidolon.store import Message
 from eidolon.work_facts import WORK_RULE, WorkFacts
-from eidolon.world import EntryKind, World, WorldEntry
+from eidolon.world import EntryKind, WorldEntry
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +58,7 @@ RECALL_EPISODE_CHARS = 3000
 
 RECALL_STORY_TOOL = Tool(
     name="recall_story",
-    description="回顾背景资料：查找和某件事有关的已有记录，返回资料中的位置和内容。"
+    description="回顾背景资料：查找和某件事有关的已有记录，返回相关内容。"
     "当用户问起过去的事、而你想不起具体经过时使用；闲聊时不需要。",
     parameters={
         "type": "object",
@@ -173,20 +132,17 @@ class StoryReferences:
 
 
 class ReferenceSources:
-    """The reference sources a turn looks references up in, all searched with the same
-    query vector and reranked together; and the story corpus and the work facts, which
-    recalling searches itself."""
+    """Search and rank references from the character document source."""
 
     def __init__(
         self,
         embedder: Embedder,
         sources: Sequence[ReferenceSource],
-        corpus: StoryCorpus,
+        corpus: StoryCorpus | None,
         work: WorkFacts | None,
         unsearched: Sequence[ReferenceSource] = (),
     ) -> None:
-        """`corpus` and `work` are among `sources`; `unsearched` are sources with nothing
-        to search, kept only to be embedded again."""
+        """Legacy corpus and work fields remain for later cleanup."""
         self.embedder = embedder
         self.corpus = corpus
         self.work = work
@@ -251,35 +207,61 @@ class ReferenceSources:
         return "\n".join(lines)
 
 
-def open_reference_sources(
-    db: Database,
-    embedder: Embedder,
-    characters: Iterable[Character],
-    world: World | None,
-    *,
-    warn: bool = True,
-) -> ReferenceSources:
-    """The reference sources in the database `db` reads and writes: the story, the characters' facts
-    and, given a world setting, the work facts; without one, the work facts are there only
-    to be embedded again, which forgets whatever vectors they had. Warns (unless not to
-    `warn`) if story passages have no vector from `embedder`'s model, as they cannot be
-    found."""
-    corpus = StoryCorpus(db, embedder)
-    if warn and (missing := corpus.missing_vectors_at_open):
-        log.warning(
-            "%d story passages have no vectors from the embedding model %s and cannot be"
-            " found: run `eidolon reembed` after changing the embedding service, model"
-            " or dimensions",
-            missing, embedder.model,
-        )
-    sources: list[ReferenceSource] = [
-        StoryReferences(corpus), CharacterFacts(db, embedder, characters)
-    ]
-    work = WorkFacts(db, embedder, world)
-    if world is None:
-        return ReferenceSources(embedder, sources, corpus, None, [work])
-    sources.append(work)
-    return ReferenceSources(embedder, sources, corpus, work)
+@dataclass(frozen=True)
+class DocumentPassage:
+    """A character document passage and its similarity to the query vector."""
+
+    text: str
+    origin: str
+    similarity: float
+
+
+class CharacterDocumentSource(Protocol):
+    async def search(
+        self, query_vector: Sequence[float], character_id: str, limit: int
+    ) -> list[DocumentPassage]:
+        """Return only this character's passages, nearest first, up to limit.
+
+        Vectors must belong to the query embedder's model and dimensions.
+        """
+        ...
+
+
+class EmptyDocumentSource:
+    """Temporary source until character document storage is available."""
+
+    async def search(
+        self, query_vector: Sequence[float], character_id: str, limit: int
+    ) -> list[DocumentPassage]:
+        return []
+
+
+class DocumentReferences:
+    kind: ReferenceKind = "document"
+    heading = "角色资料"
+    guide = "以下资料来自角色知识库，只根据资料中记载的内容回答。"
+    label = "角色知识库"
+    unit = "段"
+
+    def __init__(self, source: CharacterDocumentSource) -> None:
+        self.source = source
+
+    async def search(
+        self, query_vector: Sequence[float], character: Character, limit: int
+    ) -> list[Reference]:
+        passages = await self.source.search(query_vector, character.id, limit)
+        return [Reference(self.kind, p.text, p.origin, p.similarity) for p in passages]
+
+    async def embed_missing(self, batch: int, progress: Callable[[int], None]) -> int:
+        return 0
+
+    async def forget_other_models(self) -> int:
+        return 0
+
+
+def open_reference_sources(embedder: Embedder, source: CharacterDocumentSource) -> ReferenceSources:
+    """Open the character document source for this embedder."""
+    return ReferenceSources(embedder, [DocumentReferences(source)], None, None)
 
 
 @dataclass(frozen=True)
@@ -330,7 +312,8 @@ class Retrieval:
         self._min_relevance = min_relevance
 
     async def aclose(self) -> None:
-        await self._sources.corpus.aclose()
+        if self._sources.corpus is not None:
+            await self._sources.corpus.aclose()
 
     async def retrieve(
         self,
@@ -448,89 +431,38 @@ class Retrieval:
         return [r for r, score in ranked if score >= min_relevance][:MAX_REFERENCES]
 
     async def recall_story(self, character: Character, query: str) -> str:
-        """The recall-story tool: the episodes `character` is cast in that best match
-        `query`, for the chat model to answer from: what the model wrote, looked up alone."""
+        """Look up the character's document passages for the recall tool."""
         try:
-            query_vector = await self._sources.embedder.embed_query(query)
-            story = await self._sources.candidates(query_vector, character, ("episode",))
+            vector = await self._sources.embedder.embed_query(query)
+            candidates = await self._sources.candidates(vector, character)
         except EmbeddingError:
             log.warning("recall failed", exc_info=True)
             return _CANNOT_RECALL
-        return await self._recall(character, query, query, story, [])
+        return await self._recall(query, query, candidates)
 
     async def _recall_turn(
         self, character: Character, text: str, query: str, found: _Found | None
     ) -> str:
-        """The recall the judge model sees `text` ask for: the story's candidates for the
-        turn's `query`, and the lives and releases of the work facts nearest it."""
-        if found is None:
+        if found is None or found.references is None:
             return _CANNOT_RECALL
-        try:
-            story = (
-                [r for r in found.references if r.kind == "episode"]
-                if found.references is not None
-                # Another source failed: the story's are still to be had.
-                else await self._sources.candidates(found.query_vector, character, ("episode",))
-            )
-            entries = await _search_work(self._sources.work, found.query_vector)
-        except EmbeddingError:
-            log.warning("recall failed", exc_info=True)
-            return _CANNOT_RECALL
-        return await self._recall(character, text, query, story, entries)
+        return await self._recall(text, query, found.references)
 
     async def _recall(
-        self,
-        character: Character,
-        asked: str,
-        query: str,
-        story: Sequence[Reference],
-        entries: Sequence[WorldEntry],
+        self, asked: str, query: str, candidates: Sequence[Reference]
     ) -> str:
-        """The episodes of the `story` candidates (passages of episodes `character` is cast
-        in) and the lives and releases of `entries` (nearest first) that best match
-        `query`, reranked together; recalled as what was `asked`. If reranking fails, the
-        episode of the nearest candidate and the nearest of `entries`."""
-        documents = [r.text for r in story] + [e.text for e in entries]
-        try:
-            if self._reranker is None:
-                raise RerankError("未配置重排")
-            best = (
-                await self._reranker.rerank(query, documents, len(documents)) if documents else []
-            )
-        except RerankError:
-            log.warning("reranking the recall failed; recalling the nearest", exc_info=True)
-            nearest = max(story, key=lambda r: r.similarity, default=None)
-            episode_ids = {nearest.origin: None} if nearest else {}
-            found = list(entries[:1])
+        if self._reranker is None:
+            selected = sorted(candidates, key=lambda r: -r.similarity)[:1]
         else:
-            episode_ids, found = self._relevant(best, story, entries)
-        corpus = self._sources.corpus
-        episodes = await corpus.episodes(episode_ids) if episode_ids else []
-        if not episodes and not found:
+            try:
+                ranked = await self._sources.rerank(self._reranker, query, candidates)
+            except RerankError:
+                log.warning("reranking the recall failed; recalling the nearest", exc_info=True)
+                selected = sorted(candidates, key=lambda r: -r.similarity)[:1]
+            else:
+                selected = [r for r, score in ranked if score >= self._min_relevance()][:RECALL_EPISODES]
+        if not selected:
             return f"没有想起和「{asked}」有关的记录：{_NOT_IN_STORY}，或者向用户询问细节。"
-        catalog = await corpus.catalog(character.id) if episodes else []
-        return recall_prompt(asked, episodes, catalog, found)
-
-    def _relevant(
-        self,
-        best: Sequence[tuple[int, float]],
-        story: Sequence[Reference],
-        entries: Sequence[WorldEntry],
-    ) -> tuple[dict[str, None], list[WorldEntry]]:
-        """The episodes (their identifiers, in order) and the work facts to recall, of the
-        `story` candidates and `entries` reranked together, `best` first."""
-        episode_ids: dict[str, None] = {}
-        found: list[WorldEntry] = []
-        min_relevance = self._min_relevance()
-        for i, score in best:
-            if score < min_relevance:
-                continue
-            if i < len(story):
-                if len(episode_ids) < RECALL_EPISODES:
-                    episode_ids.setdefault(story[i].origin)
-            elif len(found) < RECALL_ENTRIES:
-                found.append(entries[i - len(story)])
-        return episode_ids, found
+        return f"# 回顾资料：{asked}\n" + self._sources.prompt(selected)
 
 
 def _query_vector(embedding: "asyncio.Future[list[float] | None]") -> list[float] | None:

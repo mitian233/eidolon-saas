@@ -1,20 +1,16 @@
-"""Retrieval in conversation, driven through the text turn API: Jev decides whether a
-turn looks anything up; if so, the story corpus (only episodes the character is cast
-in) and her character facts are searched, reranked and capped into the prompt. They
-are searched while the judge model judges, and reranked only once it has."""
+"""Conversation retrieval from character documents and separate user memories."""
 
 import asyncio
 
 import httpx
 import pytest
 
-from eidolon.config import Settings
 from eidolon.retrieval import FALLBACK_REFERENCES, MAX_REFERENCES
 from tests.conftest import KOGANE_SHEET, MANO_SHEET, Characters, ClientFactory
 from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, context_of, system_of
 from tests.test_live_config import until
 from tests.test_shared_memory import CAT, memorized
-from tests.stories import corpus_in, sample_episodes
+from tests.document_sources import FakeDocuments
 from tests.test_text_turn import send_turn, start_conversation
 from tests.fakes import RETRIEVAL_KEYS
 
@@ -51,12 +47,12 @@ def characters() -> Characters:
 
 
 @pytest.fixture
-async def embedder(settings: Settings) -> FakeEmbedder:
-    """The embedder the sample stories were seeded with."""
-    embedder = FakeEmbedder()
-    async with corpus_in(settings.database_path, embedder) as corpus:
-        await corpus.save(sample_episodes({"真乃": "mano", "恋鐘": "kogane"}))
-    return embedder
+async def embedder(monkeypatch: pytest.MonkeyPatch) -> FakeEmbedder:
+    import eidolon.assembly
+
+    documents = FakeDocuments()
+    monkeypatch.setattr(eidolon.assembly, "EmptyDocumentSource", lambda: documents)
+    return FakeEmbedder()
 
 
 async def test_user_reference_sources_keep_facts_separate_and_memories_shared(
@@ -71,7 +67,7 @@ async def test_user_reference_sources_keep_facts_separate_and_memories_shared(
     await client.get("/api/memories")
     kogane = await system_prompt(client, llm, "你知道我家的猫吗？", "kogane")
     assert CAT in kogane
-    assert "来自长崎" in kogane and "## 剧情" in kogane
+    assert "来自长崎" in kogane and "## 角色资料" in kogane
     assert "生日是3月4日" not in kogane and PARK_LINE not in kogane
     mano = await system_prompt(client, llm, "公園の鳩と猫のこと覚えてる？", "mano")
     assert CAT in mano
@@ -120,7 +116,7 @@ async def test_a_character_recalls_episodes_she_is_cast_in(
 
     assert "# 回忆与资料" in system
     references = system[system.index("# 回忆与资料") :]
-    assert references.index("## 剧情\nW.I.N.G.編「公園の歌声」") < references.index("## 角色资料")
+    assert "## 角色资料" in references
     assert PARK_LINE in references
 
 
@@ -152,9 +148,7 @@ async def test_character_facts_are_retrieved_for_their_own_character(
     system = await system_prompt(client, llm, "灯織ちゃんは元気？")
 
     references = system[system.index("# 回忆与资料") :]
-    assert references.index("## 角色资料\n人物关系 / 風野灯織\nillumination STARS 的伙伴，性格认真。") < (
-        references.index("## 剧情")
-    )
+    assert "## 角色资料\n人物关系 / 風野灯織\nillumination STARS 的伙伴，性格认真。" in references
     assert "来自长崎" not in system  # Kogane's facts are hers alone
 
 
@@ -173,7 +167,7 @@ async def test_references_are_reranked_then_capped(
     # ...but only the best few reach the prompt, in the reranker's order.
     assert reference_count(system) == MAX_REFERENCES
     references = system[system.index("# 回忆与资料") :]
-    assert references.index("ピーちゃん") < references.index("## 剧情")
+    assert references.index("ピーちゃん") < references.index(PARK_LINE)
 
 
 PARK_REPLY = ["<ja>[happy] 公園で鳩さんと歌った日ですね</ja><zh>[happily] 是和鸽子一起在公园唱歌的那天吧</zh>"]
@@ -236,12 +230,15 @@ async def test_irrelevant_references_are_left_out(
 
 
 async def test_edited_facts_are_retrieved(
-    make_client: ClientFactory, embedder: FakeEmbedder, characters: Characters
+    make_client: ClientFactory, embedder: FakeEmbedder, characters: Characters,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    characters.add(
-        "mano", "櫻木真乃", MANO_SHEET, speakers=["真乃"],
-        facts="# 鸟\n## ピーちゃん\n最近学会了说「ほわっ」。",
-    )
+    # Simulate an edit to this character's document in the in-memory source.
+    import eidolon.assembly
+
+    documents = FakeDocuments()
+    documents.texts["mano"] = ["最近学会了说「ほわっ」。"]
+    monkeypatch.setattr(eidolon.assembly, "EmptyDocumentSource", lambda: documents)
     llm = FakeLLM(REPLY)
     client = make_client(llm, retrieval_judge=FakeJudge(), embedder=embedder, reranker=FakeReranker())
 
@@ -391,5 +388,4 @@ async def test_a_recall_question_is_recalled_though_her_facts_cannot_be_embedded
 
     system = await system_prompt(client, llm, "那次在公园唱歌是怎么回事？")
 
-    assert "培育剧情 / W.I.N.G.編 /「公園の歌声」" in system
-    assert f"真乃：{PARK_LINE}" in system
+    assert PARK_LINE in system

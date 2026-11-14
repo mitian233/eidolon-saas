@@ -15,7 +15,7 @@ from typing import Literal, Protocol
 from eidolon.characters import Character
 from eidolon.embedding import Reembeddable
 
-ReferenceKind = Literal["episode", "fact", "work"]
+ReferenceKind = Literal["episode", "fact", "work", "document"]
 
 
 @dataclass(frozen=True)

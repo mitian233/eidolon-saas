@@ -198,18 +198,28 @@ async def test_user_vector_error_never_repeats_key_in_traceback(settings, servic
         await vectors.aclose()
 
 
-async def test_user_recall_reembeds_existing_passages_after_model_or_dimension_change(make_client, settings, own_vectors):
-    from eidolon.corpus import Episode, Line, StoryCorpus
-    from eidolon.data_access import Database
+async def test_user_recall_uses_document_source_after_model_or_dimension_change(
+    make_client, own_vectors, monkeypatch
+):
+    import eidolon.assembly
     from eidolon.llm import ToolCall
-    from tests.fakes import FakeEmbedder
+    from eidolon.retrieval import DocumentPassage
     from tests.test_text_turn import send_turn, start_conversation
-    db = Database(settings.database_path)
-    corpus = StoryCorpus(db, FakeEmbedder())
-    await corpus.save([Episode("user-note", "custom", "约定", "见面", frozenset({"mano"}), (Line("角色", "约好在图书馆见面"),))])
-    await corpus.aclose()
-    await db.close()
-    own = FakeLLMService(FakeLLM([ToolCall("recall1", "recall_story", {"query":"见面"})], ["<ja>图书馆</ja><zh>图书馆</zh>"], ['{"memories":[]}'], [ToolCall("recall2", "recall_story", {"query":"见面"})], ["<ja>图书馆</ja><zh>图书馆</zh>"], ['{"memories":[]}']))
+
+    calls = []
+
+    class Documents:
+        async def search(self, query_vector, character_id, limit):
+            calls.append((character_id, list(query_vector)))
+            return [DocumentPassage("约好在图书馆见面", "note", 1.0)]
+
+    monkeypatch.setattr(eidolon.assembly, "EmptyDocumentSource", Documents)
+    own = FakeLLMService(FakeLLM(
+        [ToolCall("recall1", "recall_story", {"query": "见面"})],
+        ["<ja>图书馆</ja><zh>图书馆</zh>"], ['{"memories":[]}'],
+        [ToolCall("recall2", "recall_story", {"query": "见面"})],
+        ["<ja>图书馆</ja><zh>图书馆</zh>"], ['{"memories":[]}'],
+    ))
     client = make_client(FakeLLM(), own_llm_service=own, own_retrieval_service=own_vectors)
     for model, dimensions in [("first", 2), ("second", 3)]:
         body = payload(judge_enabled=False, rerank=None)
@@ -218,6 +228,7 @@ async def test_user_recall_reembeds_existing_passages_after_model_or_dimension_c
         assert events[-1]["type"] == "done"
         assert any("图书馆" in message.content for message in own.llm.prompts[-1] if message.role == "tool")
         await client.get("/api/memories")
+    assert [character for character, _ in calls] == ["mano", "mano"]
 
 
 async def test_disabling_user_judge_keeps_affinity_and_cannot_bypass_existing_cooldown(make_client, settings):
