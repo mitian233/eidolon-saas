@@ -8,6 +8,9 @@ import {
   createCharacter,
   deleteAccount,
   deleteCharacter,
+  deleteCharacterDocument,
+  importCharacterDocument,
+  listCharacterDocuments,
   getCallSetup,
   getLimitExemption,
   json,
@@ -420,6 +423,30 @@ describe("the user's characters", () => {
 
     const [path, init] = fetch.mock.calls[0];
     expect([path, init?.method]).toEqual(["/api/characters/c%201", "DELETE"]);
+  });
+
+  it("lists and deletes documents at their encoded addresses", async () => {
+    const documents = [{ id: "d 1", origin: "笔记", created_at: null, passage_count: 2, embedded_passage_count: 1 }];
+    const fetch = backend(() => Response.json(documents));
+    expect(await listCharacterDocuments("c 1")).toEqual(documents);
+    expect(fetch.mock.calls[0][0]).toBe("/api/characters/c%201/documents");
+    fetch.mockImplementation(async () => new Response(null, { status: 204 }));
+    await deleteCharacterDocument("c 1", "d 1");
+    expect(fetch.mock.calls[1][0]).toBe("/api/characters/c%201/documents/d%201");
+    expect(fetch.mock.calls[1][1]?.method).toBe("DELETE");
+  });
+
+  it("imports with the current user's embedding key", async () => {
+    const store = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => store.set(key, value) });
+    const embedding = { base_url: "https://example.test/v1", api_key: "fake", model: "test", dimensions: 3 };
+    keepOwnKey("u1", "embedding", embedding);
+    const fetch = backend(() => Response.json({ id: "d1" }, { status: 201 }));
+    expect(await importCharacterDocument("c 1", "笔记", "资料", "u1")).toEqual({ id: "d1" });
+    const [path, init] = fetch.mock.calls[0];
+    expect([path, init?.method, JSON.parse(String(init?.body))]).toEqual([
+      "/api/characters/c%201/documents", "POST", { origin: "笔记", text: "资料", own_keys: { embedding } },
+    ]);
   });
 
   it("says what the backend refused", async () => {

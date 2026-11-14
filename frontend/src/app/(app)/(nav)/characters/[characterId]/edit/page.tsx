@@ -6,6 +6,7 @@ import { useState } from "react";
 import { FailureNotice } from "@/components/app/FailureNotice";
 import { PageShell } from "@/components/app/PageShell";
 import { SubpageHeader } from "@/components/app/SubpageHeader";
+import { CharacterDocuments } from "@/components/characters/CharacterDocuments";
 import { CharacterForm } from "@/components/characters/CharacterForm";
 import { useDirectory } from "@/components/conversations/ConversationDirectory";
 import {
@@ -87,6 +88,7 @@ export default function EditCharacterPage() {
           onCancel={() => go(conversation)}
         />
         <Separator />
+        <CharacterDocuments characterId={character.id} />
         <DeleteCharacter character={character} onDeleted={() => setDeleted(true)} />
       </div>
     </PageShell>

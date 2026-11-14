@@ -3,6 +3,7 @@ import type { Provider } from "@/lib/signIn";
 import {
   forgetOwnKeys,
   turnOwnKeys,
+  localOwnKeys,
   type BailianRegion,
   type FishAudioModel,
   type LLMProtocol,
@@ -700,6 +701,33 @@ export async function updateCharacter(id: string, input: CharacterInput): Promis
 /** Deletes her for good, with her conversations; a call with her under way is hung up first. */
 export async function deleteCharacter(id: string): Promise<void> {
   await expectNoContent(await api(`/api/characters/${encodeURIComponent(id)}`, { method: "DELETE" }));
+}
+
+/** A document imported into a character's knowledge base. */
+export type CharacterDocument = {
+  id: string;
+  origin: string;
+  created_at: string | null;
+  passage_count: number;
+  embedded_passage_count: number;
+};
+
+export async function listCharacterDocuments(characterId: string): Promise<CharacterDocument[]> {
+  return json(await api(`/api/characters/${encodeURIComponent(characterId)}/documents`));
+}
+
+/** Read the embedding key at request time, just as sendTurn reads the user's keys. */
+export async function importCharacterDocument(characterId: string, origin: string, text: string, userId: string): Promise<{ id: string }> {
+  const embedding = localOwnKeys(userId).embedding;
+  return json(await api(`/api/characters/${encodeURIComponent(characterId)}/documents`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ origin, text, own_keys: { embedding } }),
+  }));
+}
+
+export async function deleteCharacterDocument(characterId: string, documentId: string): Promise<void> {
+  await expectNoContent(await api(`/api/characters/${encodeURIComponent(characterId)}/documents/${encodeURIComponent(documentId)}`, { method: "DELETE" }));
 }
 
 /** Her conversations with the user, newest first: the first is her current one
