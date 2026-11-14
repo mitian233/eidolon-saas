@@ -1,5 +1,7 @@
 "use client";
 
+import { characterAvatarUrl } from "@/lib/characterAvatar";
+
 import { ChevronUpIcon } from "lucide-react";
 import NextLink from "next/link";
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
@@ -271,7 +273,7 @@ function Ranking({
           if (!character) return null;
           return (
             <li key={one.character_id} style={herVars(character.color)} className="flex items-center gap-3">
-              <MarkedAvatar name={character.name} src={character.avatar_url} size="sm" />
+              <MarkedAvatar name={character.name} src={characterAvatarUrl(character)} size="sm" />
               <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="truncate text-sm font-medium">{character.name}</span>
@@ -361,7 +363,7 @@ function TierMembers({ characters, byId }: { characters: string[]; byId: Map<str
                 isFolded && !isOpen && "hidden group-hover/tier:block",
               )}
             >
-              <MarkedAvatar name={character.name} src={character.avatar_url} size="bubble" />
+              <MarkedAvatar name={character.name} src={characterAvatarUrl(character)} size="bubble" />
             </li>
           );
         })}
@@ -401,7 +403,7 @@ function FigureOf({ label, children }: { label: string; children: ReactNode }) {
 function Giftee({ character, given }: { character: Character; given: number }) {
   return (
     <span className="flex min-w-0 items-center gap-2 self-center">
-      <MarkedAvatar name={character.name} src={character.avatar_url} size="sm" />
+      <MarkedAvatar name={character.name} src={characterAvatarUrl(character)} size="sm" />
       <span className="truncate text-sm font-medium">{character.name}</span>
       <span className="shrink-0 text-subtitle text-muted-foreground tabular-nums">{t.times(given)}</span>
     </span>

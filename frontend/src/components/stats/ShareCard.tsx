@@ -1,5 +1,7 @@
 "use client";
 
+import { characterAvatarUrl } from "@/lib/characterAvatar";
+
 import { useMemo, type Ref } from "react";
 import { encode } from "uqr";
 
@@ -201,7 +203,7 @@ function Footer({ site }: { site: SiteAddress }) {
 function Avatar({ character, className }: { character: Character; className: string }) {
   return (
     <div className={cn("shrink-0 overflow-hidden rounded-full bg-share-track", className)}>
-      {character.avatar_url && <img src={character.avatar_url} alt="" className="size-full object-cover" />}
+      {character.avatar_url && <img src={characterAvatarUrl(character) ?? undefined} alt="" className="size-full object-cover" />}
     </div>
   );
 }

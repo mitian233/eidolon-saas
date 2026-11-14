@@ -32,6 +32,7 @@ async function forward(request: Request, { params }: { params: Promise<{ path: s
   // package downloads under its name, with its size for the browser's progress
   for (const name of [
     "content-type",
+    "x-content-type-options",
     "cache-control",
     "etag",
     "location",

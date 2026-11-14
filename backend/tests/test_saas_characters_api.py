@@ -68,3 +68,36 @@ async def test_own_model_streams_plain_reply_and_history_keeps_it(tmp_path: Path
         await backend.aclose()
 
 
+
+
+@pytest.mark.asyncio
+async def test_avatar_is_private_and_only_returns_image(tmp_path, monkeypatch):
+    import eidolon.app
+
+    async def fetch(url):
+        assert url == 'https://example.com/avatar.png'
+        return b'image', 'image/png'
+
+    monkeypatch.setattr(eidolon.app, 'fetch_avatar', fetch)
+    backend = build(Settings(database_path=tmp_path / 'avatar.db', dev_login=True))
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=create_app(backend)), base_url='http://test', headers={'Origin': 'http://localhost:3000'}) as client:
+            await client.post('/api/auth/dev-login', json={'name': 'Alice'})
+            await client.post('/api/account/consent', json={'agree_to_terms': True, 'at_least_13': True})
+            character = (await client.post('/api/characters', json={'name': 'A', 'sheet': 'A'})).json()
+            path = '/api/characters/' + character['id'] + '/avatar'
+            assert (await client.get(path)).status_code == 404
+            await client.put('/api/characters/' + character['id'], json={'name': 'A', 'sheet': 'A', 'avatar_url': 'https://example.com/avatar.png'})
+            response = await client.get(path)
+            assert response.status_code == 200
+            assert response.content == b'image'
+            assert response.headers['content-type'] == 'image/png'
+            assert response.headers['x-content-type-options'] == 'nosniff'
+            assert response.headers['cache-control'] == 'private, max-age=300'
+            assert 'set-cookie' not in response.headers
+            await client.post('/api/auth/logout')
+            await client.post('/api/auth/dev-login', json={'name': 'Bob'})
+            await client.post('/api/account/consent', json={'agree_to_terms': True, 'at_least_13': True})
+            assert (await client.get(path)).status_code == 404
+    finally:
+        await backend.aclose()

@@ -1,5 +1,7 @@
 "use client";
 
+import { characterAvatarUrl } from "@/lib/characterAvatar";
+
 import { useEffect, useRef, useState } from "react";
 
 import { SignInButton } from "@/components/app/FailureNotice";
@@ -233,7 +235,7 @@ function Row({
           isSelected ? "bg-muted" : "hover:bg-muted/60",
         )}
       >
-        <MarkedAvatar name={character.name} src={character.avatar_url} size="list" />
+        <MarkedAvatar name={character.name} src={characterAvatarUrl(character)} size="list" />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex items-baseline gap-2">
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5">

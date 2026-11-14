@@ -1,5 +1,7 @@
 "use client";
 
+import { characterAvatarUrl } from "@/lib/characterAvatar";
+
 import {
   useEffect,
   useRef,
@@ -637,7 +639,7 @@ function Bubbled({
   return (
     <Message align="start">
       {first ? (
-        <MarkedAvatar name={character.name} src={character.avatar_url} size="bubble" />
+        <MarkedAvatar name={character.name} src={characterAvatarUrl(character)} size="bubble" />
       ) : (
         <span aria-hidden className="w-bubble-avatar shrink-0" />
       )}

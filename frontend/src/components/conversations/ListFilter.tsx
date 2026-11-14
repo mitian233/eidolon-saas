@@ -1,5 +1,7 @@
 "use client";
 
+import { characterAvatarUrl } from "@/lib/characterAvatar";
+
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -96,7 +98,7 @@ function Groups() {
               onCheckedChange={(checked) => tidy((p) => setShown(p, [c.id], checked))}
             />
             <span aria-hidden className="flex">
-              <MarkedAvatar name={c.name} src={c.avatar_url} size="sm" />
+              <MarkedAvatar name={c.name} src={characterAvatarUrl(c)} size="sm" />
             </span>
             <span className="min-w-0 truncate">{c.name}</span>
           </label>

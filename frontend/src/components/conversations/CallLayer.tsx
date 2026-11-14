@@ -1,5 +1,7 @@
 "use client";
 
+import { characterAvatarUrl } from "@/lib/characterAvatar";
+
 import {
   useEffect,
   useLayoutEffect,
@@ -263,7 +265,7 @@ export function CallLayer(props: Props) {
 
       <div className="relative flex flex-col items-center gap-3 pt-10 text-center">
         <Ripple isOn={call.phase === "dialing"}>
-          <MarkedAvatar name={character.name} src={character.avatar_url} size="call" />
+          <MarkedAvatar name={character.name} src={characterAvatarUrl(character)} size="call" />
         </Ripple>
         <h2 className="mt-2 text-call-name">{character.name}</h2>
         <Status call={call} cue={props.affinityCue} name={character.name} />
@@ -303,7 +305,7 @@ function Backdrop({ character }: { character: Character }) {
     <>
       {character.avatar_url && (
         <img
-          src={character.avatar_url}
+          src={characterAvatarUrl(character) ?? undefined}
           alt=""
           aria-hidden
           className="pointer-events-none absolute inset-0 size-full scale-125 object-cover blur-3xl"

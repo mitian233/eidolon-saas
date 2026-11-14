@@ -1,5 +1,7 @@
 "use client";
 
+import { characterAvatarUrl } from "@/lib/characterAvatar";
+
 import { useEffect, useRef, useState } from "react";
 
 import { FailureNotice } from "@/components/app/FailureNotice";
@@ -149,7 +151,7 @@ export function MemoriesSettings() {
               return (
                 <li key={memory.id} className="flex items-start gap-3 py-4">
                   <div className="pt-0.5">
-                    <MarkedAvatar name={name} src={source?.avatar_url} size="sm" />
+                    <MarkedAvatar name={name} src={characterAvatarUrl(source)} size="sm" />
                   </div>
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <p className={cn("text-body break-words", mark && "text-muted-foreground")}>{memory.text}</p>

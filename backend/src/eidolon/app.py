@@ -8,13 +8,14 @@ from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.types import Receive, Scope, Send
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 from typing import Literal
 
 from eidolon.admission import CoolingDown
 from eidolon.assembly import Backend
+from eidolon.avatar import InvalidAvatar, fetch_avatar
 from eidolon.call import (
     CallFailed,
     CallsBusy,
@@ -411,6 +412,20 @@ def create_app(backend: Backend) -> FastAPI:
     @app.get("/api/characters/{character_id}")
     async def get_character(character_id: str, user_id: UserId) -> dict:
         return shown_character(await owned_character(character_id, user_id))
+
+    @app.get("/api/characters/{character_id}/avatar")
+    async def character_avatar(character_id: str, user_id: UserId) -> Response:
+        character = await owned_character(character_id, user_id)
+        if not character.avatar_url:
+            raise HTTPException(404, "头像不存在")
+        try:
+            content, content_type = await fetch_avatar(character.avatar_url)
+        except InvalidAvatar:
+            raise HTTPException(502, "头像无法获取") from None
+        return Response(content, media_type=content_type, headers={
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, max-age=300",
+        })
 
     @app.put("/api/characters/{character_id}")
     async def update_character(character_id: str, body: CharacterInput, user_id: UserId) -> dict:

@@ -25,6 +25,7 @@ describe("forwarding /api/* to the backend", () => {
         new Response("jpeg", {
           headers: {
             "content-type": "image/jpeg",
+            "x-content-type-options": "nosniff",
             "cache-control": "public, max-age=86400",
             etag: '"abc"',
           },
@@ -33,6 +34,7 @@ describe("forwarding /api/* to the backend", () => {
 
     const res = await get("sponsor/image");
 
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
     expect(res.headers.get("cache-control")).toBe("public, max-age=86400");
     expect(res.headers.get("etag")).toBe('"abc"');
   });
