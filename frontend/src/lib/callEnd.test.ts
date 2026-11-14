@@ -57,7 +57,7 @@ describe("droppedEnd", () => {
 
 describe("endCard", () => {
   const now = new Date("2026-10-13T03:00:00Z");
-  const context = { name: "真乃", now, timeZone: "Asia/Tokyo", giftsOpen: true, exemptingKeys: ["llm", "tts", "stt"] } as const;
+  const context = { name: "真乃", now, timeZone: "Asia/Tokyo", exemptingKeys: ["llm", "tts", "stt"] } as const;
 
   it("says only that she hung up, when she did for what the user said, and offers a redial", () => {
     expect(endCard({ reason: "she_hung_up", detail: null, counts: true }, context)).toEqual({
@@ -69,7 +69,7 @@ describe("endCard", () => {
     });
   });
 
-  it("says when she will talk again, when she hung up for a cooldown, and offers a gift instead of a redial", () => {
+  it("says when she will talk again, when she hung up for a cooldown, and offers no redial", () => {
     const end = { reason: "cooldown", detail: null, counts: true, cooldownUntil: "2026-10-14T01:30:00Z" } as const;
 
     expect(endCard(end, context)).toEqual({
@@ -77,14 +77,8 @@ describe("endCard", () => {
       detail: null,
       body: "她现在不想说话，明天 10:30 以后可以再找她。",
       counts: true,
-      action: "gift",
+      action: null,
     });
-  });
-
-  it("offers nothing but going back after a cooldown, while gifts are not open", () => {
-    const end = { reason: "cooldown", detail: null, counts: true, cooldownUntil: "2026-10-14T01:30:00Z" } as const;
-
-    expect(endCard(end, { ...context, giftsOpen: false })).toMatchObject({ action: null });
   });
 
   it("gives the other ends their own title and body, and the main button they call for", () => {

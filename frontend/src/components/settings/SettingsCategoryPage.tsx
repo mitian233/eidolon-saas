@@ -3,14 +3,11 @@ import type { ReactNode } from "react";
 import { AboutSettings } from "@/components/AboutSettings";
 import { AdminEntry } from "@/components/AdminEntry";
 import { CallSettings } from "@/components/CallSettings";
-import { CyclesSettings } from "@/components/CyclesSettings";
 import { DataPackageSettings } from "@/components/DataPackageSettings";
 import { DeleteAccount } from "@/components/DeleteAccount";
 import { MemoriesSettings } from "@/components/MemoriesSettings";
-import { MomentsSettings } from "@/components/MomentsSettings";
 import { OwnKeysSettings } from "@/components/OwnKeysSettings";
 import { ProducerProfileSettings } from "@/components/ProducerProfileSettings";
-import { ReachOutsSettings } from "@/components/ReachOutsSettings";
 import { SettingsPane } from "@/components/settings/SettingsPane";
 import { SignInSettings } from "@/components/SignInSettings";
 import { SignOutSettings } from "@/components/SignOutSettings";
@@ -21,9 +18,6 @@ import type { SettingsCategory } from "@/lib/settingsCategory";
 const PANELS: Record<Exclude<SettingsCategory, "memories" | "stats">, ReactNode> = {
   profile: <ProducerProfileSettings />,
   call: <CallSettings />,
-  "reach-outs": <ReachOutsSettings />,
-  moments: <MomentsSettings />,
-  cycles: <CyclesSettings />,
   "own-keys": <OwnKeysSettings />,
   "sign-in": (
     <>

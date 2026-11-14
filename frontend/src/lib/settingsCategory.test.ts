@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { Draft } from "@/lib/producerProfile";
 import {
+  SETTINGS_GROUPS,
   settingsCategory,
-  settingsGroups,
   settingsHref,
   settingsRedirect,
   settingsSummaries,
@@ -28,38 +28,12 @@ describe("路径和类别互转", () => {
 });
 
 describe("一级列表有哪几类", () => {
-  it("搭话放在通话和周期之间，朋友圈紧跟在搭话后面", () => {
-    expect(settingsGroups({ reachOuts: false, moments: false, cycles: false })[1]).toEqual([
-      "call",
-      "reach-outs",
-      "moments",
-      "cycles",
-      "own-keys",
-    ]);
-  });
-
-  it("账号里没有搭话、朋友圈、周期（部署者没开）时没有这几类，别的照旧", () => {
-    expect(settingsGroups({ reachOuts: null, moments: null, cycles: null })).toEqual([
+  it("固定四组，搭话、朋友圈、周期这些退役的玩法不在其中", () => {
+    expect(SETTINGS_GROUPS).toEqual([
       ["profile", "memories", "stats"],
       ["call", "own-keys"],
       ["sign-in", "data-package"],
       ["about"],
-    ]);
-  });
-
-  it("各看各的：只开周期时有周期、没有搭话和朋友圈", () => {
-    expect(settingsGroups({ reachOuts: null, moments: null, cycles: true })[1]).toEqual([
-      "call",
-      "cycles",
-      "own-keys",
-    ]);
-  });
-
-  it("只开朋友圈时有朋友圈，用户自己关了也还在", () => {
-    expect(settingsGroups({ reachOuts: null, moments: false, cycles: null })[1]).toEqual([
-      "call",
-      "moments",
-      "own-keys",
     ]);
   });
 });
@@ -101,9 +75,6 @@ describe("一级列表上的摘要", () => {
     memoryCount: null,
     daysKnown: null,
     call: null,
-    reachOuts: null,
-    moments: null,
-    cycles: null,
     ownServices: null,
     signInMethods: null,
   };
@@ -143,20 +114,8 @@ describe("一级列表上的摘要", () => {
   });
 
 
-  it("搭话是开／关", () => {
-    expect(settingsSummaries({ ...loading, reachOuts: true })["reach-outs"]).toBe("开");
-    expect(settingsSummaries({ ...loading, reachOuts: false })["reach-outs"]).toBe("关");
-  });
 
-  it("朋友圈是开／关", () => {
-    expect(settingsSummaries({ ...loading, moments: true }).moments).toBe("开");
-    expect(settingsSummaries({ ...loading, moments: false }).moments).toBe("关");
-  });
 
-  it("周期是开／关", () => {
-    expect(settingsSummaries({ ...loading, cycles: true }).cycles).toBe("开");
-    expect(settingsSummaries({ ...loading, cycles: false }).cycles).toBe("关");
-  });
 
   it("自带密钥按 LLM、语音合成、语音识别的顺序列出填了的，一项都没填时「全部用部署者的服务」", () => {
     expect(settingsSummaries({ ...loading, ownServices: ["stt", "llm"] })["own-keys"]).toBe("已填 LLM、语音识别");

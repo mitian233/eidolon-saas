@@ -4,7 +4,6 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
-  useState,
   useSyncExternalStore,
   type ComponentType,
   type ReactNode,
@@ -14,18 +13,15 @@ import {
 
 import { MarkedAvatar } from "@/components/app/MarkedAvatar";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { copy } from "@/i18n";
 import { cueText } from "@/lib/affinity";
-import { photoImageUrl, type Character, type Look, type Photo, type Segment } from "@/lib/api";
+import { type Character, type Look, type Segment } from "@/lib/api";
 import { endCard, type CallEnd } from "@/lib/callEnd";
 import { clock, showTime } from "@/lib/callTime";
-import { giftsHref } from "@/lib/gifts";
 import { lookingUpText } from "@/lib/lookingUp";
-import { photoFailureNote } from "@/lib/photoFailure";
 import type { OwnService } from "@/lib/localOwnKeys";
 import { settingsHref } from "@/lib/settingsCategory";
 import {
@@ -39,14 +35,11 @@ import { cn } from "@/lib/utils";
 import {
   CloseIcon,
   CollapseIcon,
-  GiftIcon,
   HangUpIcon,
   MicIcon,
   MicOffIcon,
   MicSwitchIcon,
   PhoneIcon,
-  PhotoFailedIcon,
-  PhotoIcon,
   SendIcon,
   TextOnlyIcon,
   TypingIcon,
@@ -54,7 +47,6 @@ import {
 import { Ja } from "@/theme/Ja";
 
 import { CueArrowIcon } from "./AffinityBadge";
-import { PhotoViewer } from "./PhotoViewer";
 import { useCallTime } from "./useCallTime";
 import { useProducerTimezone } from "./useProducerTimezone";
 
@@ -88,8 +80,6 @@ type Props = {
   typed: string | null;
   /** 输入框里的字，和对话页的输入栏是同一份。 */
   draft: string;
-  /** 这通电话里她最近发来的照片，生成中、发出来了或者没发出来；还没有时为 null。 */
-  photo: Photo | null;
   /** 刚刚一个回合让她的好感度有了变化，约 2.6 秒；状态行这时写这句话。 */
   affinityCue: AffinityCue | null;
   onCollapse: () => void;
@@ -106,10 +96,6 @@ type Props = {
   onDismiss: () => void;
   /** 结束页上「去设置自带密钥」。 */
   onOwnKeys: () => void;
-  /** 礼物开放着（好感度可用）：她因为冷却挂断时，结束卡的主按钮是「送她一件礼物」。 */
-  giftsOpen: boolean;
-  /** 结束页上「送她一件礼物」。 */
-  onGift: () => void;
   /** 这个部署的免限额密钥：超限的结束卡点名它们；账号还没读到时为 null。 */
   exemptingKeys: readonly OwnService[] | null;
 };
@@ -163,7 +149,6 @@ export function LiveCallLayer({
       typing={snapshot.typing}
       typed={snapshot.typed}
       draft={snapshot.draft}
-      photo={snapshot.callPhoto}
       affinityCue={snapshot.affinityCue}
       onCollapse={() => live.collapse()}
       onHangUp={() => void live.hangUp()}
@@ -178,9 +163,6 @@ export function LiveCallLayer({
       onRedial={() => void live.startCall()}
       onDismiss={() => live.dismissEnd()}
       onOwnKeys={() => leave(settingsHref("own-keys"))}
-      // 好感度和礼物同一个开关：读得到好感度就是开放着。
-      giftsOpen={snapshot.affinity !== null}
-      onGift={() => leave(giftsHref(live.characterId))}
       exemptingKeys={exemptingKeys}
     />
   );
@@ -192,7 +174,6 @@ export function LiveCallLayer({
  *
  * 底是她的头像放大模糊，上面压一层到 call.deep 的渐变。中部是 112px 头像、名字和状态行。
  * 台词放在底部的毛玻璃卡里，再下面是毛玻璃底栏；结束后台词卡换成同样毛玻璃的结束卡。
- * 她在这通电话里发来照片时，台词卡上方出一张小卡（电脑）或一颗胶囊（手机），结束卡上不带。
  * 底栏的打字键把底栏换成输入栏，打出去的话她照常用声音回（GLOSSARY.md「打断」「补充」）。
  */
 export function CallLayer(props: Props) {
@@ -302,9 +283,6 @@ export function CallLayer(props: Props) {
               {props.micNotice && t.micNotices[props.micNotice]}
             </p>
             {/* 台词卡在接通前不出现 */}
-            {call.phase === "connected" && props.photo && (
-              <CallPhoto key={props.photo.id} photo={props.photo} isFullScreen={isFullScreen} />
-            )}
             {call.phase === "connected" && <LineCard {...props} />}
           </>
         )}
@@ -438,102 +416,21 @@ function LineCard({ character, line, previousLine, hearing, lookingUp, typed, te
   );
 }
 
-/**
- * 她在通话里发来的照片，放在台词卡上方，不挡她的脸（DESIGN.md「Call layer」的「照片」）。有了下一张就换成下一张。
- * - 电脑：一张毛玻璃小卡，里面是 128px 宽的照片，点开放大；生成中是同样大小的占位加转圈和「正在拍照…」，
- *   没发出来时写「照片没发出来 · {原因}」。
- * - 手机：一颗毛玻璃胶囊。生成中转圈加「正在拍照…」，到了是相机图标加「发来一张照片 · 点开看」、点了放大，
- *   没发出来同电脑。
- */
-function CallPhoto({ photo, isFullScreen }: { photo: Photo; isFullScreen: boolean }) {
-  const [viewing, setViewing] = useState(false);
-  const failedNote = photo.status === "failed" && t.photo.failed(photoFailureNote(photo.reason).reason);
-  if (isFullScreen || failedNote) {
-    const content =
-      photo.status === "pending" ? (
-        <>
-          <Spinner className="size-4" />
-          {t.photo.taking}
-        </>
-      ) : photo.status === "ready" ? (
-        <>
-          <PhotoIcon aria-hidden className="size-4" />
-          {t.photo.sent}
-        </>
-      ) : (
-        <>
-          <PhotoFailedIcon aria-hidden className="size-4" />
-          {failedNote}
-        </>
-      );
-    const pill = "flex items-center gap-2 rounded-full bg-white/12 px-4 py-2 text-sm backdrop-blur-md";
-    return (
-      <div role="status" className="flex justify-center">
-        {photo.status === "ready" ? (
-          <>
-            <button
-              type="button"
-              onClick={() => setViewing(true)}
-              className={cn(pill, "outline-none focus-visible:ring-3 focus-visible:ring-white/60")}
-            >
-              {content}
-            </button>
-            <PhotoViewer id={photo.id} open={viewing} onOpenChange={setViewing} />
-          </>
-        ) : (
-          <p className={pill}>{content}</p>
-        )}
-      </div>
-    );
-  }
-  return (
-    <div role="status" className="rounded-2xl bg-white/12 p-1.5 backdrop-blur-md">
-      {photo.status === "pending" ? (
-        <div className="flex aspect-[832/1216] w-32 flex-col items-center justify-center gap-2 rounded-xl bg-white/8 text-meta text-white/80">
-          <Spinner className="size-4" />
-          {t.photo.taking}
-        </div>
-      ) : (
-        <>
-          <button
-            type="button"
-            aria-label={t.photo.open}
-            onClick={() => setViewing(true)}
-            className="block w-32 overflow-hidden rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-white/60"
-          >
-            <img
-              src={photoImageUrl(photo.id)}
-              alt={copy.conversation.photo.sent}
-              width={832}
-              height={1216}
-              className="aspect-[832/1216] w-full object-cover"
-            />
-          </button>
-          <PhotoViewer id={photo.id} open={viewing} onOpenChange={setViewing} />
-        </>
-      )}
-    </div>
-  );
-}
-
 /** 结束卡：原因、后端多说的话、说明、是否计入限额，以及「回到对话」和主操作（重拨、「去设置自带密钥」，
- * 或者她因为冷却挂断时的「送她一件礼物」；礼物没开放时冷却版没有主操作）。 */
+ * 她因为冷却挂断时没有主操作）。 */
 function Ended({
   character,
   end,
-  giftsOpen,
   exemptingKeys,
   onRedial,
   onDismiss,
   onOwnKeys,
-  onGift,
 }: Props & { end: CallEnd }) {
   const timeZone = useProducerTimezone();
-  const card = endCard(end, { name: character.name, now: new Date(), timeZone, giftsOpen, exemptingKeys });
+  const card = endCard(end, { name: character.name, now: new Date(), timeZone, exemptingKeys });
   const main = card.action && {
     redial: { onClick: onRedial, label: t.redial, Icon: PhoneIcon },
     own_keys: { onClick: onOwnKeys, label: t.toOwnKeys, Icon: null },
-    gift: { onClick: onGift, label: copy.gifts.giveHer, Icon: GiftIcon },
   }[card.action];
   return (
     <div

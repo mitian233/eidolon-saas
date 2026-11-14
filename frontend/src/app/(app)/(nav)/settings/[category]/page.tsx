@@ -9,7 +9,7 @@ export function generateStaticParams() {
 }
 
 /** 设置一类的二级页面（`/settings/<类别>`）。 */
-export default async function SettingsCategoryRoute({ params }: PageProps<"/settings/[category]">) {
+export default async function SettingsCategoryRoute({ params }: { params: Promise<{ category: string }> }) {
   const { category } = await params;
   return <SettingsCategoryPage category={category as SettingsCategory} />;
 }

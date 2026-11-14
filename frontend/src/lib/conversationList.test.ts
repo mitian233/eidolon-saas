@@ -20,16 +20,9 @@ describe("previewOf", () => {
       latest({ role: "character", text: null, ja: "ほわっ", zh: "哇", created_at: "2026-09-28T02:00:00Z" }),
     );
 
-    expect(preview).toEqual({ from: "her", text: "哇", at: "2026-09-28T02:00:00Z", photo: false });
+    expect(preview).toEqual({ from: "her", text: "哇", at: "2026-09-28T02:00:00Z" });
   });
 
-  it("她最后那条回复带着发出来了的照片时，最后一句前面加相机，后面照旧是她的话", () => {
-    const preview = previewOf(
-      latest({ role: "character", text: null, ja: "どうぞ", zh: "给", created_at: "2026-09-28T02:00:00Z", photo: true }),
-    );
-
-    expect(preview).toEqual({ from: "her", text: "给", at: "2026-09-28T02:00:00Z", photo: true });
-  });
 
   it("没有字幕时退回她的日语原文", () => {
     const preview = previewOf(

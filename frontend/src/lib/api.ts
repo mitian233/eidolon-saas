@@ -2,8 +2,6 @@ import type { AffinityChange, AffinityStatus } from "@/lib/affinity";
 import type { Provider } from "@/lib/signIn";
 import {
   forgetOwnKeys,
-  readAloudModel,
-  readAloudOwnKeys,
   turnOwnKeys,
   type BailianRegion,
   type FishAudioModel,
@@ -16,13 +14,16 @@ import {
 } from "@/lib/localOwnKeys";
 import type { LLMOffer, LLMProvider } from "@/lib/llmProviders";
 import type { EffortHint } from "@/lib/reasoningEffort";
-import type { Letter, LetterSummary } from "@/lib/letter";
-import type { Rewarded } from "@/lib/rewards";
 import { detectTimezone } from "@/lib/timezone";
 import type { Speaking } from "@/lib/call";
-import type { Said } from "@/lib/readAloud";
-import type { Emotion, Nod } from "@/lib/standAnimations";
 import type { Stats, StatsRange } from "@/lib/stats";
+
+/** How she feels in a segment (GLOSSARY.md「情绪」), as the backend judges it
+ * (`emotion.Emotion`). */
+export type Emotion = "calm" | "happy" | "shy" | "surprised" | "sad" | "angry" | "thinking";
+
+/** Whether she nods (`yes`) or shakes her head (`no`) (`emotion.Nod`). */
+export type Nod = "yes" | "no";
 
 export type Character = {
   id: string;
@@ -54,11 +55,10 @@ export type Conversation = {
 };
 
 /** The last thing in a conversation as a list shows it, a message (without delivery cues),
- * marked `photo` when it is her reply with a photo she sent (not one being generated or not sent
- * after all), or her reach-out, shown as her reply is, marked `reach_out`; or a conversation event
+ * her reach-out, shown as her reply is, marked `reach_out`; or a conversation event
  * other than her ending it; null while it has none. */
 export type LastMessage =
-  | (Pick<Message, "role" | "text" | "ja" | "zh" | "created_at"> & { photo?: true; reach_out?: true })
+  | (Pick<Message, "role" | "text" | "ja" | "zh" | "created_at"> & { reach_out?: true })
   | Pick<ConversationEvent, "type" | "kind" | "created_at" | "gift_name" | "first_day" | "days_ago">
   | null;
 
@@ -94,25 +94,7 @@ export type Message = {
   created_at: string;
   /** How the turn changed her affinity, on her reply; null where it did not (and always on the user's). */
   affinity: AffinityChange | null;
-  /** The photo she sent with her reply (GLOSSARY.md「照片」); none on a reply without one. */
-  photo?: Photo;
 };
-
-/** How a photo she sent is coming along: being generated, sent, or not sent after all, and why not. */
-export type PhotoStatus = { status: "pending" | "ready" | "failed"; reason: string | null };
-
-/** A photo she sent with a reply. */
-export type Photo = PhotoStatus & { id: string };
-
-/** Where the picture of a photo she sent is read, once it is sent: only by the user it was sent to. */
-export function photoImageUrl(id: string): string {
-  return `/api/photos/${encodeURIComponent(id)}/image`;
-}
-
-/** How the photo is coming along now, for waiting on one being generated. */
-export async function getPhoto(id: string): Promise<PhotoStatus> {
-  return json(await api(`/api/photos/${encodeURIComponent(id)}`));
-}
 
 /** The kinds of conversation event (GLOSSARY.md「对话事件」): she hung up on the user; the user
  * gave her a gift; she ended the conversation, which can then only be read (GLOSSARY.md「已结束的对话」);
@@ -135,43 +117,25 @@ export type ConversationEvent = {
   days_ago?: number;
 };
 
-/** What she said first in a conversation, the user not talking to her (GLOSSARY.md「搭话」): neither a
- * turn nor an event, said as she replies, without delivery cues. */
-export type ReachOut = {
-  type: "reach_out";
-  id: number;
-  ja: string;
-  zh: string;
-  segments: Segment[];
-  created_at: string;
-};
-
 /** What a conversation's record holds, in order. */
-export type Recorded = Message | ConversationEvent | ReachOut;
+export type Recorded = Message | ConversationEvent;
 
-/** What she looks up in a turn (GLOSSARY.md「查看」): the weather, her schedule, or the story, recalled. */
-export type Look = "weather" | "schedule" | "story";
+/** What she looks up in a turn (GLOSSARY.md「查看」): the story, recalled. */
+export type Look = "story";
 
-/** A turn's events: `user`, then `photo` if she sends one (its id, before her first words), any
- * `delta`s, `looking-up` among them or before them as she looks something up (what, each once, in
- * the order she looks it up; not recorded), then `photos-used-up` if the user asked for a photo with this hour's used up (when they
- * may ask again, ISO), and `done`, or `error`. `done` says too where the turn left her affinity, null
- * while affinity is off, her ending the conversation after it, recorded after her reply, if she
- * did, what the turn was rewarded with (lib/rewards), null if nothing, and her being unwell,
- * recorded before the user's words, if it was. */
+/** A turn's events: `user`, then any `delta`s, `looking-up` among them or before them as she
+ * looks the story up (what, each once, in the order she looks it up; not recorded), then `done`,
+ * or `error`. `done` says too where the turn left her affinity, null while affinity is off, and
+ * her ending the conversation after it, recorded after her reply, if she did. */
 export type TurnEvent =
   | { type: "user"; text: string }
-  | { type: "photo"; id: string; status: "pending" }
   | { type: "delta"; segment: number; lang: "ja" | "zh" | "text"; text: string }
   | { type: "looking-up"; what: Look[] }
-  | { type: "photos-used-up"; retry_at: string }
   | {
       type: "done";
       message: Message;
       affinity: AffinityStatus | null;
       ended?: ConversationEvent | null;
-      rewarded?: Rewarded | null;
-      unwell?: ConversationEvent | null;
     }
   | { type: "error"; message: string };
 
@@ -223,9 +187,8 @@ export type Memory = {
  * limit. She hanging up, it gives the event that she did, just recorded in the conversation,
  * and for a cooldown when it ends. */
 export type CallEvent =
-  | Exclude<TurnEvent, { type: "user" | "photo" }>
+  | Exclude<TurnEvent, { type: "user" }>
   | CallUserEvent
-  | CallPhotoEvent
   | SegmentPlaying
   | SegmentEmotion
   | Speaking
@@ -242,13 +205,6 @@ export type CallEvent =
  * it opens, numbered from 1 (a turn replied to afresh opens again, with the next number). */
 type CallUserEvent = Extract<TurnEvent, { type: "user" }> & { reply: number };
 
-/** A photo she sends in reply `reply` of the call (GLOSSARY.md「照片」): `pending` as her tag closes,
- * before her first words, as in a typed turn; then, if it comes out while the call is on, once
- * more saying how. One that comes out after the call is over is told of no more: the record has it. */
-export type CallPhotoEvent =
-  | (Extract<TurnEvent, { type: "photo" }> & { reply: number })
-  | { type: "photo"; reply: number; id: string; status: "ready" | "failed"; reason: string | null };
-
 /** Her voice has started playing segment `segment` of reply `reply`, replies being numbered
  * from 1 within the call. Sent as the segment's first audio goes out, so it arrives a little
  * before it is heard; a segment cut off before it is voiced gets none. */
@@ -263,7 +219,7 @@ export type SegmentEmotion = {
   reply: number;
   segment: number;
   emotion: Emotion;
-  nod: Nod["kind"] | null;
+  nod: Nod | null;
 };
 
 /** Why the backend hung up (`EndReason` in `call_outcome.py`). */
@@ -468,42 +424,6 @@ export async function getAccount(): Promise<Account> {
   return json(await api("/api/account"));
 }
 
-/** Turn the user's own switch for reach-outs on or off, for all the characters; refused where the
- * deployer has them off. */
-export async function switchReachOuts(on: boolean): Promise<void> {
-  await expectNoContent(
-    await api("/api/account/reach-outs", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ on }),
-    }),
-  );
-}
-
-/** Turn the user's own switch for moments on or off, for all the characters; refused where the
- * deployer has them off. */
-export async function switchMoments(on: boolean): Promise<void> {
-  await expectNoContent(
-    await api("/api/account/moments", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ on }),
-    }),
-  );
-}
-
-/** Turn the user's own switch for cycles on or off, for all the characters; refused where the deployer
- * has them off. */
-export async function switchCycles(on: boolean): Promise<void> {
-  await expectNoContent(
-    await api("/api/account/cycles", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ on }),
-    }),
-  );
-}
-
 /** Stop signing in with the identity at `provider`; refused for the last one. */
 export async function unlinkSignInMethod(provider: Provider): Promise<void> {
   await expectNoContent(await api(`/api/account/sign-in-methods/${provider}`, { method: "DELETE" }));
@@ -651,107 +571,6 @@ export async function devLogin(name: string): Promise<void> {
 export async function logout(userId?: string): Promise<void> {
   await expectNoContent(await api("/api/auth/logout", { method: "POST" }));
   if (userId) forgetOwnKeys(userId);
-}
-
-
-/** Tokyo's weather as a moment came out: one of seven kinds. */
-export type WeatherKind = "clear" | "cloudy" | "overcast" | "fog" | "rain" | "snow" | "thunder";
-
-/** A post of hers in the user's moments (GLOSSARY.md「动态」): her Japanese, its subtitle, when it
- * came out (ISO, with its offset), where she was (GLOSSARY.md「地点」), its Japanese name with a
- * link to it on the map the deployer chooses, null for nowhere, and Tokyo's weather then, its kind
- * and temperature in whole degrees Celsius, null if it could not be had; the other idols who have
- * liked it so far, by character id, in the order they did, and their comments so far, in order.
- * Those yet to show are not there. `image` is where its picture is read (GLOSSARY.md「配图」), the
- * user's alone, null for none. `producer_liked`: whether the user likes it now; `producer_comment`:
- * his comment on it, null for none; `reply`: her reply to that, null until it shows (and for none:
- * which of the two is never told). */
-export type Moment = {
-  id: number;
-  character_id: string;
-  ja: string;
-  zh: string;
-  image: string | null;
-  place: { name: string; map: string } | null;
-  weather: { kind: WeatherKind; temperature: number } | null;
-  posted_at: string;
-  likes: string[];
-  comments: MomentComment[];
-  producer_liked: boolean;
-  producer_comment: ProducerComment | null;
-  reply: { ja: string; zh: string } | null;
-};
-
-/** A comment on a moment by another idol: her Japanese and its subtitle. */
-export type MomentComment = { character_id: string; ja: string; zh: string };
-
-/** The user's comment on a moment: as he wrote it, but for the spaces around it, and when (ISO). */
-export type ProducerComment = { text: string; commented_at: string };
-
-/** How many characters his comment may have at most, but for the spaces around it; the backend says
- * so too (422). */
-export const COMMENT_LENGTH = 140;
-
-/** Likes one of his moments, or no longer, however he did. Gone (another's, or over 30 days old): 404. */
-export async function likeMoment(id: number, liked: boolean): Promise<void> {
-  await expectNoContent(await api(`/api/moments/${id}/like`, { method: liked ? "PUT" : "DELETE" }));
-}
-
-/** Comments on one of his moments, once (409 again): what is kept of it. */
-export async function commentOnMoment(id: number, text: string): Promise<ProducerComment> {
-  return json(
-    await api(`/api/moments/${id}/comment`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text }),
-    }),
-  );
-}
-
-/** Deletes his comment on one of his moments, her reply to it with it. */
-export async function deleteMomentComment(id: number): Promise<void> {
-  await expectNoContent(await api(`/api/moments/${id}/comment`, { method: "DELETE" }));
-}
-
-/** The user's moments of the last 30 days that have come out, newest first, all at once. Refused while
- * the deployer or the user has moments off (409). */
-export async function getMoments(): Promise<Moment[]> {
-  const body: { moments: Moment[] } = await json(await api("/api/moments"));
-  return body.moments;
-}
-
-/** The user's letters (GLOSSARY.md「信」), the latest first. */
-export async function listLetters(): Promise<LetterSummary[]> {
-  const body: { letters: LetterSummary[] } = await json(await api("/api/letters"));
-  return body.letters;
-}
-
-/** One of the user's letters, to read. */
-export async function getLetter(id: number): Promise<Letter> {
-  return json(await api(`/api/letters/${id}`));
-}
-
-/** Has the letter read, on every device. */
-export async function markLetterRead(id: number): Promise<void> {
-  const res = await api(`/api/letters/${id}/read`, { method: "PUT" });
-  if (!res.ok) await json(res);
-}
-
-/** Has the letter popped up, on every device, so it does not again. */
-export async function markLetterPopped(id: number): Promise<void> {
-  await expectNoContent(await api(`/api/letters/${id}/popped`, { method: "PUT" }));
-}
-
-/** Deletes the letter, and her voice reading it, for good. */
-export async function deleteLetter(id: number): Promise<void> {
-  await expectNoContent(await api(`/api/letters/${id}`, { method: "DELETE" }));
-}
-
-/** Whether a moment, or her reply to the user's comment, has come out since they last read the
- * timeline (`getMoments`), on any device. Refused while the deployer or the user has moments off (409). */
-export async function getMomentsUnseen(): Promise<boolean> {
-  const body: { unseen: boolean } = await json(await api("/api/moments/unseen"));
-  return body.unseen;
 }
 
 
@@ -908,33 +727,15 @@ export async function getCallSetup(conversationId: string, own: readonly OwnServ
 
 /**
  * Sends one text turn, bringing the user's own LLM (as `own_keys`) if this browser keeps one for
- * them, and the model of their own key for speech synthesis, without the key, for her to write her
- * delivery cues as it reads them (`read_aloud_model`, GLOSSARY.md「朗读」); and yields the reply's
- * server-sent events as they arrive.
+ * them; and yields the reply's server-sent events as they arrive.
  */
 export async function* sendTurn(conversationId: string, text: string, userId: string): AsyncGenerator<TurnEvent> {
   const res = await api(`/api/conversations/${conversationId}/turns`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text, own_keys: turnOwnKeys(userId), read_aloud_model: readAloudModel(userId) }),
+    body: JSON.stringify({ text, own_keys: turnOwnKeys(userId) }),
   });
   yield* serverSentEvents<TurnEvent>(res);
-}
-
-/**
- * Her line read aloud (GLOSSARY.md「朗读」), as mp3, on the user's own key for speech synthesis if this
- * browser keeps one for them (as `own_keys`), else on the deployer's. Throws as `json` does when it is
- * not: a failure on the user's own key has the code `own_key`.
- */
-export async function readAloud(said: Said, userId: string): Promise<ArrayBuffer> {
-  const line = said.kind === "reply" ? `messages/${said.id}` : `reach-outs/${said.id}`;
-  const res = await api(`/api/conversations/${said.conversationId}/${line}/read-aloud`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ own_keys: readAloudOwnKeys(userId) }),
-  });
-  if (!res.ok) await json(res);
-  return res.arrayBuffer();
 }
 
 /** The server-sent events of a response, each as it arrives; a refusal thrown as `json` throws it. */

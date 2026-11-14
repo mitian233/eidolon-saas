@@ -2,7 +2,7 @@
 // the same turn events whether the turn is typed or spoken in a call.
 
 import type { AffinityChange } from "@/lib/affinity";
-import type { ConversationEvent, Photo, PhotoStatus, Recorded, Segment, TurnEvent } from "@/lib/api";
+import type { ConversationEvent, Recorded, Segment, TurnEvent } from "@/lib/api";
 import { type EventShown, unwellOf } from "@/lib/conversationEvents";
 
 /** One message or conversation event shown, or her reach-out, shown as her reply is but marked
@@ -10,9 +10,7 @@ import { type EventShown, unwellOf } from "@/lib/conversationEvents";
  * under way, when the user sent or said the words, which the reply shares until it is recorded.
  * Her reply keeps how the turn changed her affinity, once recorded, and a gift record how the
  * gift did; null where it did not. A gift record keeps the gift's name too, and her being unwell
- * since when (`EventShown`). Her reply keeps the photo she sent with it (GLOSSARY.md「照片」), null
- * if none; and, in a turn the user asked for a photo with this hour's used up, when they may ask
- * again (ISO), which is never recorded. */
+ * since when (`EventShown`). */
 export type Entry =
   | { kind: "user"; key: string; text: string; at: string }
   | ({ kind: "event"; key: string; at: string; affinity: AffinityChange | null } & EventShown)
@@ -23,9 +21,6 @@ export type Entry =
       pending: boolean;
       at: string;
       affinity: AffinityChange | null;
-      photo: Photo | null;
-      photosUsedUp?: string;
-      reachOut?: true;
     };
 
 /** The exchange under way: the user's words and the reply, both the last entries shown.
@@ -46,9 +41,7 @@ export type LogAction =
    * the text turn's event stream closed early. */
   | { type: "interrupted" }
   /** Something that is not a turn happened, just recorded: she hung up. */
-  | { type: "event"; event: ConversationEvent }
-  /** A photo being generated was asked how it is coming along. */
-  | { type: "photo-status"; id: string; status: PhotoStatus };
+  | { type: "event"; event: ConversationEvent };
 
 export const emptyLog: ConversationLog = { entries: [], turn: null };
 
@@ -63,57 +56,25 @@ export function conversationLog(log: ConversationLog, action: LogAction): Conver
         return { ...log, turn: { ...log.turn, confirmed: true } };
       }
       return opened(withoutTurn(log), action.text, action.at, true);
-    case "photo": {
-      const turn = log.turn;
-      if (!turn) return log;
-      const photo = { id: action.id, status: action.status, reason: null };
-      return { ...log, entries: replaced(log.entries, turn.replyKey, (e) => withPhoto(e, photo)) };
-    }
     case "delta": {
       const turn = log.turn;
       if (!turn) return log;
       return { ...log, entries: replaced(log.entries, turn.replyKey, (e) => withDelta(e, action)) };
     }
-    case "photos-used-up": {
-      const turn = log.turn;
-      if (!turn) return log;
-      const usedUp = (e: Entry): Entry => (e.kind === "character" ? { ...e, photosUsedUp: action.retry_at } : e);
-      return { ...log, entries: replaced(log.entries, turn.replyKey, usedUp) };
-    }
     case "done": {
       const turn = log.turn;
       if (!turn) return log;
       const reply = toEntry(action.message);
-      // A photo already asked about may have come out by now: it stays as it came out. The photos
-      // used up stay told of, as they are not recorded.
-      const entries = replaced(log.entries, turn.replyKey, (e) =>
-        withUsedUp(withPhoto(reply, settledOf(e, reply)), e),
-      );
-      // She ended the conversation after her reply: that comes after it. Her being unwell was
-      // recorded before the user's words: it comes before them.
-      const before = action.unwell ? toEntry(action.unwell) : null;
-      const shown = before ? entries.flatMap((e) => (e.key === turn.userKey ? [before, e] : [e])) : entries;
-      return { entries: action.ended ? [...shown, toEntry(action.ended)] : shown, turn: null };
+      const entries = replaced(log.entries, turn.replyKey, () => reply);
+      // She ended the conversation after her reply: that comes after it.
+      return { entries: action.ended ? [...entries, toEntry(action.ended)] : entries, turn: null };
     }
     case "error":
     case "interrupted":
       return withoutTurn(log);
     case "event":
       return { ...log, entries: [...log.entries, toEntry(action.event)] };
-    case "photo-status": {
-      if (action.status.status === "pending") return log;
-      const photo = { id: action.id, ...action.status };
-      const entries = log.entries.map((e) =>
-        e.kind === "character" && e.photo?.id === action.id && e.photo.status === "pending" ? withPhoto(e, photo) : e,
-      );
-      return { ...log, entries };
-    }
   }
-}
-
-/** The photos in the log still being generated, to ask how they are coming along. */
-export function pendingPhotos(log: ConversationLog): string[] {
-  return log.entries.flatMap((e) => (e.kind === "character" && e.photo?.status === "pending" ? [e.photo.id] : []));
 }
 
 /** The segments of her reply in the turn under way, as far as they have arrived; none if no turn
@@ -134,7 +95,7 @@ function opened(log: ConversationLog, text: string, at: string, confirmed: boole
     entries: [
       ...log.entries,
       { kind: "user", key: turn.userKey, text, at },
-      { kind: "character", key: turn.replyKey, segments: [], pending: true, at, affinity: null, photo: null },
+      { kind: "character", key: turn.replyKey, segments: [], pending: true, at, affinity: null },
     ],
     turn,
   };
@@ -152,24 +113,6 @@ function replaced(entries: Entry[], key: string, update: (entry: Entry) => Entry
   return entries.map((entry) => (entry.key === key ? update(entry) : entry));
 }
 
-function withPhoto(entry: Entry, photo: Photo | null): Entry {
-  return entry.kind === "character" ? { ...entry, photo } : entry;
-}
-
-/** The reply as recorded, with the photos used up as the one shown was told of, if it was. */
-function withUsedUp(recorded: Entry, shown: Entry): Entry {
-  return recorded.kind === "character" && shown.kind === "character" && shown.photosUsedUp
-    ? { ...recorded, photosUsedUp: shown.photosUsedUp }
-    : recorded;
-}
-
-/** The photo of the reply as recorded, unless the one shown is that photo, come out already. */
-function settledOf(shown: Entry, recorded: Entry): Photo | null {
-  const photo = recorded.kind === "character" ? recorded.photo : null;
-  const before = shown.kind === "character" ? shown.photo : null;
-  return before && photo && before.id === photo.id && before.status !== "pending" ? before : photo;
-}
-
 function withDelta(entry: Entry, event: TurnEvent & { type: "delta" }): Entry {
   if (entry.kind !== "character") return entry;
   const segments = [...entry.segments];
@@ -181,18 +124,6 @@ function withDelta(entry: Entry, event: TurnEvent & { type: "delta" }): Entry {
 }
 
 function toEntry(message: Recorded): Entry {
-  if ("type" in message && message.type === "reach_out") {
-    return {
-      kind: "character",
-      key: `r${message.id}`,
-      segments: message.segments,
-      pending: false,
-      at: message.created_at,
-      affinity: null,
-      photo: null,
-      reachOut: true,
-    };
-  }
   if ("type" in message) {
     return {
       kind: "event",
@@ -213,6 +144,5 @@ function toEntry(message: Recorded): Entry {
         pending: false,
         at: message.created_at,
         affinity: message.affinity,
-        photo: message.photo ?? null,
       };
 }

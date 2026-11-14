@@ -7,15 +7,12 @@ import {
   type ConversationEvent,
   type LatestConversation,
   type Message,
-  type PhotoStatus,
-  type ReachOut,
   type Recorded,
   type TurnEvent,
 } from "@/lib/api";
 import type { Call, CallHandlers, MicInUse } from "@/lib/call";
 import type { CallPreferences } from "@/lib/callPreferences";
 import { LiveConversation, type Ports } from "@/lib/liveConversation";
-import type { Rewarded } from "@/lib/rewards";
 import { CALM } from "@/lib/standAnimations";
 
 /** A call that has connected: records what the conversation asks of it. */
@@ -110,8 +107,6 @@ function opening(options: Options = {}) {
   /** Which conversation each call and text turn went to. */
   const sentTo: string[] = [];
   let listChanged = 0;
-  /** What each turn recorded was rewarded with, as the shell is told. */
-  const rewarded: Rewarded[] = [];
   /** What each reading of the preferences gave. */
   const loaded: CallPreferences[] = [];
   let stored: CallPreferences = {
@@ -132,9 +127,7 @@ function opening(options: Options = {}) {
     },
     listMessages: async (conversationId) => (conversationId === "c1" ? (options.messages ?? []) : []),
     getAffinity: async () => options.affinity ?? null,
-    getPhoto: async () => ({ status: "pending", reason: null }),
     onListChanged: () => listChanged++,
-    onRewarded: (r) => rewarded.push(r),
     startCall: (conversationId, preferences, handlers) => {
       sentTo.push(conversationId);
       // 麦克风一拨就打开；要看它打开之前的，测试自己换掉这个 port。
@@ -172,7 +165,6 @@ function opening(options: Options = {}) {
     preferences: () => stored,
     published: () => published,
     listChanged: () => listChanged,
-    rewarded,
   };
 }
 
@@ -1594,7 +1586,6 @@ describe("LiveConversation: typing", () => {
       pending: false,
       at: "2026-09-27T00:00:00Z",
       affinity: null,
-      photo: null,
     });
   });
 
@@ -1734,222 +1725,6 @@ describe("LiveConversation: typing", () => {
 
     expect(finished).toBe(true);
     expect(published()).toBe(before);
-  });
-});
-
-describe("LiveConversation: photos", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  const photoOf = (live: LiveConversation, key: string) => {
-    const entry = live.snapshot().entries.find((e) => e.key === key);
-    return entry?.kind === "character" ? entry.photo : undefined;
-  };
-
-  it("asks after a photo sent in a text turn every 2s until it comes out, then no more", async () => {
-    vi.useFakeTimers();
-    const asked: string[] = [];
-    const answers: PhotoStatus[] = [
-      { status: "pending", reason: null },
-      { status: "ready", reason: null },
-    ];
-    const opened = opening({
-      turns: scripted([
-        { type: "user", text: "发张自拍" },
-        { type: "photo", id: "p1", status: "pending" },
-        { type: "delta", segment: 0, lang: "ja", text: "はい" },
-        {
-          type: "done",
-          message: { ...message(4, "character", "はい"), photo: { id: "p1", status: "pending", reason: null } },
-          affinity: null,
-        },
-      ]),
-      ports: {
-        getPhoto: async (id) => {
-          asked.push(id);
-          return answers.shift() ?? { status: "ready", reason: null };
-        },
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    const { live } = opened;
-
-    live.setDraft("发张自拍");
-    await live.submit();
-    await vi.advanceTimersByTimeAsync(1999);
-    const notYet = [...asked];
-    await vi.advanceTimersByTimeAsync(1);
-    const stillPending = photoOf(live, "m4");
-    await vi.advanceTimersByTimeAsync(2000);
-    const out = photoOf(live, "m4");
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(notYet).toEqual([]);
-    expect(stillPending).toEqual({ id: "p1", status: "pending", reason: null });
-    expect(out).toEqual({ id: "p1", status: "ready", reason: null });
-    expect(asked).toEqual(["p1", "p1"]);
-  });
-
-  it("asks after one still being generated as the conversation opens, again if it cannot be asked", async () => {
-    vi.useFakeTimers();
-    const answers: (PhotoStatus | Error)[] = [new Error("offline"), { status: "failed", reason: "timeout" }];
-    const opened = opening({
-      messages: [
-        message(1, "user", "发张自拍"),
-        { ...message(2, "character", "はい"), photo: { id: "p1", status: "pending", reason: null } },
-      ],
-      ports: {
-        getPhoto: async () => {
-          const answer = answers.shift();
-          if (!answer || answer instanceof Error) throw answer ?? new Error("asked once too often");
-          return answer;
-        },
-      },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    await vi.advanceTimersByTimeAsync(2000);
-    const afterFailing = photoOf(opened.live, "m2");
-    await vi.advanceTimersByTimeAsync(2000);
-
-    expect(afterFailing).toEqual({ id: "p1", status: "pending", reason: null });
-    expect(photoOf(opened.live, "m2")).toEqual({ id: "p1", status: "failed", reason: "timeout" });
-    expect(answers).toEqual([]);
-  });
-});
-
-describe("LiveConversation: photos in a call", () => {
-  const pending = { id: "p1", status: "pending", reason: null } as const;
-
-  /** A call in "c1", connected; `emit` sends the call under way events. */
-  async function inCall() {
-    const opened = await conversation({ messages: history });
-    await connected(opened.live, opened.attempts);
-    const emit = (...events: CallEvent[]) =>
-      events.forEach((event) => opened.attempts.at(-1)!.handlers.onEvent(event));
-    return { ...opened, emit };
-  }
-
-  /** The user's words taken up, then her reply 1 with a photo begun and recorded. */
-  const withPhoto: CallEvent[] = [
-    { type: "user", text: "拍一张给我看", reply: 1 },
-    { type: "photo", reply: 1, id: "p1", status: "pending" },
-    { type: "delta", segment: 0, lang: "ja", text: "はい" },
-    { type: "done", message: { ...message(4, "character", "はい"), photo: pending }, affinity: null },
-  ];
-  const ready: CallEvent = { type: "photo", reply: 1, id: "p1", status: "ready", reason: null };
-
-  const reply = (live: LiveConversation) => live.snapshot().entries.find((e) => e.key === "m4");
-
-  it("shows the photo on the call layer and in the log as it is generated and as it comes out", async () => {
-    const { live, emit } = await inCall();
-
-    emit(...withPhoto);
-    const generating = live.snapshot().callPhoto;
-    emit(ready);
-
-    expect(generating).toEqual(pending);
-    expect(live.snapshot().callPhoto).toEqual({ id: "p1", status: "ready", reason: null });
-    expect(reply(live)).toMatchObject({ photo: { id: "p1", status: "ready" } });
-    // Out with the call layer unfolded: the user saw it come.
-    expect(live.snapshot().newPhoto).toBe(false);
-  });
-
-  it("tells why one was not sent", async () => {
-    const { live, emit } = await inCall();
-
-    emit(...withPhoto, { type: "photo", reply: 1, id: "p1", status: "failed", reason: "timeout" });
-
-    expect(live.snapshot().callPhoto).toEqual({ id: "p1", status: "failed", reason: "timeout" });
-  });
-
-  it("shows the next photo in the call in place of the last", async () => {
-    const { live, emit } = await inCall();
-    emit(...withPhoto, ready);
-
-    emit(
-      { type: "user", text: "再来一张", reply: 2 },
-      { type: "photo", reply: 2, id: "p2", status: "pending" },
-    );
-
-    expect(live.snapshot().callPhoto).toEqual({ id: "p2", status: "pending", reason: null });
-  });
-
-  it("has the call bar tell of a photo out while the layer is folded away, until it is unfolded", async () => {
-    const { live, emit } = await inCall();
-    emit(...withPhoto);
-    live.collapse();
-
-    emit(ready);
-    const folded = live.snapshot().newPhoto;
-    live.expand();
-
-    expect(folded).toBe(true);
-    expect(live.snapshot().newPhoto).toBe(false);
-  });
-
-  it("has it seen once her conversation page is open", async () => {
-    const { live, emit } = await inCall();
-    emit(...withPhoto);
-    live.collapse();
-    emit(ready);
-
-    live.photoSeen();
-
-    expect(live.snapshot()).toMatchObject({ newPhoto: false, layer: { collapsed: true } });
-  });
-
-  it("tells of none not sent while the layer is folded away", async () => {
-    const { live, emit } = await inCall();
-    emit(...withPhoto);
-    live.collapse();
-
-    emit({ type: "photo", reply: 1, id: "p1", status: "failed", reason: "service_error" });
-
-    expect(live.snapshot().newPhoto).toBe(false);
-  });
-
-  it("carries no photo on the end card, the one out after the call shown in the log as asked after", async () => {
-    vi.useFakeTimers();
-    try {
-      const opened = opening({
-        messages: history,
-        ports: { getPhoto: async () => ({ status: "ready", reason: null }) },
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      const { live, attempts } = opened;
-      const calling = live.startCall();
-      attempts[0].connect(new FakeCall());
-      await calling;
-      withPhoto.forEach((event) => attempts[0].handlers.onEvent(event));
-      const hungUp = { type: "event", id: 7, kind: "hung_up", created_at: "2026-10-13T03:00:00Z", affinity: null } as const;
-      attempts[0].handlers.onEvent({ type: "ended", reason: "she_hung_up", message: "她挂断了电话。", counts: true, event: hungUp });
-      attempts[0].handlers.onDropped();
-
-      const ended = live.snapshot();
-      await vi.advanceTimersByTimeAsync(2000);
-
-      expect(ended).toMatchObject({ call: { phase: "ended" }, callPhoto: null });
-      expect(reply(live)).toMatchObject({ photo: { id: "p1", status: "ready" } });
-      expect(live.snapshot().newPhoto).toBe(false);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("has the photos used up told after her reply in the log", async () => {
-    const { live, emit } = await inCall();
-
-    emit(
-      { type: "user", text: "拍一张给我看", reply: 1 },
-      { type: "delta", segment: 0, lang: "ja", text: "また後でね" },
-      { type: "photos-used-up", retry_at: "2026-09-27T01:00:00Z" },
-      { type: "done", message: message(4, "character", "また後でね"), affinity: null },
-    );
-
-    expect(reply(live)).toMatchObject({ photo: null, photosUsedUp: "2026-09-27T01:00:00Z" });
-    expect(live.snapshot().callPhoto).toBeNull();
   });
 });
 
@@ -2258,130 +2033,6 @@ describe("LiveConversation: the list", () => {
   });
 });
 
-describe("LiveConversation: rewards", () => {
-  const tenthTurn: Rewarded = {
-    draws: 1,
-    reset_cards: 0,
-    achievements: [{ achievement: "turns", character_id: "hikari", stage: 1, draws: 1 }],
-    completed: [],
-    rewarded_at: "2026-10-20T08:00:00+00:00",
-  };
-
-  it("tells the shell what a text turn was rewarded with, and nothing for one rewarded with nothing", async () => {
-    const turns = [
-      scripted([
-        { type: "user", text: "你好" },
-        { type: "done", message: message(4, "character", "こんにちは"), affinity: null, rewarded: tenthTurn },
-      ]),
-      scripted([
-        { type: "user", text: "再见" },
-        { type: "done", message: message(6, "character", "またね"), affinity: null, rewarded: null },
-      ]),
-    ];
-    const { live, rewarded } = await conversation({ turns: () => turns.shift()!() });
-    live.setDraft("你好");
-    await live.submit();
-    const once = [...rewarded];
-
-    live.setDraft("再见");
-    await live.submit();
-
-    expect(once).toEqual([tenthTurn]);
-    expect(rewarded).toEqual([tenthTurn]);
-  });
-
-  it("tells the shell what a turn in a call was rewarded with", async () => {
-    const { live, attempts, rewarded } = await conversation();
-    await connected(live, attempts);
-    const { handlers } = attempts[0];
-
-    handlers.onEvent({ type: "user", text: "你好", reply: 1 });
-    handlers.onEvent({ type: "done", message: message(4, "character", "こんにちは"), affinity: null, rewarded: tenthTurn });
-
-    expect(rewarded).toEqual([tenthTurn]);
-  });
-});
-
-describe("LiveConversation: the trophy", () => {
-  const at = "2026-10-20T08:00:00+00:00";
-  const unlocked = (...achievements: Rewarded["achievements"]): Rewarded => ({
-    draws: achievements.reduce((n, a) => n + a.draws, 0),
-    reset_cards: 0,
-    achievements,
-    completed: [],
-    rewarded_at: at,
-  });
-  const hers = { achievement: "turns", character_id: "hikari", stage: 2, draws: 2 };
-  const done = (rewarded: Rewarded): Extract<TurnEvent, { type: "done" }> => ({
-    type: "done",
-    message: message(4, "character", "こんにちは"),
-    affinity: null,
-    rewarded,
-  });
-  const turn = (rewarded: Rewarded) => scripted([{ type: "user", text: "你好" }, done(rewarded)]);
-
-  it("pops up with the draws her stages gave as a turn unlocks them, for 3s", async () => {
-    vi.useFakeTimers();
-    const together = { achievement: "characters", character_id: null, stage: 1, draws: 1 };
-    const opened = opening({
-      turns: turn(unlocked(hers, { achievement: "gifts", character_id: "hikari", stage: 1, draws: 1 }, together)),
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    const { live } = opened;
-
-    live.setDraft("你好");
-    await live.submit();
-    const shown = live.snapshot();
-    vi.advanceTimersByTime(2999);
-    const stillShown = live.snapshot().trophy;
-    vi.advanceTimersByTime(1);
-
-    expect(shown).toMatchObject({ trophy: { draws: 3, key: 1 }, herUnlockedAt: at });
-    expect(stillShown).not.toBeNull();
-    expect(live.snapshot()).toMatchObject({ trophy: null, herUnlockedAt: at });
-    vi.useRealTimers();
-  });
-
-  it("is not for another character's stages, nor those of all together", async () => {
-    const { live } = await conversation({
-      turns: turn(
-        unlocked(
-          { achievement: "turns", character_id: "mano", stage: 1, draws: 1 },
-          { achievement: "days", character_id: null, stage: 1, draws: 1 },
-        ),
-      ),
-    });
-
-    live.setDraft("你好");
-    await live.submit();
-
-    expect(live.snapshot()).toMatchObject({ trophy: null, herUnlockedAt: null });
-  });
-
-  it("does not pop up under the call layer, only leaving her stages unseen", async () => {
-    const { live, attempts } = await conversation();
-    await connected(live, attempts);
-    const { handlers } = attempts[0];
-
-    handlers.onEvent({ type: "user", text: "你好", reply: 1 });
-    handlers.onEvent(done(unlocked(hers)));
-
-    expect(live.snapshot()).toMatchObject({ trophy: null, herUnlockedAt: at });
-  });
-
-  it("pops up for a turn in a call with the call layer folded away", async () => {
-    const { live, attempts } = await conversation();
-    await connected(live, attempts);
-    live.collapse();
-    const { handlers } = attempts[0];
-
-    handlers.onEvent({ type: "user", text: "你好", reply: 1 });
-    handlers.onEvent(done(unlocked(hers)));
-
-    expect(live.snapshot().trophy).toEqual({ draws: 2, key: 1 });
-  });
-});
-
 describe("LiveConversation: times", () => {
   it("dates the user's words when they are sent and the reply when the backend recorded it", async () => {
     const { live } = await conversation({
@@ -2619,19 +2270,12 @@ describe("LiveConversation: the stand", () => {
 });
 
 describe("LiveConversation: what the list shows newer", () => {
-  const reachOut: ReachOut = {
-    type: "reach_out",
-    id: 7,
-    ja: "レッスン終わったよ",
-    zh: "练习结束了哦",
-    segments: [{ ja: "レッスン終わったよ", zh: "练习结束了哦" }],
-    created_at: "2026-09-27T05:00:00Z",
-  };
+  const newerReply = message(7, "character", "レッスン終わったよ", "2026-09-27T05:00:00Z");
 
-  /** The list's line for her: her conversation `id`, its last line said at `at`, a reach-out. */
+  /** The list's line for her: her conversation `id`, its last reply said at `at`. */
   function listedAs(at: string, id = "c1"): LatestConversation {
-    const last = { role: "character" as const, text: null, ja: "", zh: "", created_at: at, reach_out: true as const };
-    return { character_id: "hikari", conversation_id: id, created_at: "2026-09-27T00:00:00Z", last_message: last, unseen_reach_out: true, unread_letter: false };
+    const last = { role: "character" as const, text: null, ja: "", zh: "", created_at: at };
+    return { character_id: "hikari", conversation_id: id, created_at: "2026-09-27T00:00:00Z", last_message: last, unseen_reach_out: false, unread_letter: false };
   }
 
   /** Her conversation, its record in the backend `now()` as it is then, each reading counted. */
@@ -2653,15 +2297,15 @@ describe("LiveConversation: what the list shows newer", () => {
 
   const keys = (live: LiveConversation) => live.snapshot().entries.map((e) => e.key);
 
-  it("reads her conversation again when the list shows something newer in it, a reach-out she just made", async () => {
+  it("reads her conversation again when the list shows a newer reply in it", async () => {
     const { live, reads, recordNow } = await reading();
-    recordNow([...history, reachOut]);
+    recordNow([...history, newerReply]);
 
-    live.listed(listedAs(reachOut.created_at));
+    live.listed(listedAs(newerReply.created_at));
     await settled();
 
     expect(reads).toEqual(["c1", "c1"]);
-    expect(keys(live)).toEqual(["m1", "m2", "r7"]);
+    expect(keys(live)).toEqual(["m1", "m2", "m7"]);
   });
 
   it("does not read it again when the list shows nothing newer, or another conversation of hers", async () => {
@@ -2684,30 +2328,30 @@ describe("LiveConversation: what the list shows newer", () => {
         yield { type: "done", message: reply, affinity: null };
       },
     });
-    recordNow([...history, reachOut]);
+    recordNow([...history, newerReply]);
     live.setDraft("你好");
     const sending = live.submit();
     await settled();
 
-    live.listed(listedAs(reachOut.created_at));
+    live.listed(listedAs(newerReply.created_at));
     await settled();
     expect(reads).toEqual(["c1"]);
 
-    recordNow([...history, reachOut, message(8, "user", "你好", "2026-09-27T06:00:00Z"), reply]);
+    recordNow([...history, newerReply, message(8, "user", "你好", "2026-09-27T06:00:00Z"), reply]);
     answer();
     await sending;
     await settled();
 
     expect(reads).toEqual(["c1", "c1"]);
-    expect(keys(live)).toEqual(["m1", "m2", "r7", "m8", "m9"]);
+    expect(keys(live)).toEqual(["m1", "m2", "m7", "m8", "m9"]);
   });
 
   it("puts it off through a call, reading once it is over", async () => {
     const { live, attempts, reads, recordNow } = await reading();
     await connected(live, attempts);
-    recordNow([...history, reachOut]);
+    recordNow([...history, newerReply]);
 
-    live.listed(listedAs(reachOut.created_at));
+    live.listed(listedAs(newerReply.created_at));
     await settled();
     expect(reads).toEqual(["c1"]);
 
@@ -2715,7 +2359,7 @@ describe("LiveConversation: what the list shows newer", () => {
     await settled();
 
     expect(reads).toEqual(["c1", "c1"]);
-    expect(keys(live)).toEqual(["m1", "m2", "r7"]);
+    expect(keys(live)).toEqual(["m1", "m2", "m7"]);
   });
 
   it("does not show a reading that comes back once a text turn has begun, reading again once it is over", async () => {
@@ -2738,8 +2382,8 @@ describe("LiveConversation: what the list shows newer", () => {
         yield { type: "error", message: "角色暂时无法回复" };
       },
     });
-    record = [...history, reachOut];
-    live.listed(listedAs(reachOut.created_at));
+    record = [...history, newerReply];
+    live.listed(listedAs(newerReply.created_at));
     live.setDraft("你好");
     const sending = live.submit();
     await settled();
@@ -2753,19 +2397,19 @@ describe("LiveConversation: what the list shows newer", () => {
     await settled();
 
     expect(reads).toEqual(["c1", "c1", "c1"]);
-    expect(keys(live)).toEqual(["m1", "m2", "r7"]);
+    expect(keys(live)).toEqual(["m1", "m2", "m7"]);
   });
 
   it("does not read it once the page is left, nor one put off through a call", async () => {
     const left = await reading();
     left.live.dispose();
-    left.live.listed(listedAs(reachOut.created_at));
+    left.live.listed(listedAs(newerReply.created_at));
     await settled();
     expect(left.reads).toEqual(["c1"]);
 
     const calling = await reading();
     await connected(calling.live, calling.attempts);
-    calling.live.listed(listedAs(reachOut.created_at));
+    calling.live.listed(listedAs(newerReply.created_at));
     calling.live.dispose();
     await settled();
     expect(calling.reads).toEqual(["c1"]);
@@ -2774,7 +2418,7 @@ describe("LiveConversation: what the list shows newer", () => {
   it("does not read one put off through a call once the page is left, the call going on in the shell", async () => {
     const { live, attempts, reads } = await reading();
     await connected(live, attempts);
-    live.listed(listedAs(reachOut.created_at));
+    live.listed(listedAs(newerReply.created_at));
 
     live.offScreen();
     attempts[0].handlers.onEvent({ type: "ended", reason: "duration_limit", message: "满 30 分钟了", counts: true });
@@ -2787,7 +2431,7 @@ describe("LiveConversation: what the list shows newer", () => {
 });
 
 describe("LiveConversation: what she looks up", () => {
-  // GLOSSARY.md「查看」：她在回合里看天气、翻日程、回忆剧情时，界面上告诉用户她在看什么，她再开口时就没了。
+  // 回忆资料时显示提示，角色继续回复、回合结束或通话结束时清除。
 
   /** A text turn that streams `before`, waits at the gate, then streams `after`. */
   function gated(before: TurnEvent[], after: TurnEvent[]) {
@@ -2800,15 +2444,15 @@ describe("LiveConversation: what she looks up", () => {
     return { turns, open };
   }
 
-  const done: TurnEvent = { type: "done", message: message(4, "character", "晴れだよ"), affinity: null };
+  const done: TurnEvent = { type: "done", message: message(4, "character", "あの時は"), affinity: null };
 
   it("typing, shows what she looks up until her next words", async () => {
     const { turns, open } = gated(
-      [{ type: "user", text: "天气怎么样" }, { type: "looking-up", what: ["weather", "schedule"] }],
-      [{ type: "delta", segment: 0, lang: "ja", text: "晴れ" }, done],
+      [{ type: "user", text: "那次演出" }, { type: "looking-up", what: ["story"] }],
+      [{ type: "delta", segment: 0, lang: "ja", text: "あの時は" }, done],
     );
     const { live } = await conversation({ messages: history, turns });
-    live.setDraft("天气怎么样");
+    live.setDraft("那次演出");
 
     const submitting = live.submit();
     await settled();
@@ -2816,7 +2460,7 @@ describe("LiveConversation: what she looks up", () => {
     open();
     await submitting;
 
-    expect(looking.lookingUp).toEqual(["weather", "schedule"]);
+    expect(looking.lookingUp).toEqual(["story"]);
     expect(looking.entries.map((e) => e.kind)).toEqual(["user", "character", "user", "character"]);
     expect(live.snapshot().lookingUp).toBeNull();
   });
@@ -2828,9 +2472,9 @@ describe("LiveConversation: what she looks up", () => {
     ] as [string, TurnEvent[]][]) {
       const { live } = await conversation({
         messages: history,
-        turns: scripted([{ type: "user", text: "天气怎么样" }, { type: "looking-up", what: ["weather"] }, ...end]),
+        turns: scripted([{ type: "user", text: "那次演出" }, { type: "looking-up", what: ["story"] }, ...end]),
       });
-      live.setDraft("天气怎么样");
+      live.setDraft("那次演出");
 
       await live.submit();
 
@@ -2850,11 +2494,11 @@ describe("LiveConversation: what she looks up", () => {
     emit({ type: "delta", segment: 0, lang: "ja", text: "あの時は" });
     expect(lookingUp()).toBeNull();
 
-    emit({ type: "looking-up", what: ["schedule"] });
+    emit({ type: "looking-up", what: ["story"] });
     emit({ type: "done", message: message(4, "character", "あの時は"), affinity: null });
     expect(lookingUp()).toBeNull();
 
-    emit({ type: "user", text: "明天呢", reply: 2 }, { type: "looking-up", what: ["schedule"] });
+    emit({ type: "user", text: "后来呢", reply: 2 }, { type: "looking-up", what: ["story"] });
     await opened.live.hangUp();
     expect(lookingUp()).toBeNull();
     expect(call.hangUps).toBe(1);

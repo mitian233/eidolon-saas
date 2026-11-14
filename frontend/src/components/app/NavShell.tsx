@@ -49,7 +49,6 @@ export function NavShell({ children }: { children: ReactNode }) {
               ref={focus.note}
               call={call.state}
               name={character.name}
-              newPhoto={snapshot.newPhoto}
               onExpand={() => held.expand()}
             />
           </div>

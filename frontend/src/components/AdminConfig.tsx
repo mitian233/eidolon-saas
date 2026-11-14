@@ -11,7 +11,6 @@ import { FailureNotice } from "@/components/app/FailureNotice";
 import { OpenFormProvider, useOpenForm } from "@/components/admin/OpenForm";
 import { AdminInvites } from "@/components/admin/AdminInvites";
 import { AdminSponsor } from "@/components/admin/AdminSponsor";
-import { ResetCardGrants } from "@/components/admin/ResetCardGrants";
 import { useSubmitCheck } from "@/components/admin/useSubmitCheck";
 import { AdminPrices } from "@/components/AdminPrices";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -111,9 +110,7 @@ export function AdminConfig({ initialTab }: { initialTab: ConfigTab }) {
             {CONFIG_TABS.map((name) => (
               <TabsContent key={name} value={name} keepMounted className="flex flex-col gap-6">
                 {TAB_ITEMS[name].map((item) => (
-                  <ItemCard key={item} name={item} config={config} onChange={setConfig}>
-                    {item === "affinity" && <ResetCardGrants isOn={isOn(config.affinity)} />}
-                  </ItemCard>
+                  <ItemCard key={item} name={item} config={config} onChange={setConfig} />
                 ))}
                 {name === "registration" && <AdminInvites />}
                 {name === "sponsor" && <AdminSponsor />}
@@ -158,11 +155,6 @@ function TabSelect({ tab, config, onChoose }: { tab: ConfigTab; config: Config; 
       </SelectContent>
     </Select>
   );
-}
-
-/** 好感度和礼物现在是否开着：配了判断模型，开关生效的值是打开。 */
-function isOn(item: Config["affinity"]): boolean {
-  return isAvailable(item) && item.effective.enabled === true;
 }
 
 /** 卡片的标题：标题本身是 h2（读屏可以按标题在卡之间跳），旁边可以跟一个状态 Badge。 */

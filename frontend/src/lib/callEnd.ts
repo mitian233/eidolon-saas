@@ -54,39 +54,37 @@ export function backendEnd(event: Extract<CallEvent, { type: "ended" }>): CallEn
 }
 
 /** What the end card says, and the main button beside「回到对话」: redial, go and fill in
- * own keys, go and give her a gift, or none. */
+ * own keys, or none. */
 export type EndCard = {
   title: string;
   detail: string | null;
   body: string | null;
   counts: boolean;
-  action: "redial" | "own_keys" | "gift" | null;
+  action: "redial" | "own_keys" | null;
 };
 
 /** Where the end card is shown: her `name`; `now` and the producer's `timeZone`, for when a
- * cooldown ends; whether gifts are open (`giftsOpen`); and the deployment's exempting keys
- * (`exemptingKeys`, from the account), null while not known. */
+ * cooldown ends; and the deployment's exempting keys (`exemptingKeys`, from the account), null
+ * while not known. */
 export type EndCardContext = {
   name: string;
   now: Date;
   timeZone: string;
-  giftsOpen: boolean;
   exemptingKeys: readonly OwnService[] | null;
 };
 
 /** The end card of a call that ended so. She hanging up, it says only that she did, and for a
  * cooldown when it ends, written as the cooldown's input bar writes it: a cooldown offers no
- * redial, there being no calling her till then, but a gift, which thaws her sooner, if gifts
- * are open. Over the limit, it names the keys a call must bring to count towards none, and
- * offers the own keys. */
-export function endCard(end: CallEnd, { name, now, timeZone, giftsOpen, exemptingKeys }: EndCardContext): EndCard {
+ * redial, there being no calling her till then. Over the limit, it names the keys a call must
+ * bring to count towards none, and offers the own keys. */
+export function endCard(end: CallEnd, { name, now, timeZone, exemptingKeys }: EndCardContext): EndCard {
   const t = copy.call;
   const { detail, counts } = end;
   if (end.reason === "she_hung_up" || end.reason === "cooldown") {
     const cooling = end.reason === "cooldown";
     const until = cooling && end.cooldownUntil ? untilText(new Date(end.cooldownUntil), now, timeZone) : null;
     const body = until ? t.hungUpCooling(until) : null;
-    return { title: t.hungUp(name), detail, body, counts, action: !cooling ? "redial" : giftsOpen ? "gift" : null };
+    return { title: t.hungUp(name), detail, body, counts, action: cooling ? null : "redial" };
   }
   if (end.reason === "over_limit") {
     const { title, body } = t.endings.over_limit;

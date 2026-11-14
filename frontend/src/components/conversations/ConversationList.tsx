@@ -50,6 +50,7 @@ export function ConversationList({ selectedId }: { selectedId: string | null }) 
       <header className="flex shrink-0 items-center gap-2 pt-3 pr-2 pb-2 pl-4">
         <h1 className="flex-1 text-list-title">{t.title}</h1>
         <ServiceStatusButton />
+
         <Announcements userId={account?.id ?? null} />
       </header>
 

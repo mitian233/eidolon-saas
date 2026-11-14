@@ -9,18 +9,15 @@ import { SettingsValuesProvider, useSettingsValues } from "@/components/settings
 import { SponsorRow } from "@/components/settings/SponsorRow";
 import { Separator } from "@/components/ui/separator";
 import { copy } from "@/i18n";
-import { settingsCategory, settingsGroups, settingsHref, settingsSwitches, shownCategory } from "@/lib/settingsCategory";
+import { SETTINGS_GROUPS, settingsCategory, settingsHref, shownCategory } from "@/lib/settingsCategory";
 import { cn } from "@/lib/utils";
 import {
   AboutIcon,
-  CyclesIcon,
   DataPackageIcon,
   MemoriesIcon,
-  MomentsIcon,
   OwnKeysIcon,
   PhoneIcon,
   ProfileIcon,
-  ReachOutsIcon,
   SignInIcon,
   StatsIcon,
 } from "@/theme/icons";
@@ -32,9 +29,6 @@ const ICONS = {
   memories: MemoriesIcon,
   stats: StatsIcon,
   call: PhoneIcon,
-  "reach-outs": ReachOutsIcon,
-  moments: MomentsIcon,
-  cycles: CyclesIcon,
   "own-keys": OwnKeysIcon,
   "sign-in": SignInIcon,
   "data-package": DataPackageIcon,
@@ -80,7 +74,7 @@ function SettingsLevels({ children }: { children: ReactNode }) {
           <h1 className="text-list-title">{t.title}</h1>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-          {settingsGroups(settingsSwitches(account)).map((group, i) => (
+          {SETTINGS_GROUPS.map((group, i) => (
             <Fragment key={group[0]}>
               {i > 0 && <Separator className="my-1" />}
               <ul>

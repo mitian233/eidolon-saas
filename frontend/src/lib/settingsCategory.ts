@@ -3,23 +3,18 @@
 // is a category's page, the second level, with nothing below it. A refresh or a shared link opens
 // the same category. The old addresses (`/settings?tab=…`, `/memories`) are sent to the new paths,
 // and settings addresses we do not know to `/settings`. Each row of the first level shows the
-// category's current value under its name (「设置：一级」). 「搭话」 is there only where the deployer
-// has reach-outs on (.scratch/proactive-messages spec「前端」), 「朋友圈」 only where the deployer has
-// moments on (.scratch/moments spec「前端」), 「周期」 only where the deployer has cycles on
-// (.scratch/cycle-her spec「开关」); the address of any of them elsewhere goes back to `/settings`
-// from its page, as the server cannot tell the account from the address.
+// category's current value under its name (「设置：一级」).
 
 import { copy } from "@/i18n";
-import type { Account } from "@/lib/api";
 import type { CallPreferences } from "@/lib/callPreferences";
 import { OWN_SERVICES, type OwnService } from "@/lib/localOwnKeys";
 import { sameDraft, type Draft } from "@/lib/producerProfile";
 import { PROVIDER_LABELS, type Provider } from "@/lib/signIn";
 
 /** The first level's groups, top to bottom, with a separator between each two. */
-const SETTINGS_GROUPS = [
+export const SETTINGS_GROUPS = [
   ["profile", "memories", "stats"],
-  ["call", "reach-outs", "moments", "cycles", "own-keys"],
+  ["call", "own-keys"],
   ["sign-in", "data-package"],
   ["about"],
 ] as const;
@@ -29,34 +24,6 @@ export const SETTINGS_CATEGORIES = SETTINGS_GROUPS.flat();
 export type SettingsCategory = (typeof SETTINGS_CATEGORIES)[number];
 
 const ROOT = "/settings";
-
-/** The user's own switches the account says: each null where the deployer has it off, or the account
- * not read yet. */
-export type SettingsSwitches = { reachOuts: boolean | null; moments: boolean | null; cycles: boolean | null };
-
-/** The switches `account` says; all null before it is read. */
-export function settingsSwitches(account: Account | null): SettingsSwitches {
-  return {
-    reachOuts: account?.reach_outs ?? null,
-    moments: account?.moments ?? null,
-    cycles: account?.cycles ?? null,
-  };
-}
-
-/** The categories there only where the deployer has them on, each with its switch, whose value is
- * also its summary. */
-const SWITCHED = [
-  ["reach-outs", "reachOuts"],
-  ["moments", "moments"],
-  ["cycles", "cycles"],
-] as const satisfies readonly (readonly [SettingsCategory, keyof SettingsSwitches])[];
-
-/** The first level's groups for an account with `switches`: without a category whose switch is null. */
-export function settingsGroups(switches: SettingsSwitches): SettingsCategory[][] {
-  return SETTINGS_GROUPS.map((group) =>
-    group.filter((category) => SWITCHED.every(([switched, key]) => switched !== category || switches[key] !== null)),
-  );
-}
 
 function isCategory(name: string | null | undefined): name is SettingsCategory {
   return SETTINGS_CATEGORIES.some((known) => known === name);
@@ -100,7 +67,7 @@ export function settingsRedirect(href: string): string | null {
 export type ProfileEdit = { saved: Draft; draft: Draft };
 
 /** What the first level's summaries are made of; null for what has not been read yet. */
-export type SettingsValues = SettingsSwitches & {
+export type SettingsValues = {
   profile: ProfileEdit | null;
   /** The time zone this device reports, which an automatic profile time zone means. */
   detectedTimezone: string;
@@ -129,10 +96,6 @@ export function settingsSummaries(values: SettingsValues): Partial<Record<Settin
   if (memoryCount !== null) summaries.memories = memoryCount === 0 ? t.noMemories : t.memories(memoryCount);
   if (daysKnown !== null) summaries.stats = t.daysKnown(daysKnown);
   if (call) summaries.call = `${copy.settings.call.qualities[call.quality]} · ${call.phoneTexture ? t.phoneTextureOn : t.phoneTextureOff}`;
-  for (const [category, key] of SWITCHED) {
-    const on = values[key];
-    if (on !== null) summaries[category] = on ? t.switchOn : t.switchOff;
-  }
   if (ownServices) {
     const owned = OWN_SERVICES.filter((service) => ownServices.includes(service));
     summaries["own-keys"] =

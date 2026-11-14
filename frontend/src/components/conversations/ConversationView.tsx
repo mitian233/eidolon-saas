@@ -1,9 +1,7 @@
 "use client";
 
-import NextLink from "next/link";
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -35,33 +33,26 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { copy } from "@/i18n";
 import { cueText, untilText } from "@/lib/affinity";
 import type { Character, Look } from "@/lib/api";
 import { eventText } from "@/lib/conversationEvents";
 import type { Entry } from "@/lib/conversationLog";
 import type { Failure } from "@/lib/failure";
-import { giftsHref } from "@/lib/gifts";
-import { isLive, NOT_OPEN, type LiveConversation, type Trophy } from "@/lib/liveConversation";
+import { isLive, NOT_OPEN, type LiveConversation } from "@/lib/liveConversation";
 import { lookingUpText } from "@/lib/lookingUp";
 import { linesOf, type Line } from "@/lib/messageLines";
 import { pastDay } from "@/lib/pastConversations";
-import { photosUsedUpText } from "@/lib/photoFailure";
-import { saidOf, type ReadAloud, type Said } from "@/lib/readAloud";
 import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
 import {
-  AchievementsIcon,
   BackIcon,
   CooldownIcon,
   EndedIcon,
-  GiftIcon,
   MoreIcon,
   NewConversationIcon,
   PastConversationsIcon,
   PhoneIcon,
-  PhotosUsedUpIcon,
   SendIcon,
 } from "@/theme/icons";
 import { Ja } from "@/theme/Ja";
@@ -71,13 +62,10 @@ import { CallBar } from "./CallBar";
 import { EVENT_ICONS } from "./EventIcon";
 import { LiveCallLayer } from "./CallLayer";
 import { PastConversations } from "./PastConversations";
-import { PhotoBlock } from "./PhotoBlock";
-import { ReadAloudBar, ReadAloudMenu } from "./ReadAloud";
 import { useDirectory, useWide } from "./ConversationDirectory";
 import { useFocusBack } from "./useFocusBack";
 import { usePastConversation, type Viewing } from "./usePastConversation";
 import { useProducerTimezone } from "./useProducerTimezone";
-import { readAloudFor, useCanReadAloud } from "./useReadAloud";
 
 const t = copy.conversation;
 
@@ -116,9 +104,8 @@ export function ConversationView({
   character: Character;
   onBack?: () => void;
 }) {
-  const { open, close, go, guard, account, showPast } = useDirectory();
+  const { open, close, go, account, showPast } = useDirectory();
   const isFullScreen = !useWide();
-  const isReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)", false);
   const [live, setLive] = useState<LiveConversation | null>(null);
   const snapshot = useSyncExternalStore(live?.subscribe ?? noSubscription, live?.snapshot ?? notOpen, notOpen);
   const { conversation, entries, call, layer, hearing, lookingUp, draft, failure } = snapshot;
@@ -126,7 +113,7 @@ export function ConversationView({
   const { viewing, view, backToCurrent } = usePastConversation(character.id);
   const subtree = useRef<HTMLDivElement>(null);
   // 她现在对制作人的好感度；读不到（好感度关着、没配判断模型或请求失败）就不显示标识，也不出变化胶囊。
-  const { affinity, affinityCue, cooling, ended, trophy } = snapshot;
+  const { affinity, affinityCue, cooling, ended } = snapshot;
   // 解除时刻按制作人的时区写成今天或明天。
   const timeZone = useProducerTimezone();
 
@@ -144,14 +131,7 @@ export function ConversationView({
     showPast(isPastShown);
   }, [isPastShown, showPast]);
 
-  // 收起时到的照片就在这页的对话记录里：外壳顶上通话条的「新照片」到这里就算看过了。
-  useEffect(() => {
-    if (snapshot.newPhoto) live?.photoSeen();
-  }, [snapshot.newPhoto, live]);
-
   const isOpen = conversation.status === "open";
-  // 送礼入口去的礼物子页：只带她，礼物一律记进当前对话（历史对话里点的也一样）。
-  const gifts = giftsHref(character.id);
   // 在历史对话里开新对话：先回到当前对话。
   const startNew = () => {
     if (viewing) backToCurrent();
@@ -160,22 +140,6 @@ export function ConversationView({
   const inCall = isLive(call);
   // 要在这次点击里同步调用：她的声音趁这一下唤醒 AudioContext。
   const dial = () => void live?.startCall();
-
-  // 朗读她的话：通话一开始（这一页上拨的，或者别处拨的）、离开这一页时，正在放的停下。
-  const readAloud = useMemo(() => readAloudFor(userId), [userId]);
-  const canReadAloud = useCanReadAloud(userId, account);
-  useEffect(() => {
-    if (inCall) readAloud.stop();
-  }, [inCall, readAloud]);
-  useEffect(() => () => readAloud.stop(), [readAloud]);
-  const reading = (conversationId: string): Reading => ({
-    readAloud,
-    conversationId,
-    canRead: canReadAloud,
-    inCall,
-    timeZone,
-    subtree,
-  });
 
   // 通话层展开时盖住整栏：底下的页首和对话不能再被 Tab 或屏幕阅读器摸到。快照里的 layer
   // 已经管着「画哪一通、收没收起」；通话条只在通话中、通话层收着时出现。
@@ -229,18 +193,12 @@ export function ConversationView({
         )}
       </div>
       {phoneKey}
-      {trophy && <TrophyCue key={trophy.key} trophy={trophy} isReducedMotion={isReducedMotion} />}
-      {/* 礼貌的 live region 一直在，奖杯出现时读「成就，抽奖 +n」；按 key 换节点，同样的 n 再来一次也读 */}
-      <span role="status" className="sr-only">
-        {trophy && <span key={trophy.key}>{copy.achievements.trophy(trophy.draws)}</span>}
-      </span>
       {affinity && (
         <AffinityBadge
           status={affinity}
           cue={affinityCue}
           name={character.name}
           timeZone={timeZone}
-          gifts={gifts}
           subtree={subtree}
         />
       )}
@@ -300,35 +258,27 @@ export function ConversationView({
   const cooldownUntil = cooling ? affinity?.cooldown_until : null;
   // 冷却中的解除时刻和去礼物子页的「送她一件礼物」：冷却那一行和冷却版结束卡共用。
   const until = cooldownUntil ? untilText(new Date(cooldownUntil), new Date(), timeZone) : null;
-  const giveHer = (
-    <Button variant="outline" size="lg" nativeButton={false} render={<NextLink href={gifts} onClick={guard(gifts)} />}>
-      <GiftIcon data-icon="inline-start" />
-      {copy.gifts.giveHer}
-    </Button>
-  );
   const composer = viewing ? (
     <ReadOnlyCard viewing={viewing} inert={isCovered} onBackToCurrent={backToCurrent} />
   ) : ended ? (
     // 已结束：结束卡代替输入框，右边「开个新对话」走更多菜单里的「新对话」，正在开时不可用。
-    // 冷却中再写上解除时刻，「开个新对话」前面加「送她一件礼物」；一行放不下时按钮换到下一行、靠右。
+    // 冷却中再写上解除时刻；一行放不下时按钮换到下一行、靠右。
     <ComposerCard
       inert={isCovered}
       icon={EndedIcon}
       text={until ? t.ended.cooling(character.name, until) : t.events.ended(character.name)}
     >
-      {until && giveHer}
       <Button size="lg" disabled={!snapshot.canStartNew} onClick={() => void live?.startNewConversation()}>
         {t.ended.newConversation}
       </Button>
     </ComposerCard>
   ) : until ? (
-    // 冷却中：一行说明代替输入框，右边是去礼物子页的「送她一件礼物」；草稿留着，到点换回输入框时还在。
+    // 冷却中：一行说明代替输入框；草稿留着，到点换回输入框时还在。
     <div inert={isCovered} className="flex min-h-14 shrink-0 items-center gap-3 border-t bg-background px-3 py-2">
       <div role="status" className="flex min-w-0 flex-1 items-center gap-2 text-body text-muted-foreground">
         <CooldownIcon aria-hidden className="size-4 shrink-0" />
         <p>{t.affinity.coolingComposer(character.name, until)}</p>
       </div>
-      {giveHer}
     </div>
   ) : (
     <form
@@ -389,7 +339,6 @@ export function ConversationView({
               character={character}
               affinityOn={affinity !== null}
               timeZone={timeZone}
-              reading={reading(viewing.id)}
             />
           ) : viewing.status === "failed" ? (
             <Empty className="h-full">
@@ -424,7 +373,6 @@ export function ConversationView({
             character={character}
             affinityOn={affinity !== null}
             timeZone={timeZone}
-            reading={conversation.status === "open" ? reading(conversation.id) : null}
           />
         )}
       </div>
@@ -444,7 +392,6 @@ export function ConversationView({
           }
         }}
         onDeleted={(id) => {
-          readAloud.forget(id);
           if (id === viewing?.id) backToCurrent();
         }}
       />
@@ -540,24 +487,6 @@ function ReadOnlyCard({
   );
 }
 
-/**
- * 页首好感度标识左边的奖杯（DESIGN.md「Buttons」）：解锁她的阶段时跳出来，奖杯加「+n」（这次到账的抽奖次数），
- * 弹出、停住、淡出共 3 秒（`animate-trophy`）；减少动态时只淡入淡出。读屏读旁边的 live region，这里藏起来。
- */
-function TrophyCue({ trophy, isReducedMotion }: { trophy: Trophy; isReducedMotion: boolean }) {
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "flex shrink-0 items-center gap-1 px-1 text-sm tabular-nums",
-        isReducedMotion ? "animate-trophy-fade" : "animate-trophy",
-      )}
-    >
-      <AchievementsIcon className="size-4" />+{trophy.draws}
-    </span>
-  );
-}
-
 /** 页首图标键的提示。 */
 function HeaderTip({ label, children }: { label: string; children: ReactElement }) {
   return (
@@ -571,8 +500,7 @@ function HeaderTip({ label, children }: { label: string; children: ReactElement 
 /**
  * 消息区：官方 Message Scroller，打开时停在最底，新消息和她正在说的话跟着往下滚（制作人往上翻时不抢）。
  * 消息从顶部开始排；气泡之间 4px，换人时多 8px。好感度可用时，改变了好感度的回复和送礼记录后面是一行变化胶囊。
- * 这一小时的照片用完时，她推掉的那条回复后面是一行同样的胶囊，几点以后可以再要按制作人的时区（`timeZone`）写。
- * 对话事件占一整行分隔线。她的话能朗读时（`reading`），气泡上有菜单，点过「朗读」的下面是语音条。
+ * 对话事件占一整行分隔线。
  */
 function Messages({
   entries,
@@ -581,7 +509,6 @@ function Messages({
   character,
   affinityOn,
   timeZone,
-  reading,
 }: {
   entries: Entry[];
   hearing: string;
@@ -590,11 +517,8 @@ function Messages({
   character: Character;
   affinityOn: boolean;
   timeZone: string;
-  reading: Reading | null;
 }) {
   const lines = linesOf(entries, new Date(), affinityOn);
-  // 键盘停在她最后一条能朗读的话上（`ReadAloudMenu`）。
-  const tabStop = reading?.canRead ? entries.findLast((e) => herLineIn(reading, e))?.key : undefined;
   return (
     <MessageScrollerProvider autoScroll defaultScrollPosition="end">
       <MessageScroller>
@@ -615,14 +539,6 @@ function Messages({
                     {cueText(line.change, character.name)}
                   </Capsule>
                 </MessageScrollerItem>
-              ) : line.kind === "photos-used-up" ? (
-                <MessageScrollerItem key={line.key} className="mt-2 flex justify-center">
-                  {/* 照片用完的胶囊：不存进库，刷新后就没了 */}
-                  <Capsule>
-                    <PhotosUsedUpIcon aria-hidden className="size-3" />
-                    {photosUsedUpText(line.retryAt, timeZone)}
-                  </Capsule>
-                </MessageScrollerItem>
               ) : line.entry.kind === "event" ? (
                 <MessageScrollerItem key={line.entry.key} messageId={line.entry.key} className="my-3">
                   <EventLine entry={line.entry} name={character.name} />
@@ -633,8 +549,6 @@ function Messages({
                     line={line}
                     entry={line.entry}
                     character={character}
-                    reading={reading}
-                    isTabStop={line.entry.key === tabStop}
                     lookingUp={lookingUp}
                   />
                 </MessageScrollerItem>
@@ -689,45 +603,23 @@ function EventLine({ entry, name }: { entry: Extract<Entry, { kind: "event" }>; 
   );
 }
 
-/** 朗读她的话要用的（GLOSSARY.md「朗读」）：在哪个对话里、能不能点「朗读」、是不是在通话中，次数用完时按哪个时区写时刻，
- * 菜单渲染到的子树。 */
-type Reading = {
-  readAloud: ReadAloud;
-  conversationId: string;
-  canRead: boolean;
-  inCall: boolean;
-  timeZone: string;
-  subtree: RefObject<HTMLDivElement | null>;
-};
-
-/** 这一条是她记下的哪条话（能朗读的）；不是她的话、或者她还在回复中没有记下的，是 null。 */
-function herLineIn(reading: Reading, entry: Entry): Said | null {
-  return entry.kind === "character" && !entry.pending ? saidOf(reading.conversationId, entry.key) : null;
-}
-
 /**
  * 一条消息。制作人的在右，深蓝墨水；她的在左，日语原文在上、中文字幕在下（The Original-Then-Subtitle Rule）。
- * 头像和名字只在一组的第一条，时间只在最后一条的外侧底部。她记下的话能朗读时气泡上有菜单，语音条在气泡下面。
+ * 头像和名字只在一组的第一条，时间只在最后一条的外侧底部。
  */
 function Bubbled({
   line: { first, last },
   entry,
   character,
-  reading,
-  isTabStop,
   lookingUp,
 }: {
   line: Extract<Line, { kind: "entry" }>;
   entry: Exclude<Entry, { kind: "event" }>;
   character: Character;
-  reading: Reading | null;
-  /** 消息区里键盘停在这一条（她最后一条能朗读的话）。 */
-  isTabStop: boolean;
   /** 她在正在进行的回合里查看什么；只写在她还没说完的那条回复里。 */
   lookingUp: Look[] | null;
 }) {
   const time = <time className="shrink-0 pb-0.5 text-meta text-muted-foreground tabular-nums">{clock(entry.at)}</time>;
-  const said = reading && herLineIn(reading, entry);
   if (entry.kind === "user") {
     return (
       <Message align="end">
@@ -751,10 +643,8 @@ function Bubbled({
       )}
       <MessageContent className="gap-1">
         {first && <MessageHeader className="px-1">{character.name}</MessageHeader>}
-        {entry.photo && <PhotoBlock photo={entry.photo} />}
         <div className="flex min-w-0 items-end gap-1.5">
-          <HerBubble said={said} reading={reading} isTabStop={isTabStop}>
-            <Bubble variant="her" joinsPrevious={!first} joinsNext={!last}>
+          <Bubble variant="her" joinsPrevious={!first} joinsNext={!last}>
               <BubbleContent>
                 {entry.segments.length === 0 ? (
                   <div className="flex items-center">
@@ -783,41 +673,11 @@ function Bubbled({
                   </>
                 )}
               </BubbleContent>
-            </Bubble>
-          </HerBubble>
+          </Bubble>
           {last && !entry.pending && time}
         </div>
-        {said && reading && (
-          <ReadAloudBar readAloud={reading.readAloud} said={said} inCall={reading.inCall} timeZone={reading.timeZone} />
-        )}
       </MessageContent>
     </Message>
-  );
-}
-
-/** 她的气泡：她记下的话能朗读时套上「朗读」的菜单，否则原样。 */
-function HerBubble({
-  said,
-  reading,
-  isTabStop,
-  children,
-}: {
-  said: Said | null;
-  reading: Reading | null;
-  isTabStop: boolean;
-  children: ReactElement;
-}) {
-  if (!said || !reading?.canRead) return children;
-  return (
-    <ReadAloudMenu
-      readAloud={reading.readAloud}
-      said={said}
-      inCall={reading.inCall}
-      isTabStop={isTabStop}
-      subtree={reading.subtree}
-    >
-      {children}
-    </ReadAloudMenu>
   );
 }
 

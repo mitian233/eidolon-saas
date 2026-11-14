@@ -8,7 +8,7 @@ import { loadCallPreferences, type CallPreferences } from "@/lib/callPreferences
 import { toFailure, type Failure } from "@/lib/failure";
 import { localOwnKeys, ownServices, subscribeOwnKeys, type OwnService } from "@/lib/localOwnKeys";
 import { toDraft, type Draft } from "@/lib/producerProfile";
-import { settingsSummaries, settingsSwitches, type ProfileEdit, type SettingsCategory } from "@/lib/settingsCategory";
+import { settingsSummaries, type ProfileEdit, type SettingsCategory } from "@/lib/settingsCategory";
 import { detectTimezone } from "@/lib/timezone";
 
 type CurrentSettings = {
@@ -85,7 +85,6 @@ export function SettingsValuesProvider({ children }: { children: ReactNode }) {
         memoryCount,
         daysKnown,
         call,
-        ...settingsSwitches(account),
         ownServices: ownedServices,
         signInMethods: account?.sign_in_methods.map((method) => method.provider) ?? null,
       }),
