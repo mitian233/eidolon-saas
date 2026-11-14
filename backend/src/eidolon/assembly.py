@@ -21,6 +21,7 @@ from eidolon.config import DEFAULT_BAILIAN_STT_MODEL, Settings
 from eidolon.corpus import StoryCorpus
 from eidolon.data_access import Database
 from eidolon.data_package import DataPackages
+from eidolon.documents import Documents
 from eidolon.embedding import Embedder
 from eidolon.engine import ConversationEngine
 from eidolon.her_now import HerNow
@@ -36,7 +37,7 @@ from eidolon.price_catalog import Catalog
 from eidolon.prices import Prices
 from eidolon.proxy import ProxyRoutes, reach as reach_provider
 from eidolon.rerank import Reranker
-from eidolon.retrieval import EmptyDocumentSource, ModelRetrievalJudge, Retrieval, open_reference_sources
+from eidolon.retrieval import ModelRetrievalJudge, Retrieval, open_reference_sources
 from eidolon.service_clients import ProviderClients, ServiceClients
 from eidolon.service_status import ServiceStatus, probes
 from eidolon.sponsor import Sponsor
@@ -77,6 +78,7 @@ class Backend:
     service_status: ServiceStatus
     data_packages: DataPackages
     her_now: HerNow
+    documents: Documents
     corpus: StoryCorpus | None = None
     _closers: list[Closer] = field(default_factory=list, repr=False)
     _tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
@@ -129,6 +131,7 @@ def build(
     store = Store(database)
     characters: dict[str, Character] = {}
     character_repository = CharacterRepository(database, characters)
+    documents = Documents(database)
     if identity_providers is None:
         identity_providers = open_identity_providers(settings.github, settings.google)
         closers.extend(provider.aclose for provider in identity_providers.values())
@@ -174,7 +177,7 @@ def build(
     retrieval = None
     corpus = None
     if embedder is not None:
-        references = open_reference_sources(embedder, EmptyDocumentSource())
+        references = open_reference_sources(embedder, documents.source(embedder))
         retrieval = Retrieval(
             None, references, reranker, lambda: config.rerank_thresholds.references
         )
@@ -182,7 +185,7 @@ def build(
     async def retrieval_for(services: TurnServices, character_id: str) -> Retrieval | None:
         if services.embedder is None:
             return None
-        sources = open_reference_sources(services.embedder, EmptyDocumentSource())
+        sources = open_reference_sources(services.embedder, documents.source(services.embedder))
         judge = (
             ModelRetrievalJudge(services.judge, services.judge_thresholds)
             if services.judge is not None and services.judge_thresholds is not None else None
@@ -235,5 +238,5 @@ def build(
         prices=prices, announcements=announcements, sponsor=sponsor, invites=invites,
         affinities=affinities, backups=backups, service_status=service_status,
         data_packages=DataPackages(database, store, memories, characters, {}, clock),
-        her_now=her_now, corpus=corpus, _closers=closers,
+        her_now=her_now, documents=documents, corpus=corpus, _closers=closers,
     )
