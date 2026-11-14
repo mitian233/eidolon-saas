@@ -435,7 +435,8 @@ def create_app(backend: Backend) -> FastAPI:
             raise HTTPException(400, "请提供自带的向量化密钥")
         try:
             document_id = await backend.documents.import_text(
-                user_id, character_id, body.origin, body.text, embedder
+                user_id, character_id, body.origin, body.text, embedder,
+                brought.embedding.dimensions if brought.embedding else None,
             )
         except EmbeddingError:
             raise HTTPException(502, "向量化失败，文本已保存，请重新导入重试") from None

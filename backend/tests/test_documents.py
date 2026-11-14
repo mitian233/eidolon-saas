@@ -153,3 +153,23 @@ async def test_other_character_can_import_and_search_while_embedding_hangs(datab
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         await db.close()
+
+
+async def test_reimport_embeds_new_dimensions(database_target):
+    class ShortEmbedder(FakeEmbedder):
+        def _vector(self, text):
+            return super()._vector(text)[:2]
+
+    db = Database(database_target)
+    try:
+        user = await Store(db).create_user("Alice")
+        character = await CharacterRepository(db, {}).create(user.id, name="一", sheet="")
+        documents = Documents(db)
+        original = FakeEmbedder("same")
+        shorter = ShortEmbedder("same")
+        doc = await documents.import_text(user.id, character.id, "笔记", "猫", original, 13)
+        assert await documents.import_text(user.id, character.id, "笔记", "猫", shorter, 2) == doc
+        assert shorter.documents == ["猫"]
+        assert await db.read(lambda conn: conn.execute("SELECT COUNT(*) FROM document_vectors").fetchone()[0]) == 2
+    finally:
+        await db.close()

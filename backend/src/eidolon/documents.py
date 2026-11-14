@@ -52,7 +52,7 @@ class Documents:
         return lock
 
     async def import_text(self, owner_id: str, character_id: str, origin: str, text: str,
-                          embedder: Embedder) -> str:
+                          embedder: Embedder, dimensions: int | None = None) -> str:
         """Save a document and embed missing passages; return its stable id.
 
         Raises ValueError if the character is not owned or the text is empty.
@@ -63,7 +63,7 @@ class Documents:
             raise ValueError("文档为空")
         async with self._lock_for(character_id, embedder.model):
             document_id = await self._db.write(_import, owner_id, character_id, origin, text)
-            await self._embed_missing(character_id, embedder)
+            await self._embed_missing(character_id, embedder, dimensions)
             return document_id
 
     async def list(self, owner_id: str, character_id: str) -> list[dict]:
