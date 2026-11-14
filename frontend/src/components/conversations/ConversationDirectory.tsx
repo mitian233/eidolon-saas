@@ -66,6 +66,10 @@ export type Directory = {
   accountChanged: (change: Account | ((account: Account) => Account)) => void;
   /** 还在载入时为 null。 */
   characters: Character[] | null;
+  /** 新建或编辑好一位角色（后端存下后返回的她）：换上，或者加到最后，不重新载入整个目录。 */
+  characterSaved: (character: Character) => void;
+  /** 删掉了一位角色：从目录里拿掉，她的摘要一起拿掉；外壳里持有的正是她的对话，就此结束（后端删除前已经挂断通话）。 */
+  characterDeleted: (characterId: string) => void;
   /** 和每位最新一次对话的摘要；标签页在前台时每分钟重新拉一次。她的对话一读到，她那一行就先在本地记成搭话都看过了。 */
   latest: Record<string, LatestConversation>;
   failure: Failure | null;
@@ -277,6 +281,15 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
     setAccount((current) => (typeof change === "function" ? current && change(current) : change));
   }, []);
 
+  const characterSaved = useCallback((character: Character) => {
+    setConfigured((all) => {
+      if (!all) return all;
+      return all.some((c) => c.id === character.id)
+        ? all.map((c) => (c.id === character.id ? character : c))
+        : [...all, character];
+    });
+  }, []);
+
 
   /** 结束这一份：挂断通话（还在拨号的也算），停下她的声音；留着它画最后一刻。 */
   const end = useCallback((live: LiveConversation) => {
@@ -284,6 +297,22 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
     ended.current.add(live);
     live.dispose();
   }, []);
+
+  const characterDeleted = useCallback(
+    (characterId: string) => {
+      setConfigured((all) => all && all.filter((c) => c.id !== characterId));
+      setLatest(({ [characterId]: _, ...rest }) => rest);
+      const live = heldRef.current;
+      if (live?.characterId === characterId) {
+        end(live);
+        // dispose 不发布结束的快照：不拿掉的话，通话条、通话层和 dock 的 inert 还会按她最后一刻的快照留着。
+        heldRef.current = null;
+        setHeld(null);
+        showHeld(false);
+      }
+    },
+    [end, showHeld],
+  );
 
   const open = useCallback(
     (characterId: string, userId: string) => {
@@ -389,6 +418,8 @@ export function DirectoryProvider({ children }: { children: ReactNode }) {
         account,
         accountChanged,
         characters,
+        characterSaved,
+        characterDeleted,
         latest,
         preferences,
         tidy,

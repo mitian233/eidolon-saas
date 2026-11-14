@@ -61,6 +61,10 @@ export { ListFilter as FilterIcon, Pin as PinIcon } from "lucide-react";
 // 对话列表行菜单里的「取消置顶」「在列表中隐藏」「在列表中显示」。
 export { Eye as ShowIcon, EyeOff as HideIcon, PinOff as UnpinIcon } from "lucide-react";
 
+// 对话列表页首的「新建角色」；行菜单里的「编辑角色」。
+// 角色编辑页的「删除角色」用 TrashIcon。
+export { Pencil as EditCharacterIcon, UserPlus as NewCharacterIcon } from "lucide-react";
+
 // 对话页更多菜单里的「新对话」「历史对话」；历史对话底部只读卡的图标（GLOSSARY.md「历史对话」）。
 export { History as PastConversationsIcon, SquarePen as NewConversationIcon } from "lucide-react";
 

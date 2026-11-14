@@ -669,6 +669,39 @@ export async function listCharacters(): Promise<Character[]> {
   return json(await api("/api/characters"));
 }
 
+/** What creating or editing one of the user's characters sends (backend `CharacterInput`): her
+ * whole settings, every field. The backend would default some left out, but the form always
+ * sends them all, so a save never silently resets one. */
+export type CharacterInput = Omit<Character, "id" | "birthday"> & {
+  birthday: { month: number; day: number } | null;
+};
+
+export async function createCharacter(input: CharacterInput): Promise<Character> {
+  return json(
+    await api("/api/characters", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+/** Replaces her settings with `input` as a whole. */
+export async function updateCharacter(id: string, input: CharacterInput): Promise<Character> {
+  return json(
+    await api(`/api/characters/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+/** Deletes her for good, with her conversations; a call with her under way is hung up first. */
+export async function deleteCharacter(id: string): Promise<void> {
+  await expectNoContent(await api(`/api/characters/${encodeURIComponent(id)}`, { method: "DELETE" }));
+}
+
 /** Her conversations with the user, newest first: the first is her current one
  * (GLOSSARY.md「当前对话」). */
 export async function listConversations(characterId: string): Promise<ListedConversation[]> {

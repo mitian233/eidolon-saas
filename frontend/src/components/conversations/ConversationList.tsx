@@ -15,7 +15,15 @@ import { arrange, dayOf, previewOf, type ListRow, type Preview } from "@/lib/con
 import { pin, setShown, unpin } from "@/lib/listPreferences";
 import { cn } from "@/lib/utils";
 import { herVars } from "@/theme/herVars";
-import { HideIcon, PinIcon, SearchIcon, ShowIcon, UnpinIcon } from "@/theme/icons";
+import {
+  EditCharacterIcon,
+  HideIcon,
+  NewCharacterIcon,
+  PinIcon,
+  SearchIcon,
+  ShowIcon,
+  UnpinIcon,
+} from "@/theme/icons";
 
 import { Announcements } from "./Announcements";
 import { PreviewText } from "./PreviewText";
@@ -27,7 +35,7 @@ import { useCallTime } from "./useCallTime";
 const t = copy.conversationList;
 
 /**
- * 对话列表（DESIGN.md「Conversation list」）：顶上「对话」大标题、信封键（GLOSSARY.md「信」）、服务状态和公告铃铛，下面一个按名字
+ * 对话列表（DESIGN.md「Conversation list」）：顶上「对话」大标题、新建角色键（一位都还没有时列表区也是去新建的空状态）、信封键（GLOSSARY.md「信」）、服务状态和公告铃铛，下面一个按名字
  * 或组合找人的搜索框，右边是筛选按钮（`ListFilter`）；每位角色一行（56px 头像、名字和时间一行，最后一句一行），
  * 选中行铺中性的 bg-muted；有人被隐藏时最后一行是「已隐藏 n 位」。她有没看过的搭话时，时间前面一个她颜色的小圆点，当前对话正显示着的那位不标；
  * 她有没读过的信时，名字后面一枚小信封。显示谁、按什么顺序由 `arrange` 决定：置顶的在前，最近有过往来的在上面；隐藏的不显示，
@@ -44,13 +52,23 @@ export function ConversationList({ selectedId }: { selectedId: string | null }) 
   const hiddenCount = shown?.hiddenCount ?? 0;
   // 搜索时隐藏的人照样出现，「已隐藏 n 位」和全部隐藏的空状态只在没有搜索时出现。
   const showsHidden = query.trim() === "" && hiddenCount > 0;
+  const newCharacter = () => go("/characters/new");
 
   return (
     <div className="flex h-full flex-col bg-background text-foreground">
       <header className="flex shrink-0 items-center gap-2 pt-3 pr-2 pb-2 pl-4">
         <h1 className="flex-1 text-list-title">{t.title}</h1>
+        <Button
+          variant="ghost"
+          size="icon-lg"
+          aria-label={t.newCharacter}
+          title={t.newCharacter}
+          disabled={!characters}
+          onClick={newCharacter}
+        >
+          <NewCharacterIcon />
+        </Button>
         <ServiceStatusButton />
-
         <Announcements userId={account?.id ?? null} />
       </header>
 
@@ -88,6 +106,19 @@ export function ConversationList({ selectedId }: { selectedId: string | null }) 
           </Empty>
         ) : !shown ? (
           <Loading />
+        ) : characters?.length === 0 ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyTitle>{t.noCharacters}</EmptyTitle>
+              <EmptyDescription>{t.noCharactersHint}</EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button variant="outline" onClick={newCharacter}>
+                <NewCharacterIcon data-icon="inline-start" />
+                {t.newCharacter}
+              </Button>
+            </EmptyContent>
+          </Empty>
         ) : shown.rows.length === 0 && showsHidden ? (
           <Empty>
             <EmptyHeader>
@@ -118,6 +149,7 @@ export function ConversationList({ selectedId }: { selectedId: string | null }) 
                         if (c.id === selectedId) return;
                         go(`/conversation/${c.id}`);
                       }}
+                      onEdit={() => go(`/characters/${encodeURIComponent(c.id)}/edit`)}
                       onTogglePin={() => tidy((p) => (row.isPinned ? unpin(p, c.id) : pin(p, c.id)))}
                       onToggleHidden={() => tidy((p) => setShown(p, [c.id], row.isHidden))}
                     />
@@ -145,7 +177,7 @@ export function ConversationList({ selectedId }: { selectedId: string | null }) 
  * 列表里的一行：一整个按钮，选中时 `aria-current`，铺中性的 bg-muted（不用她的颜色）；置顶的时间旁边有个小图钉。
  * 有没看过的搭话时时间前面一个她颜色（`her-mark`）的小圆点：列表栏不在她的子树里，只在圆点上套她的颜色变量；
  * 名字和最后一句不加深。
- * 右键、触屏长按、菜单键或 Shift+F10 打开行菜单（中性色）：置顶或取消置顶，在列表中隐藏或显示。
+ * 右键、触屏长按、菜单键或 Shift+F10 打开行菜单（中性色）：编辑角色，置顶或取消置顶，在列表中隐藏或显示。
  */
 function Row({
   row: { character, isPinned, isHidden, isUnseen },
@@ -154,6 +186,7 @@ function Row({
   isSelected,
   now,
   onSelect,
+  onEdit,
   onTogglePin,
   onToggleHidden,
 }: {
@@ -163,6 +196,7 @@ function Row({
   isSelected: boolean;
   now: Date;
   onSelect: () => void;
+  onEdit: () => void;
   onTogglePin: () => void;
   onToggleHidden: () => void;
 }) {
@@ -228,6 +262,10 @@ function Row({
       </ContextMenuTrigger>
       <ContextMenuContent>
         {/* 菜单项里的图标默认 16px、跟着菜单文字的颜色（DESIGN.md「行菜单」） */}
+        <ContextMenuItem onClick={onEdit}>
+          <EditCharacterIcon aria-hidden />
+          {t.editCharacter}
+        </ContextMenuItem>
         <ContextMenuItem onClick={onTogglePin}>
           {isPinned ? <UnpinIcon aria-hidden /> : <PinIcon aria-hidden />}
           {isPinned ? t.unpin : t.pin}

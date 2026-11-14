@@ -46,15 +46,18 @@ export function fromDraft(draft: Draft): ProducerProfile {
   };
 }
 
+/** 生日的月和日分开选的草稿（制作人档案、角色表单都是），没选的是 null。 */
+type BirthdayDraft = { birthMonth: number | null; birthDay: number | null };
+
 /** 选生日的月份。原来选的日期在新月份里不存在时清掉，让用户重选，不悄悄换成另一天；
  * 月份改成不填时日期也一起清掉。 */
-export function chooseBirthMonth(draft: Draft, month: number | null): Draft {
+export function chooseBirthMonth<D extends BirthdayDraft>(draft: D, month: number | null): D {
   const keepDay = month !== null && draft.birthDay !== null && draft.birthDay <= daysInMonth(month);
   return { ...draft, birthMonth: month, birthDay: keepDay ? draft.birthDay : null };
 }
 
 /** 只选了生日的月、还没选日：这样的草稿不能保存，要提示补上日期。 */
-export function missingBirthDay(draft: Draft): boolean {
+export function missingBirthDay(draft: BirthdayDraft): boolean {
   return draft.birthMonth !== null && draft.birthDay === null;
 }
 

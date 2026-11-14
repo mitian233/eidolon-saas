@@ -5,7 +5,9 @@ import {
   CONSENT_REQUIRED,
   checkOwnImage,
   checkOwnSpeechKey,
+  createCharacter,
   deleteAccount,
+  deleteCharacter,
   getCallSetup,
   getLimitExemption,
   json,
@@ -13,6 +15,8 @@ import {
   logoutEverywhere,
   redirectFor,
   sendTurn,
+  updateCharacter,
+  type CharacterInput,
   type TurnEvent,
 } from "@/lib/api";
 import { keepOwnKey, localOwnKeys } from "@/lib/localOwnKeys";
@@ -361,6 +365,68 @@ describe("signing out and deleting the account", () => {
     await expect(logout("u1")).rejects.toThrow();
 
     expect(localOwnKeys("u1")).toEqual({ tts: { api_key: "fish-my-own-key-aaaa" } });
+  });
+});
+
+describe("the user's characters", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const input: CharacterInput = {
+    name: "光",
+    intro: "",
+    sheet: "她说话很直。",
+    avatar_url: null,
+    greeting: "",
+    voice_id: "",
+    color: "#64748b",
+    user_address: "你",
+    language_mode: "single",
+    birthday: { month: 3, day: 9 },
+    age: null,
+  };
+  const saved = { ...input, id: "c 1", birthday: "03-09" };
+
+  /** The backend answers every request with `response`; the requests it got. */
+  function backend(response: () => Response) {
+    const fetch = vi.fn(async (_path: string, _init?: RequestInit) => response());
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  }
+
+  it("creates one by posting her whole settings", async () => {
+    const fetch = backend(() => Response.json(saved, { status: 201 }));
+
+    expect(await createCharacter(input)).toEqual(saved);
+
+    const [path, init] = fetch.mock.calls[0];
+    expect([path, init?.method, JSON.parse(String(init?.body))]).toEqual(["/api/characters", "POST", input]);
+  });
+
+  it("edits one by putting her whole settings at her address", async () => {
+    const fetch = backend(() => Response.json(saved));
+
+    expect(await updateCharacter("c 1", input)).toEqual(saved);
+
+    const [path, init] = fetch.mock.calls[0];
+    expect([path, init?.method, JSON.parse(String(init?.body))]).toEqual(["/api/characters/c%201", "PUT", input]);
+  });
+
+  it("deletes one at her address", async () => {
+    const fetch = backend(() => new Response(null, { status: 204 }));
+
+    await deleteCharacter("c 1");
+
+    const [path, init] = fetch.mock.calls[0];
+    expect([path, init?.method]).toEqual(["/api/characters/c%201", "DELETE"]);
+  });
+
+  it("says what the backend refused", async () => {
+    backend(() => Response.json({ detail: "角色不存在" }, { status: 404 }));
+
+    await expect(updateCharacter("c1", input)).rejects.toThrow("角色不存在");
+    await expect(deleteCharacter("c1")).rejects.toThrow("角色不存在");
   });
 });
 
