@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "@/lib/api";
-import { toFailure } from "@/lib/failure";
+import { documentImportFailure, toFailure } from "@/lib/failure";
 
 describe("toFailure", () => {
   it("offers the own keys when the limit refused it, or the user's own key failed", () => {
@@ -17,4 +17,10 @@ describe("toFailure", () => {
   ])("offers no own keys when %s", (_, error) => {
     expect(toFailure(error).toOwnKeys).toBeFalsy();
   });
+});
+
+
+it("only offers keys for the document API's missing-key code", () => {
+  expect(documentImportFailure(new ApiError("missing", 400, { code: "embedding_key_missing" }), "配置密钥", "重试")).toMatchObject({ message: "配置密钥", toOwnKeys: true });
+  expect(documentImportFailure(new ApiError("文档为空", 400), "配置密钥", "重试")).toEqual({ message: "文档为空", signedOut: false });
 });

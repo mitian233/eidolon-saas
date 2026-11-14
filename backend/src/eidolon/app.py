@@ -442,13 +442,13 @@ def create_app(backend: Backend) -> FastAPI:
         await owned_character(character_id, user_id)
         return await backend.documents.list(user_id, character_id)
 
-    @app.post("/api/characters/{character_id}/documents", status_code=201)
-    async def import_document(character_id: str, body: DocumentInput, user_id: UserId) -> dict:
+    @app.post("/api/characters/{character_id}/documents", status_code=201, response_model=None)
+    async def import_document(character_id: str, body: DocumentInput, user_id: UserId) -> dict | JSONResponse:
         await owned_character(character_id, user_id)
         brought = body.own_keys.brought() if body.own_keys else BroughtKeys()
         embedder = backend.own_keys.document_embedder(brought)
         if embedder is None:
-            raise HTTPException(400, "请提供自带的向量化密钥")
+            return JSONResponse({"detail": "请提供自带的向量化密钥", "code": "embedding_key_missing"}, status_code=400)
         try:
             document_id = await backend.documents.import_text(
                 user_id, character_id, body.origin, body.text, embedder,

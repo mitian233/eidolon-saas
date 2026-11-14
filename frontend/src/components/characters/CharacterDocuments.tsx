@@ -11,8 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { copy } from "@/i18n";
-import { ApiError, deleteCharacterDocument, importCharacterDocument, listCharacterDocuments, type CharacterDocument } from "@/lib/api";
-import { toFailure, type Failure } from "@/lib/failure";
+import { deleteCharacterDocument, importCharacterDocument, listCharacterDocuments, type CharacterDocument } from "@/lib/api";
+import { documentImportFailure, toFailure, type Failure } from "@/lib/failure";
 import { localOwnKeys } from "@/lib/localOwnKeys";
 import { TrashIcon } from "@/theme/icons";
 
@@ -56,11 +56,7 @@ export function CharacterDocuments({ characterId }: { characterId: string }) {
       setText("");
       setOrigin("");
     } catch (error) {
-      setFailure(error instanceof ApiError && error.status === 502
-        ? { message: t.savedRetry, signedOut: false }
-        : error instanceof ApiError && error.status === 400
-          ? { message: t.missingKey, signedOut: false, toOwnKeys: true }
-          : toFailure(error));
+      setFailure(documentImportFailure(error, t.missingKey, t.savedRetry));
       try { await refresh(); } catch { /* 保留原始错误 */ }
     } finally { setBusy(false); }
   }

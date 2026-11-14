@@ -16,7 +16,9 @@ async def test_document_api(make_client, own_vectors, settings, database_target)
     client = make_client(FakeLLM(), settings=replace(settings, database_path=database_target),
                          own_retrieval_service=own_vectors)
     url = "/api/characters/mano/documents"
-    assert (await client.post(url, json={"origin": "笔记", "text": "猫"})).status_code == 400
+    missing = await client.post(url, json={"origin": "笔记", "text": "猫"})
+    assert missing.status_code == 400
+    assert missing.json()["code"] == "embedding_key_missing"
     assert (await client.post("/api/characters/missing/documents", json=body())).status_code == 404
     assert (await client.post(url, json=body() | {"extra": 1})).status_code == 422
     response = await client.post(url, json=body())

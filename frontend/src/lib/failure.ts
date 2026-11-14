@@ -13,3 +13,10 @@ export function toFailure(e: unknown): Failure {
   if (e instanceof ApiError && (e.overLimit || e.code === "own_key")) failure.toOwnKeys = true;
   return failure;
 }
+
+/** Show the key settings only for the document API's missing-key refusal. */
+export function documentImportFailure(e: unknown, missingKey: string, savedRetry: string): Failure {
+  if (e instanceof ApiError && e.status === 502) return { message: savedRetry, signedOut: false };
+  if (e instanceof ApiError && e.code === "embedding_key_missing") return { message: missingKey, signedOut: false, toOwnKeys: true };
+  return toFailure(e);
+}
