@@ -3,6 +3,7 @@
 import asyncio
 import sqlite3
 import uuid
+from datetime import UTC, datetime
 from collections.abc import Sequence
 
 from eidolon.data_access import Database
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS documents (
     character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
     origin TEXT NOT NULL,
     text_hash TEXT NOT NULL,
+    created_at TEXT,
     UNIQUE(character_id, text_hash)
 );
 CREATE TABLE IF NOT EXISTS document_passages (
@@ -39,7 +41,7 @@ class Documents:
     def __init__(self, db: Database) -> None:
         self._db = db
         self._lock = asyncio.Lock()
-        db.prepare(lambda conn: conn.executescript(_SCHEMA))
+        db.prepare(_prepare)
 
     async def import_text(self, owner_id: str, character_id: str, origin: str, text: str,
                           embedder: Embedder) -> str:
@@ -55,6 +57,9 @@ class Documents:
             document_id = await self._db.write(_import, owner_id, character_id, origin, text)
             await self._embed_missing(character_id, embedder)
             return document_id
+
+    async def list(self, owner_id: str, character_id: str) -> list[dict]:
+        return await self._db.read(_list, owner_id, character_id)
 
     async def delete(self, owner_id: str, character_id: str, document_id: str) -> bool:
         async with self._lock:
@@ -96,6 +101,27 @@ class DocumentSource:
                 for i, score in nearest([row[2] for row in rows], query_vector, limit)]
 
 
+def _prepare(conn: sqlite3.Connection) -> None:
+    conn.executescript(_SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(documents)")}
+    if "created_at" not in columns:
+        conn.execute("ALTER TABLE documents ADD COLUMN created_at TEXT")
+
+
+def _list(conn: sqlite3.Connection, owner: str, character: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT d.id, d.origin, d.created_at, COUNT(p.id), "
+        "SUM(CASE WHEN EXISTS (SELECT 1 FROM document_vectors v WHERE v.passage_id = p.id) "
+        "THEN 1 ELSE 0 END) FROM documents d "
+        "JOIN characters c ON c.id = d.character_id "
+        "LEFT JOIN document_passages p ON p.document_id = d.id "
+        "WHERE c.owner_id = ? AND c.id = ? GROUP BY d.id, d.origin, d.created_at "
+        "ORDER BY d.created_at DESC, d.id", (owner, character),
+    ).fetchall()
+    return [{"id": row[0], "origin": row[1], "created_at": row[2],
+             "passage_count": row[3], "embedded_passage_count": row[4] or 0} for row in rows]
+
+
 def _import(conn: sqlite3.Connection, owner: str, character: str, origin: str, text: str) -> str:
     if not conn.execute("SELECT 1 FROM characters WHERE id = ? AND owner_id = ?",
                         (character, owner)).fetchone():
@@ -106,7 +132,8 @@ def _import(conn: sqlite3.Connection, owner: str, character: str, origin: str, t
     if row:
         return row[0]
     document_id = uuid.uuid4().hex
-    conn.execute("INSERT INTO documents VALUES (?, ?, ?, ?)", (document_id, character, origin, digest))
+    conn.execute("INSERT INTO documents (id, character_id, origin, text_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+                 (document_id, character, origin, digest, datetime.now(UTC).isoformat()))
     conn.executemany("INSERT INTO document_passages VALUES (?, ?, ?)",
                      [(uuid.uuid4().hex, document_id, part) for part in passages(text)])
     return document_id

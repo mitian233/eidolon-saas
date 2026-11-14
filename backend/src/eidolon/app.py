@@ -29,6 +29,7 @@ from eidolon.call import (
 from eidolon.character_repository import shown_character
 from eidolon.database import readable
 from eidolon.engine import ENDED, TurnJudged, shown
+from eidolon.embedding import EmbeddingError
 from eidolon.reply_format import SegmentComplete, SegmentDelta, SpeechDelta
 from eidolon.own_keys import (
     BroughtKeys,
@@ -124,6 +125,13 @@ class CharacterInput(BaseModel):
         values["avatar_url"] = str(self.avatar_url) if self.avatar_url is not None else None
         values["birthday"] = Birthday(self.birthday.month, self.birthday.day) if self.birthday else None
         return values
+
+
+class DocumentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    origin: str = Field(min_length=1, max_length=500)
+    text: str = Field(min_length=1, max_length=1000000)
+    own_keys: OwnKeysInput | None = None
 
 
 class CityInput(BaseModel):
@@ -412,6 +420,34 @@ def create_app(backend: Backend) -> FastAPI:
     @app.get("/api/characters/{character_id}")
     async def get_character(character_id: str, user_id: UserId) -> dict:
         return shown_character(await owned_character(character_id, user_id))
+
+    @app.get("/api/characters/{character_id}/documents")
+    async def list_documents(character_id: str, user_id: UserId) -> list[dict]:
+        await owned_character(character_id, user_id)
+        return await backend.documents.list(user_id, character_id)
+
+    @app.post("/api/characters/{character_id}/documents", status_code=201)
+    async def import_document(character_id: str, body: DocumentInput, user_id: UserId) -> dict:
+        await owned_character(character_id, user_id)
+        brought = body.own_keys.brought() if body.own_keys else BroughtKeys()
+        embedder = backend.own_keys.document_embedder(brought)
+        if embedder is None:
+            raise HTTPException(400, "请提供自带的向量化密钥")
+        try:
+            document_id = await backend.documents.import_text(
+                user_id, character_id, body.origin, body.text, embedder
+            )
+        except EmbeddingError:
+            raise HTTPException(502, "向量化失败，文本已保存，请重新导入重试") from None
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        return {"id": document_id}
+
+    @app.delete("/api/characters/{character_id}/documents/{document_id}", status_code=204)
+    async def delete_document(character_id: str, document_id: str, user_id: UserId) -> None:
+        await owned_character(character_id, user_id)
+        if not await backend.documents.delete(user_id, character_id, document_id):
+            raise HTTPException(404, "文档不存在")
 
     @app.get("/api/characters/{character_id}/avatar")
     async def character_avatar(character_id: str, user_id: UserId) -> Response:

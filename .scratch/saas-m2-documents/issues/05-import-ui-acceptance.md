@@ -15,3 +15,10 @@ Status: ready-for-agent
 - [ ] 检查没有相关资料时角色是否编造，记录验收证据。
 
 ## Comments
+
+
+### 票 04 交接
+
+角色文档接口都要求登录和角色归属。`POST /api/characters/{character_id}/documents` 接收 JSON：`{"origin":"笔记或文件名","text":"文本","own_keys":{"embedding":{"base_url":"https://…","api_key":"…","model":"…","dimensions":128}}}`。粘贴和上传共用此接口，浏览器读文件为文本。`origin` 去除首尾空白后 1–500 字符，`text` 去除首尾空白后 1–1000000 字符，未知顶层字段拒绝。`own_keys.embedding` 的密钥、地址、模型及维度沿用回合接口校验。成功 201 返回 `{"id":"文档 ID"}`；重复文本仍返回相同 ID，保留首次来源。缺少向量化配置 400（`detail` 为 `请提供自带的向量化密钥`），向量化失败 502（`detail` 为 `向量化失败，文本已保存，请重新导入重试`）；重新提交相同文本与配置即可重试。空文本、超长、格式不合法返回 422。
+
+`GET /api/characters/{character_id}/documents` 返回数组，每项 `{"id":"…","origin":"…","created_at":"ISO 8601 时间或 null","passage_count":1,"embedded_passage_count":1}`。旧文档创建时间未知为 null；已向量化段落数只表示存在任意模型的向量，不能用来判断当前模型是否完成。`DELETE /api/characters/{character_id}/documents/{document_id}` 成功返回 204，无此文档返回 404。三种操作访问不存在或不属于自己的角色均返回 404。前端现有 `/api/[...path]` 转发支持上述方法。

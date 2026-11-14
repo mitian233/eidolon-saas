@@ -97,3 +97,28 @@ async def test_changed_dimensions_do_not_reuse_vectors(tmp_path):
         assert shorter.documents == ["猫"]
     finally:
         await db.close()
+
+
+async def test_document_list_migrates_existing_documents(database_target):
+    db = Database(database_target)
+    try:
+        owner = await Store(db).create_user("Alice")
+        character = await CharacterRepository(db, {}).create(owner.id, name="一", sheet="")
+        db.prepare(lambda conn: conn.executescript("""
+            CREATE TABLE documents (
+                id TEXT PRIMARY KEY,
+                character_id TEXT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+                origin TEXT NOT NULL, text_hash TEXT NOT NULL,
+                UNIQUE(character_id, text_hash)
+            );
+        """))
+        await db.write(lambda conn: conn.execute(
+            "INSERT INTO documents VALUES (?, ?, ?, ?)", ("old", character.id, "旧文档", "hash")
+        ))
+        documents = Documents(db)
+        assert await documents.list(owner.id, character.id) == [{
+            "id": "old", "origin": "旧文档", "created_at": None,
+            "passage_count": 0, "embedded_passage_count": 0,
+        }]
+    finally:
+        await db.close()

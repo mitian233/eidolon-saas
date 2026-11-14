@@ -747,6 +747,10 @@ class OwnKeys:
             services=services,
         )
 
+    def document_embedder(self, brought: BroughtKeys) -> Embedder | None:
+        """Create the same request-scoped embedding adapter used by turns."""
+        return self._services(brought).embedder
+
     def _services(self, brought: BroughtKeys) -> TurnServices:
         embedding, reranker = None, None
         if self._retrieval_service is not None:
