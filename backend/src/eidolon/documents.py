@@ -3,6 +3,7 @@
 import asyncio
 import sqlite3
 import uuid
+import weakref
 from datetime import UTC, datetime
 from collections.abc import Sequence
 
@@ -40,8 +41,15 @@ class Documents:
 
     def __init__(self, db: Database) -> None:
         self._db = db
-        self._lock = asyncio.Lock()
+        self._locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = weakref.WeakValueDictionary()
         db.prepare(_prepare)
+
+    def _lock_for(self, character_id: str, model: str) -> asyncio.Lock:
+        key = (character_id, model)
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = self._locks[key] = asyncio.Lock()
+        return lock
 
     async def import_text(self, owner_id: str, character_id: str, origin: str, text: str,
                           embedder: Embedder) -> str:
@@ -53,7 +61,7 @@ class Documents:
         text = normalize_text(text)
         if not text:
             raise ValueError("文档为空")
-        async with self._lock:
+        async with self._lock_for(character_id, embedder.model):
             document_id = await self._db.write(_import, owner_id, character_id, origin, text)
             await self._embed_missing(character_id, embedder)
             return document_id
@@ -62,8 +70,7 @@ class Documents:
         return await self._db.read(_list, owner_id, character_id)
 
     async def delete(self, owner_id: str, character_id: str, document_id: str) -> bool:
-        async with self._lock:
-            return await self._db.write(_delete, owner_id, character_id, document_id)
+        return await self._db.write(_delete, owner_id, character_id, document_id)
 
     def source(self, embedder: Embedder) -> "DocumentSource":
         return DocumentSource(self, embedder)
@@ -92,7 +99,7 @@ class DocumentSource:
                      limit: int) -> list[DocumentPassage]:
         if not query_vector or limit <= 0:
             return []
-        async with self._documents._lock:
+        async with self._documents._lock_for(character_id, self._embedder.model):
             await self._documents._embed_missing(character_id, self._embedder, len(query_vector))
             rows = await self._documents._db.read(
                 _vectors, character_id, self._embedder.model, len(query_vector)
@@ -158,7 +165,9 @@ def _missing(conn: sqlite3.Connection, character: str, model: str,
 
 
 def _save_vectors(conn: sqlite3.Connection, values: list[tuple[str, str, int, bytes]]) -> None:
-    conn.executemany("INSERT INTO document_vectors VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING", values)
+    conn.executemany("INSERT INTO document_vectors SELECT ?, ?, ?, ? WHERE EXISTS "
+                     "(SELECT 1 FROM document_passages WHERE id = ?) ON CONFLICT DO NOTHING",
+                     [(pid, model, size, blob, pid) for pid, model, size, blob in values])
 
 
 def _vectors(conn: sqlite3.Connection, character: str, model: str,

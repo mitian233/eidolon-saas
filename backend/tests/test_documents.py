@@ -1,5 +1,7 @@
 """Document persistence, isolation and retrieval on both databases."""
 
+import asyncio
+
 import pytest
 
 from eidolon.character_repository import CharacterRepository
@@ -121,4 +123,33 @@ async def test_document_list_migrates_existing_documents(database_target):
             "passage_count": 0, "embedded_passage_count": 0,
         }]
     finally:
+        await db.close()
+
+
+async def test_other_character_can_import_and_search_while_embedding_hangs(database_target):
+    class HangingEmbedder(FakeEmbedder):
+        async def embed_documents(self, documents):
+            started.set()
+            await asyncio.Event().wait()
+            return await super().embed_documents(documents)
+
+    db = Database(database_target)
+    task = None
+    try:
+        user = await Store(db).create_user("Alice")
+        characters = CharacterRepository(db, {})
+        first = await characters.create(user.id, name="一", sheet="")
+        second = await characters.create(user.id, name="二", sheet="")
+        documents = Documents(db)
+        started = asyncio.Event()
+        task = asyncio.create_task(documents.import_text(user.id, first.id, "一", "猫", HangingEmbedder()))
+        await asyncio.wait_for(started.wait(), 5)
+        embedder = FakeEmbedder()
+        await asyncio.wait_for(documents.import_text(user.id, second.id, "二", "鳩", embedder), 5)
+        found = await asyncio.wait_for(documents.source(embedder).search(await embedder.embed_query("鳩"), second.id, 5), 5)
+        assert [p.text for p in found] == ["鳩"]
+    finally:
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         await db.close()
