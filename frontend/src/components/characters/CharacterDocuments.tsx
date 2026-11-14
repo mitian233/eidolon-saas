@@ -83,7 +83,7 @@ export function CharacterDocuments({ characterId }: { characterId: string }) {
         event.target.value = "";
         if (!file) return;
         try { setText(await readDocumentFile(file)); setOrigin(file.name); setFailure(null); }
-        catch (error) { setFailure({ message: error instanceof Error ? error.message : t.readFailed, signedOut: false }); }
+        catch (error) { setFailure({ message: error instanceof RangeError ? error.message : t.readFailed, signedOut: false }); }
       }} /></Field>
       <Button className="self-start" disabled={busy} onClick={submit}>{busy && <Spinner data-icon="inline-start" />}{busy ? t.importing : t.import}</Button>
       {documents?.length === 0 && <p className="text-meta text-muted-foreground">{t.empty}</p>}
