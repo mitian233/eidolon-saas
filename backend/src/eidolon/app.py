@@ -67,6 +67,10 @@ from eidolon.throttle import Throttled
 from eidolon.turn_outcome import TurnOutcome
 from eidolon.usage import OverLimit
 
+# A Unicode code point can need two JSON \uXXXX escapes (12 ASCII bytes).
+# Allow 1,000,000 code points plus 100,000 bytes for origin, keys and JSON.
+MAX_DOCUMENT_REQUEST_BYTES = 12_100_000
+
 HEALTH_TIMEOUT = 5.0
 """How long, in seconds, the health check may take before the backend is taken not to
 serve: its threads may all be taken."""
@@ -228,6 +232,18 @@ def create_app(backend: Backend) -> FastAPI:
     app = FastAPI(title="Eidolon-SaaS", lifespan=lifespan)
     app.state.backend = backend
     app.middleware("http")(session_middleware(backend.settings))
+
+    @app.middleware("http")
+    async def limit_document_body(request: Request, call_next: Callable) -> Response:
+        parts = request.url.path.split("/")
+        if request.method == "POST" and len(parts) == 5 and parts[1:3] == ["api", "characters"] and parts[4] == "documents":
+            body = bytearray()
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > MAX_DOCUMENT_REQUEST_BYTES:
+                    return JSONResponse({"detail": "资料请求体过大"}, status_code=413)
+                body.extend(chunk)
+            request._body = bytes(body)
+        return await call_next(request)
 
     @app.exception_handler(OverLimit)
     async def over_limit(_: Request, e: OverLimit) -> JSONResponse:

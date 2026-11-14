@@ -84,3 +84,23 @@ async def test_document_input_limits(make_client):
     assert (await client.post(url, json=body() | {"text": " "})).status_code == 422
     assert (await client.post(url, json=body() | {"text": "x" * 1000001})).status_code == 422
     assert (await client.post(url, json=body() | {"origin": "x" * 501})).status_code == 422
+
+
+async def test_document_request_byte_limit_and_streaming(make_client):
+    import json
+
+    from eidolon.app import MAX_DOCUMENT_REQUEST_BYTES
+
+    client = make_client(FakeLLM())
+    url = "/api/characters/mano/documents"
+    oversized = b" " * (MAX_DOCUMENT_REQUEST_BYTES + 1)
+    assert (await client.post(url, content=oversized)).status_code == 413
+
+    async def chunks():
+        yield oversized[:MAX_DOCUMENT_REQUEST_BYTES // 2]
+        yield oversized[MAX_DOCUMENT_REQUEST_BYTES // 2:]
+
+    assert (await client.post(url, content=chunks())).status_code == 413
+    legal = json.dumps({"origin": "笔记", "text": "中" * 1000000}).encode()
+    response = await client.post(url, content=legal, headers={"content-type": "application/json"})
+    assert response.status_code == 400  # Parsed successfully; embedding key is absent.
