@@ -86,9 +86,9 @@ export function CharacterDocuments({ characterId }: { characterId: string }) {
         catch (error) { setFailure({ message: error instanceof Error ? error.message : t.readFailed, signedOut: false }); }
       }} /></Field>
       <Button className="self-start" disabled={busy} onClick={submit}>{busy && <Spinner data-icon="inline-start" />}{busy ? t.importing : t.import}</Button>
-      {documents?.length === 0 && <p className="text-sm text-muted-foreground">{t.empty}</p>}
+      {documents?.length === 0 && <p className="text-meta text-muted-foreground">{t.empty}</p>}
       {documents && documents.length > 0 && <ul className="divide-y">{documents.map((document) => <li key={document.id} className="flex items-center gap-3 py-3">
-        <div className="min-w-0 flex-1"><p className="break-words">{document.origin}</p><p className="text-sm text-muted-foreground">{document.created_at ? new Date(document.created_at).toLocaleString() : t.unknownDate} · {t.counts(document.passage_count, document.embedded_passage_count)}</p></div>
+        <div className="min-w-0 flex-1"><p className="break-words">{document.origin}</p><p className="text-meta text-muted-foreground">{document.created_at ? new Date(document.created_at).toLocaleString() : t.unknownDate} · {t.counts(document.passage_count, document.embedded_passage_count)}</p></div>
         <Button variant="ghost" size="icon-sm" aria-label={t.remove(document.origin)} disabled={busy} onClick={() => setSelected(document)}><TrashIcon /></Button>
       </li>)}</ul>}
       <AlertDialog open={selected !== null} onOpenChange={(open) => { if (!open && !busy) setSelected(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{selected && t.deleteTitle(selected.origin)}</AlertDialogTitle><AlertDialogDescription>{t.deleteDescription}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={busy}>{copy.common.cancel}</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={busy} onClick={(event) => { event.preventDefault(); void remove(); }}>{busy && <Spinner data-icon="inline-start" />}{t.deleteConfirm}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
