@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { copy } from "@/i18n";
 import { deleteCharacterDocument, importCharacterDocument, listCharacterDocuments, type CharacterDocument } from "@/lib/api";
 import { documentImportFailure, toFailure, type Failure } from "@/lib/failure";
+import { readDocumentFile } from "@/lib/documentFile";
 import { localOwnKeys } from "@/lib/localOwnKeys";
 import { TrashIcon } from "@/theme/icons";
 
@@ -81,8 +82,8 @@ export function CharacterDocuments({ characterId }: { characterId: string }) {
         const file = event.target.files?.[0];
         event.target.value = "";
         if (!file) return;
-        try { setText(await file.text()); setOrigin(file.name); setFailure(null); }
-        catch { setFailure({ message: t.readFailed, signedOut: false }); }
+        try { setText(await readDocumentFile(file)); setOrigin(file.name); setFailure(null); }
+        catch (error) { setFailure({ message: error instanceof Error ? error.message : t.readFailed, signedOut: false }); }
       }} /></Field>
       <Button className="self-start" disabled={busy} onClick={submit}>{busy && <Spinner data-icon="inline-start" />}{busy ? t.importing : t.import}</Button>
       {documents?.length === 0 && <p className="text-sm text-muted-foreground">{t.empty}</p>}
