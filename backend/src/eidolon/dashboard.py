@@ -146,9 +146,9 @@ def add_dashboard_routes(app: FastAPI, backend: Backend) -> None:
         }
 
     @app.get("/api/admin/calls/live")
-    def live_calls(_: Admin) -> dict:
+    async def live_calls(_: Admin) -> dict:
         """How many calls there are right now, connected or still connecting."""
-        return {"in_progress": backend.calls.in_progress}
+        return {"in_progress": await backend.calls.total_in_progress()}
 
 
 def _zone(name: str | None) -> ZoneInfo:

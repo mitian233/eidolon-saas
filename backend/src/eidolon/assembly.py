@@ -14,6 +14,7 @@ from eidolon.affinity import Affinities
 from eidolon.announcements import Announcements
 from eidolon.backup import Backups
 from eidolon.call import Calls, Speech, SpeechServices
+from eidolon.call_nodes import CallNodes
 from eidolon.characters import Character
 from eidolon.character_repository import CharacterRepository
 from eidolon.clock import Clock, utc_now
@@ -89,6 +90,7 @@ class Backend:
         )
         await self.character_repository.load()
         await self.config.start()
+        await self.calls.open()
         self._tasks = [
             asyncio.create_task(self.prices.catalog.keep_fresh()),
             asyncio.create_task(self.service_status.keep_probing()),
@@ -221,6 +223,11 @@ def build(
     calls = Calls(
         settings, engine, admissions, own_keys, lambda: config.usage_limits,
         speech, clock, store,
+        nodes=(
+            CallNodes(database, tuple(settings.call_nodes),
+                      settings.call_node_id if settings.role == "calls" else None, clock)
+            if settings.role != "all" else None
+        ),
     )
     closers.append(calls.aclose)
     engine.on_cooled(calls.cooled)

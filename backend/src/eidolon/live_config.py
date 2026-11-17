@@ -1322,6 +1322,36 @@ class LiveConfig:
                 ", ".join(in_effect),
             )
 
+    async def refresh(self) -> None:
+        """Apply settings saved by another backend before admitting a new request."""
+        async with self._changing:
+            rows = await self._db.read(_stored_rows)
+            if rows == self._rows:
+                return
+            before = {name: self.effective(name) for name, item in self._items.items() if item.available()}
+            old_rows = self._rows
+            self._rows = rows
+            for name, item in self._items.items():
+                if not item.available():
+                    continue
+                prefix = f"{name}."
+                previous = {k: v for k, v in old_rows.items() if k.startswith(prefix)}
+                current = {k: v for k, v in rows.items() if k.startswith(prefix)}
+                if previous == current:
+                    continue
+                self._failures.pop(name, None)
+                try:
+                    if self._overridden(name):
+                        self._overrides[name] = self._read(item)
+                    else:
+                        self._overrides.pop(name, None)
+                except _Unreadable as error:
+                    self._failures[name] = str(error)
+                after = self.effective(name)
+                if before[name] != after:
+                    await item.apply(after)
+                await self._changed(name, before[name], after)
+
     def describe(self) -> dict[str, Any]:
         """What the admin console shows of limits and gameplay switches."""
         visible = (LIMITS, AFFINITY, REACH_OUTS, LETTERS, MOMENTS, SCHEDULE, CYCLES, BAR, REGISTRATION)
@@ -1595,6 +1625,10 @@ def _open(db: sqlite3.Connection) -> dict[str, _Row]:
     db.executescript(_SCHEMA)
     # Whether users had to bring their own LLM, which no longer is a setting.
     db.execute("DELETE FROM config_overrides WHERE name = 'limits.own_llm_required'")
+    return _stored_rows(db)
+
+
+def _stored_rows(db: sqlite3.Connection) -> dict[str, _Row]:
     return {
         name: _Row(value, last4)
         for name, value, last4 in db.execute("SELECT name, value, last4 FROM config_overrides")

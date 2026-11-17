@@ -89,7 +89,7 @@ export async function startCall(
   userId: string,
 ): Promise<Call> {
   const { ownKeys, services } = callOwnKeys(userId);
-  const { iceServers, maxCallSeconds, callExempt } = await getCallSetup(conversationId, services);
+  const { iceServers, maxCallSeconds, callExempt, offerEndpoint = "/api/offer" } = await getCallSetup(conversationId, services);
   const microphone = await Microphone.open(preferences.micId);
   handlers.onMicOpen();
   let hungUp = false;
@@ -124,7 +124,7 @@ export async function startCall(
     };
     if (ownKeys) requestData.own_keys = ownKeys;
     await client.connect({
-      webrtcRequestParams: { endpoint: "/api/offer", headers: apiHeaders(), requestData },
+      webrtcRequestParams: { endpoint: offerEndpoint, headers: apiHeaders(), requestData },
     });
     // 只有开始通话的那次 offer 要带 key。Pipecat 按引用持有这份请求数据，之后每次重新协商
     // 都把同一份再发一遍，后端重新协商时也不看它；所以接通后从这份数据里删掉 key，之后的

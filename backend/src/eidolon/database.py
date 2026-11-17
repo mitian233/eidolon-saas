@@ -26,6 +26,7 @@ from psycopg.pq import TransactionStatus
 from sqlglot import exp, parse_one
 
 USER_DATA = [
+    ("active_calls", "user_id = ?"),
     ("memory_vectors", "user_id = ?"),
     ("memories", "user_id = ?"),
     ("jobs", "turn_id IN (SELECT id FROM messages WHERE conversation_id IN"
@@ -79,6 +80,7 @@ USER_DATA = [
 what refers to a row before the row."""
 
 CONVERSATION_DATA = [
+    ("active_calls", "conversation_id = ?"),
     ("jobs", "turn_id IN (SELECT id FROM messages WHERE conversation_id = ?)"),
     ("photos", "conversation_id = ?"),
     ("messages", "conversation_id = ?"),
@@ -114,6 +116,7 @@ NOT_USER_DATA = frozenset(
         "sponsor", "gifts_opened", "reset_card_grants", "backup_runs", "record_rollups",
         "taken_rollups", "call_rollups", "spread_rollups", "achievements_launched",
         "weekly_jobs", "invites",
+        "call_nodes",
     }
 )
 """Every other table: the story corpus, the embedded text set, the calls to outside
@@ -503,6 +506,13 @@ class _PostgresConnection:
                                               conflict_keys=[exp.to_identifier(k) for k in keys])
                 tree.set("conflict", conflict)
             conflict = tree.args.get("conflict")
+            if conflict:
+                # SQLite's conflict index order is irrelevant to uniqueness. PostgreSQL
+                # rejects NULLS FIRST/LAST here; SQLGlot carries SQLite's default over.
+                conflict.set("conflict_keys", [
+                    key.this if isinstance(key, exp.Ordered) else key
+                    for key in conflict.args.get("conflict_keys") or []
+                ])
             if conflict and conflict.args["action"].name == "DO UPDATE":
                 if not conflict.args.get("conflict_keys"):
                     conflict.set("conflict_keys", [exp.to_identifier(k) for k in keys])

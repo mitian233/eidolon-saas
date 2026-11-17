@@ -776,7 +776,7 @@ export async function getLimitExemption(own: readonly OwnService[]): Promise<Lim
 /** What a call needs before it starts: the STUN/TURN servers, how long it may last in seconds
  * (null for no limit), and whether it is exempt from the hourly limit (on the user's own keys
  * alone). Fails with the reason when calls are unavailable. */
-export type CallSetup = { iceServers: RTCIceServer[]; maxCallSeconds: number | null; callExempt: boolean };
+export type CallSetup = { iceServers: RTCIceServer[]; maxCallSeconds: number | null; callExempt: boolean; offerEndpoint?: string };
 
 /** Asked before a call into `conversationId` that is to bring the user's own keys for `own`,
  * naming those services but bringing none of the keys: the call itself brings them. Refused, as

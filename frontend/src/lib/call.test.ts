@@ -9,15 +9,15 @@ import { keepOwnKey } from "@/lib/localOwnKeys";
 
 /** 假的 Pipecat client 每次 `connect` 收到的 offer 参数。Pipecat 按引用持有其中的请求数据，
  * 之后每次重新协商都把同一份再发一遍；这里留着同一个引用，好看接通后它变成了什么。 */
-const offers = vi.hoisted(() => [] as { requestData: Record<string, unknown>; sentWithOffer: unknown }[]);
+const offers = vi.hoisted(() => [] as { endpoint: string; requestData: Record<string, unknown>; sentWithOffer: unknown }[]);
 
 vi.mock("@pipecat-ai/client-js", () => ({
   TransportStartError: class extends Error {},
   PipecatClient: class {
-    async connect({ webrtcRequestParams }: { webrtcRequestParams: { requestData: Record<string, unknown> } }) {
-      const { requestData } = webrtcRequestParams;
+    async connect({ webrtcRequestParams }: { webrtcRequestParams: { endpoint: string; requestData: Record<string, unknown> } }) {
+      const { endpoint, requestData } = webrtcRequestParams;
       // offer 发出去的那一刻请求数据是什么样（发出去的是它的 JSON）。
-      offers.push({ requestData, sentWithOffer: JSON.parse(JSON.stringify(requestData)) });
+      offers.push({ endpoint, requestData, sentWithOffer: JSON.parse(JSON.stringify(requestData)) });
     }
     async disconnect() {}
     sendClientMessage() {}
@@ -74,13 +74,22 @@ describe("startCall", () => {
     keepOwnKey("u1", "tts", TTS);
     keepOwnKey("u1", "stt", STT);
 
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      iceServers: [], maxCallSeconds: null, callExempt: true, offerEndpoint: "/api/call-nodes/node_1/offer",
+    })));
     await startCall("c1", PREFERENCES, HANDLERS, "u1");
 
     expect(offers).toHaveLength(1);
     const [{ requestData, sentWithOffer }] = offers;
+    expect(offers[0].endpoint).toBe("/api/call-nodes/node_1/offer");
     expect(sentWithOffer).toMatchObject({ conversation_id: "c1", own_keys: { llm: LLM, tts: TTS, stt: STT } });
     // 之后每次重新协商发的都是这同一份请求数据。
     expect(requestData).not.toHaveProperty("own_keys");
     expect(requestData).toMatchObject({ conversation_id: "c1" });
+  });
+
+  it("uses the direct offer endpoint when setup has no selected node", async () => {
+    await startCall("c1", PREFERENCES, HANDLERS, "u1");
+    expect(offers[0].endpoint).toBe("/api/offer");
   });
 });

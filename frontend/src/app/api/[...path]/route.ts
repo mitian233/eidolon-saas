@@ -6,10 +6,47 @@
 
 import { BACKEND_URL } from "@/lib/backend";
 
+const NODE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** Read the private node list at request time; an invalid entry invalidates the whole list. */
+function callNodes(): Map<string, string> {
+  const value: unknown = JSON.parse(process.env.EIDOLON_CALL_NODES ?? "");
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid call node configuration");
+  const nodes = new Map<string, string>();
+  for (const [id, address] of Object.entries(value)) {
+    if (!NODE_ID.test(id) || typeof address !== "string" || !/^https?:\/\/[^/?#@\s]+\/?$/i.test(address)) {
+      throw new Error("Invalid call node configuration");
+    }
+    const url = new URL(address);
+    if (!url.hostname || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+      throw new Error("Invalid call node configuration");
+    }
+    nodes.set(id, url.origin);
+  }
+  return nodes;
+}
+
 async function forward(request: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params;
   const { search } = new URL(request.url);
-  const url = `${BACKEND_URL}/api/${path.map(encodeURIComponent).join("/")}${search}`;
+  let url: string;
+  const isCallNode = path[0] === "call-nodes";
+  if (isCallNode) {
+    if (path.length !== 3 || !NODE_ID.test(path[1]) || path[2] !== "offer" || !["POST", "PATCH"].includes(request.method)) {
+      return new Response(null, { status: 404 });
+    }
+    let nodes: Map<string, string>;
+    try {
+      nodes = callNodes();
+    } catch {
+      return new Response("Call node configuration is invalid", { status: 503 });
+    }
+    const node = nodes.get(path[1]);
+    if (!node) return new Response(null, { status: 404 });
+    url = `${node}/api/offer${search}`;
+  } else {
+    url = `${BACKEND_URL}/api/${path.map(encodeURIComponent).join("/")}${search}`;
+  }
   const headers = new Headers();
   for (const name of ["content-type", "cookie", "origin", "x-timezone", "if-none-match"]) {
     const value = request.headers.get(name);
@@ -25,7 +62,13 @@ async function forward(request: Request, { params }: { params: Promise<{ path: s
     cache: "no-store",
     redirect: "manual", // the browser follows the backend's redirects itself
   };
-  const res = await fetch(url, init);
+  let res: Response;
+  try {
+    res = await fetch(url, init);
+  } catch (error) {
+    if (!isCallNode) throw error;
+    return new Response("Call node is unavailable", { status: 502 });
+  }
 
   const out = new Headers();
   // the etag lets the browser revalidate an image instead of downloading it again; a data
@@ -51,4 +94,10 @@ async function forward(request: Request, { params }: { params: Promise<{ path: s
 }
 
 export const dynamic = "force-dynamic";
-export { forward as GET, forward as POST, forward as PUT, forward as PATCH, forward as DELETE };
+export { forward as GET, forward as HEAD, forward as POST, forward as PUT, forward as PATCH, forward as DELETE };
+
+export async function OPTIONS(request: Request, context: { params: Promise<{ path: string[] }> }) {
+  const { path } = await context.params;
+  if (path[0] === "call-nodes") return new Response(null, { status: 404 });
+  return new Response(null, { status: 204, headers: { Allow: "GET, HEAD, OPTIONS, POST, PUT, PATCH, DELETE" } });
+}

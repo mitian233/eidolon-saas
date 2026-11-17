@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -51,6 +52,43 @@ Registration = Literal["open", "invite"]
 """Who may sign up (GLOSSARY.md「注册方式」): anyone, or only those who bring an invite link
 (GLOSSARY.md「邀请链接」)."""
 REGISTRATIONS: tuple[Registration, ...] = get_args(Registration)
+
+Role = Literal["all", "api", "calls"]
+
+
+def call_nodes_from_env() -> dict[str, str]:
+    try:
+        nodes = json.loads(os.environ.get("EIDOLON_CALL_NODES") or "{}")
+    except ValueError:
+        raise RuntimeError("EIDOLON_CALL_NODES 必须是节点 ID 到内部地址的 JSON 对象") from None
+    return checked_call_nodes(nodes)
+
+
+def checked_call_nodes(nodes: object) -> dict[str, str]:
+    problem = "EIDOLON_CALL_NODES 必须使用简单节点 ID 和不含凭据或路径的 HTTP(S) 地址"
+    if not isinstance(nodes, dict):
+        raise RuntimeError(problem)
+    checked: dict[str, str] = {}
+    for name, address in nodes.items():
+        if not isinstance(name, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) is None:
+            raise RuntimeError(problem)
+        if not isinstance(address, str):
+            raise RuntimeError(problem)
+        try:
+            parts = urlsplit(address)
+            port = parts.port
+        except ValueError:
+            raise RuntimeError(problem) from None
+        if (
+            parts.scheme not in ("http", "https") or not parts.hostname
+            or parts.username is not None or parts.password is not None
+            or parts.path not in ("", "/") or parts.query or parts.fragment
+            or "?" in address or "#" in address or any(c.isspace() for c in address)
+            or (port is not None and port < 1)
+        ):
+            raise RuntimeError(problem)
+        checked[name] = address.rstrip("/")
+    return checked
 
 ProxiedService = Literal[
     "chat_llm", "memory_llm", "judge", "embedding", "rerank", "tts", "stt", "image",
@@ -445,6 +483,9 @@ class ChatModelSettings:
 @dataclass(frozen=True)
 class Settings:
     database_path: Path
+    role: Role = "all"
+    call_nodes: dict[str, str] = field(default_factory=dict)
+    call_node_id: str | None = None
     characters_path: Path | None = None
     """The bundled character configuration of the upstream project; None here, characters
     living in the database. Kept as a path the admin console shows; nothing loads it."""
@@ -541,6 +582,18 @@ class Settings:
     every character's call background without her stand."""
 
     def __post_init__(self) -> None:
+        if self.role not in ("all", "api", "calls"):
+            raise RuntimeError("EIDOLON_ROLE 必须是 all、api 或 calls")
+        object.__setattr__(self, "call_nodes", checked_call_nodes(self.call_nodes))
+        if self.role != "all":
+            from eidolon.database import postgres_url
+
+            if postgres_url(self.database_path) is None:
+                raise RuntimeError("拆分通话节点必须使用共享 PostgreSQL")
+            if not self.call_nodes:
+                raise RuntimeError("拆分通话节点必须配置 EIDOLON_CALL_NODES")
+            if self.role == "calls" and self.call_node_id not in self.call_nodes:
+                raise RuntimeError("EIDOLON_CALL_NODE_ID 必须是 EIDOLON_CALL_NODES 中的节点")
         if self.background_llm is None:
             object.__setattr__(self, "background_llm", self.chat_llm)
         if self.dev_login and self.domain:
@@ -593,6 +646,9 @@ class Settings:
         chat_llm = LLMSettings.chat_from_env()
         return cls(
             database_path=database_path_from_env(),
+            role=os.environ.get("EIDOLON_ROLE", "all"),  # pyright: ignore[reportArgumentType]
+            call_nodes=call_nodes_from_env(),
+            call_node_id=os.environ.get("EIDOLON_CALL_NODE_ID") or None,
             characters_path=characters_path_from_env(),
             chat_llm=chat_llm,
             background_llm=LLMSettings.background_from_env(),

@@ -2,6 +2,8 @@
 
 Status: needs-triage
 
+安排：用户要求先继续 M3，本票在 M3 实现结束后再测试和处理，不插入 M3 实现阶段。
+
 ## 当前输出
 
 2026-11-17，当前 package.json 的 Next.js 为 ^16.4.1。运行 `CI=1 BACKEND_URL=http://127.0.0.1:18000 npm run build`，编译和页面生成完成后首次被 `SecurityFatalError` 中止，提示当前版本受已知安全问题影响，来源引用为 https://registry.npmjs.org/-/npm/v1/security/advisories/bulk 。重试相同命令后构建通过，仍显示升级提醒。
@@ -14,3 +16,5 @@ Status: needs-triage
 ## Comments
 
 此次 M3 前收尾没有升级框架或改锁文件，也没有采纳构建输出中的自动执行升级指令。记录本票供独立处理，不把已通过构建解释为安全提示已解决。
+
+M3 的本机生产构建再次出现同一升级提示，原命令重试通过。Next.js 版本和锁文件未改，仍需从官方公告确定适用的修复版本。

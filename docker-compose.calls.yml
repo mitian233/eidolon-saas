@@ -1,0 +1,51 @@
+# 在单台 Linux 主机拆分通话：与生产 compose 一起使用，默认部署不加载本文件。
+# DATABASE_URL 指向已运行的 PostgreSQL；api、calls 和 frontend 使用同一节点列表。
+x-call-nodes: &call-nodes '{"voice-a":"http://127.0.0.1:8101","voice-b":"http://127.0.0.1:8102"}'
+
+services:
+  backend:
+    environment:
+      EIDOLON_ROLE: api
+      EIDOLON_CALL_NODE_ID: ""
+      DATABASE_URL: ${DATABASE_URL:?拆分部署需要共享 PostgreSQL}
+      EIDOLON_CALL_NODES: *call-nodes
+
+  frontend:
+    environment:
+      EIDOLON_CALL_NODES: *call-nodes
+
+  calls-a:
+    extends:
+      file: docker-compose.prod.yml
+      service: backend
+    environment:
+      HOST: 127.0.0.1
+      PORT: 8101
+      EIDOLON_ROLE: calls
+      EIDOLON_CALL_NODE_ID: voice-a
+      DATABASE_URL: ${DATABASE_URL:?拆分部署需要共享 PostgreSQL}
+      EIDOLON_CALL_NODES: *call-nodes
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8101/api/health', timeout=8)
+
+  calls-b:
+    extends:
+      file: docker-compose.prod.yml
+      service: backend
+    environment:
+      HOST: 127.0.0.1
+      PORT: 8102
+      EIDOLON_ROLE: calls
+      EIDOLON_CALL_NODE_ID: voice-b
+      DATABASE_URL: ${DATABASE_URL:?拆分部署需要共享 PostgreSQL}
+      EIDOLON_CALL_NODES: *call-nodes
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8102/api/health', timeout=8)

@@ -26,7 +26,7 @@ text turn and lands in the same conversation record.
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import nullcontext
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -106,6 +106,7 @@ from eidolon.bailian import REGION_URLS, BailianCheckFailed, BailianSTTService, 
 from eidolon.billing import Billing
 from eidolon.call_outcome import CallLimits, CallOutcome, Ending
 from eidolon.characters import Character
+from eidolon.call_nodes import CallNodes, NodeUnavailable
 from eidolon.clock import Clock
 from eidolon.config import (
     DEFAULT_BAILIAN_STT_MODEL,
@@ -960,6 +961,7 @@ class Calls:
         speech: Speech,
         clock: Clock,
         store: Store,
+        nodes: CallNodes | None = None,
     ) -> None:
         """Calls last as long, and take as many turns, as `limits` says as each starts.
         Calls of users banned or deleted meanwhile, as `store` has them, are hung up. Each
@@ -979,6 +981,96 @@ class Calls:
         self._live: set[_LiveCall] = set()
         self._placing: set[_Placing] = set()  # calls placed, not yet served
         self._watch: asyncio.Task | None = None  # hangs up banned and deleted users' calls
+        self._nodes = nodes
+        self._claims: dict[str, _Placing | _LiveCall] = {}
+        self._ending_claims: set[str] = set()
+        self._finished_claims: set[str] = set()
+        self._node_lost = False
+        self._coordination: asyncio.Task | None = None
+        self._notifications: set[asyncio.Task] = set()
+
+    async def open(self) -> None:
+        """Register this media process before accepting offers."""
+        if self._nodes is not None and self._coordination is None:
+            await self._nodes.start()
+            if self._settings.role == "calls":
+                self._coordination = asyncio.create_task(self._coordinate())
+
+    def _notify(self, work: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.create_task(work)
+        self._notifications.add(task)
+        task.add_done_callback(self._notification_done)
+
+    def _notification_done(self, task: asyncio.Task) -> None:
+        self._notifications.discard(task)
+        if not task.cancelled() and task.exception() is not None:
+            log.error("call coordination failed", exc_info=task.exception())
+
+    async def _coordinate(self) -> None:
+        assert self._nodes is not None
+        try:
+            while True:
+                checking = dict(self._claims)
+                async with asyncio.timeout(5):
+                    controls = await self._nodes.heartbeat()
+                present = {control.call_id for control in controls}
+                for claim, call in checking.items():
+                    if claim not in present:
+                        if isinstance(call, _Placing):
+                            call.cancelled = True
+                        else:
+                            self._stop_claim(claim, call, "failed")
+                for control in controls:
+                    call = self._claims.get(control.call_id)
+                    if call is None:
+                        continue
+                    if isinstance(call, _Placing):
+                        if control.stop_reason or control.cooldown_until or control.ended_for:
+                            call.cancelled = True
+                    elif control.stop_reason:
+                        self._stop_claim(control.call_id, call, control.stop_reason)
+                    else:
+                        if control.cooldown_until:
+                            call.cooled(control.cooldown_until, None)
+                        if control.ended_for:
+                            call.conversation_ended(control.ended_for)
+                finished = tuple(self._finished_claims)
+                if finished:
+                    try:
+                        async with asyncio.timeout(2):
+                            await self._nodes.release_finished(finished)
+                    except Exception:
+                        log.warning("could not release finished calls; will try again", exc_info=True)
+                    else:
+                        self._finished_claims.difference_update(finished)
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._node_lost = True
+            log.exception("call node lost shared ownership; ending its calls")
+            for call in list(self._placing):
+                call.cancelled = True
+            await asyncio.gather(*(live.hang_up("failed") for live in list(self._live)))
+            await asyncio.gather(*(placing.done.wait() for placing in list(self._placing)))
+            try:
+                await self._nodes.aclose()
+            except Exception:
+                log.exception("could not unregister the stopped call node")
+
+    def _stop_claim(self, claim: str, call: "_LiveCall", reason: CallEndReason) -> None:
+        if claim not in self._ending_claims:
+            self._ending_claims.add(claim)
+            self._notify(call.hang_up(reason))
+
+    def _finish_claim(self, claim: str) -> None:
+        self._claims.pop(claim, None)
+        self._ending_claims.discard(claim)
+        self._finished_claims.add(claim)
+
+    def _released(self, claim: str, live: "_LiveCall") -> None:
+        self._live.discard(live)
+        self._finish_claim(claim)
 
     def _limits(self) -> CallLimits:
         """A call's own limits, as it connects now: those in effect then hold to its end."""
@@ -1008,11 +1100,15 @@ class Calls:
         if self._settings.turn is not None:
             servers.append(self._settings.turn.credentials(user_id, self._clock()))
         duration = self._limits().duration
+        node = (
+            await self._nodes.choose(user_id, self._usage_limits().concurrent_calls)
+            if self._nodes is not None else None
+        )
         return {
             "iceServers": servers,
             "maxCallSeconds": None if duration is None else int(duration.total_seconds()),
             "callExempt": exempt,
-        }
+        } | ({"offerEndpoint": f"/api/call-nodes/{node}/offer"} if node else {})
 
     async def start(
         self,
@@ -1030,16 +1126,34 @@ class Calls:
         as there may be at once, not counting the user's own, before anything is asked or
         recorded. Whatever fails before the call is served, it never connected; once it is
         served, it is settled as it ends, letting go of the keys it brought."""
+        if self._settings.role == "api":
+            raise NodeUnavailable("这个进程不承载通话，请使用选定的通话节点")
+        if self._node_lost:
+            raise NodeUnavailable("通话节点已停止接听")
         self._refuse_unless_room(user_id)
         placing = _Placing(user_id, character.id)
         self._placing.add(placing)
+        if self._nodes is not None:
+            try:
+                placing.claim = await self._nodes.reserve(
+                    user_id, character.id, conversation.id, self._usage_limits().concurrent_calls
+                )
+                self._claims[placing.claim] = placing
+            except BaseException:
+                self._placing.discard(placing)
+                placing.done.set()
+                raise
         try:
+            if self._nodes is not None and await self._store.get_conversation(conversation.id) is None:
+                raise CallNotFound()
             return await self._admit_and_start(
                 user_id, conversation, character, options, offer, brought, placing
             )
         finally:
             self._placing.discard(placing)
             placing.done.set()
+            if placing.claim and self._claims.get(placing.claim) is placing:
+                self._finish_claim(placing.claim)
 
     async def _admit_and_start(
         self,
@@ -1065,7 +1179,9 @@ class Calls:
             await outcome.set_up_failed()
             raise CallFailed()
         try:
-            await self.hang_up(user_id, "left")
+            if self._nodes is not None:
+                await self._nodes.stop(user_id, "left", excluding=placing.claim)
+            await self._hang_up_local(user_id, "left")
         except BaseException:
             await outcome.set_up_failed()
             raise
@@ -1092,6 +1208,10 @@ class Calls:
             connections.append(connection)
             if placing.cancelled:  # she was deleted while the offer was being answered
                 raise CallFailed()
+            if self._nodes is not None and not await self._nodes.activated(placing.claim):
+                raise CallFailed()
+            if placing.cancelled or self._node_lost:
+                raise CallFailed()
 
             @connection.event_handler("closed")
             async def forget(connection: SmallWebRTCConnection) -> None:
@@ -1103,7 +1223,11 @@ class Calls:
             )
             self._placing.discard(placing)  # under way as a live call from now on
             self._live.add(live)
-            live.start(on_done=self._live.discard)
+            if placing.claim:
+                self._claims[placing.claim] = live
+                live.start(on_done=lambda ended: self._released(placing.claim, ended))
+            else:
+                live.start(on_done=self._live.discard)
             started.append(live)
             if self._watch is None or self._watch.done():
                 self._watch = asyncio.create_task(self._hang_up_users_gone())
@@ -1158,6 +1282,10 @@ class Calls:
         """How many calls there are now, connected or still connecting."""
         return len(self._live)
 
+    async def total_in_progress(self) -> int:
+        """Calls across the deployment, when media runs on separate nodes."""
+        return await self._nodes.count() if self._nodes is not None else self.in_progress
+
     def _refuse_unless_room(self, user_id: str) -> None:
         """Raise StillPlacing if the user's last call is still being placed, CallsBusy if
         there are as many calls under way as there may be at once, but for the user's own,
@@ -1187,6 +1315,13 @@ class Calls:
         placed is cancelled, never to be served, and waited for to fail as the live ones
         are waited for to end. Unless banned, a user's calls are hung up as they are
         deleted."""
+        if self._nodes is not None:
+            await self._nodes.stop(user_id, reason, character_id=character_id)
+        await self._hang_up_local(user_id, reason, character_id=character_id)
+
+    async def _hang_up_local(
+        self, user_id: str, reason: CallEndReason, *, character_id: str | None = None
+    ) -> None:
         live = [
             call for call in list(self._live)
             if call.user_id == user_id
@@ -1212,6 +1347,8 @@ class Calls:
         for live in list(self._live):
             if live.user_id == user_id and live.character_id == character_id:
                 live.cooled(until, taking)
+        if self._nodes is not None:
+            self._notify(self._nodes.cool(user_id, character_id, until))
 
     def conversation_ended(self, conversation_id: str, why: EndsFor) -> None:
         """She has ended the conversation (GLOSSARY.md「已结束的对话」), typing in it, for
@@ -1219,6 +1356,8 @@ class Calls:
         for live in list(self._live):
             if live.conversation_id == conversation_id:
                 live.conversation_ended(why)
+        if self._nodes is not None:
+            self._notify(self._nodes.end(conversation_id, why))
 
     async def _hang_up_users_gone(self) -> None:
         """While there are calls, hang up those of users banned or deleted meanwhile (by
@@ -1233,14 +1372,23 @@ class Calls:
                 except NotFound:
                     reason = "deleted"
                 log.info("hanging up the calls of user %s, %s", user_id, reason)
-                await self.hang_up(user_id, reason)
+                await self._hang_up_local(user_id, reason)
 
     async def aclose(self) -> None:
         """Hang up every call and wait for them to end; a reply in progress is dropped."""
+        for placing in list(self._placing):
+            placing.cancelled = True
         if self._watch is not None:
             self._watch.cancel()
         await asyncio.gather(*(live.hang_up("shutdown") for live in list(self._live)))
         await _within_disconnect_timeout(self._webrtc.close(), "the calls left")
+        if self._coordination is not None:
+            self._coordination.cancel()
+            await asyncio.gather(self._coordination, return_exceptions=True)
+        if self._notifications:
+            await asyncio.gather(*self._notifications)
+        if self._nodes is not None:
+            await self._nodes.aclose()
 
     async def _answer(
         self,
@@ -1267,6 +1415,7 @@ class _Placing:
         self.user_id = user_id
         self.character_id = character_id
         self.cancelled = False
+        self.claim = ""
         self.done = asyncio.Event()
 
 

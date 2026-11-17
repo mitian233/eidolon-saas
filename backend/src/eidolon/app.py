@@ -26,6 +26,7 @@ from eidolon.call import (
     SessionDescription,
     StillPlacing,
 )
+from eidolon.call_nodes import AlreadyPlacing, CapacityReached, NodeUnavailable
 from eidolon.character_repository import shown_character
 from eidolon.database import readable
 from eidolon.engine import ENDED, TurnJudged, shown
@@ -234,6 +235,12 @@ def create_app(backend: Backend) -> FastAPI:
     app.middleware("http")(session_middleware(backend.settings))
 
     @app.middleware("http")
+    async def shared_settings(request: Request, call_next: Callable) -> Response:
+        if backend.settings.role != "all" and request.url.path != "/api/health":
+            await backend.config.refresh()
+        return await call_next(request)
+
+    @app.middleware("http")
     async def limit_document_body(request: Request, call_next: Callable) -> Response:
         parts = request.url.path.split("/")
         if request.method == "POST" and len(parts) == 5 and parts[1:3] == ["api", "characters"] and parts[4] == "documents":
@@ -267,6 +274,7 @@ def create_app(backend: Backend) -> FastAPI:
         )
 
     @app.exception_handler(CallsUnavailable)
+    @app.exception_handler(NodeUnavailable)
     async def calls_unavailable(_: Request, e: CallsUnavailable) -> JSONResponse:
         return JSONResponse({"detail": str(e)}, status_code=503)
 
@@ -290,12 +298,14 @@ def create_app(backend: Backend) -> FastAPI:
         return JSONResponse({"detail": str(e)}, status_code=404)
 
     @app.exception_handler(CallsBusy)
+    @app.exception_handler(CapacityReached)
     async def calls_busy(_: Request, e: CallsBusy) -> JSONResponse:
         """Refused for now, as many calls being under way as there may be at once; told
         apart from calls being unavailable by its `code`."""
         return JSONResponse({"detail": str(e), "code": "calls_busy"}, status_code=503)
 
     @app.exception_handler(StillPlacing)
+    @app.exception_handler(AlreadyPlacing)
     async def still_placing(_: Request, e: StillPlacing) -> JSONResponse:
         """Refused for now, the user's last call not yet answered; as a conflict, told apart
         from a call refused for the limit's 429."""

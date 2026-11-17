@@ -114,6 +114,17 @@ key 只存在浏览器里，回合/通话期间随请求带给后端、在进程
 
 WebRTC：`EIDOLON_ICE_SERVERS`（默认 Google 公共 STUN）、`EIDOLON_TURN_URLS`/`EIDOLON_TURN_SECRET`（生产用 compose 自带的 coturn，只需要填密钥）。
 
+### 通话进程拆分
+
+| 变量 | 作用 |
+|---|---|
+| `EIDOLON_ROLE` | `all` 默认单进程；`api` 处理普通接口并选择通话节点；`calls` 是可独立处理通话的完整后端 |
+| `EIDOLON_CALL_NODES` | api、calls、前端共有的 JSON 节点表，如 `{"voice-a":"http://127.0.0.1:8101"}`；只接受 HTTP(S) 根地址，不接受账号密码、路径、query 或 fragment |
+| `EIDOLON_CALL_NODE_ID` | calls 使用的节点 ID，必须在表中，1–64 个字母、数字、下划线或连字符；活着的进程不能共用同一个 ID |
+| `DATABASE_URL` | 拆分时必须是同一个 PostgreSQL 地址；默认 all 可继续用 SQLite |
+
+并发通话上限在所有节点间共用，用户带齐自带 key 也受此上限限制。通话分钟仍写 `calls` 表并计入现有统计，没有新增计费系统。节点登记和控制仅保存通话归属、状态、时间与结束原因，不保存用户 key 或模型请求。失联或重启的通话按连接中断处理，不迁移。单机 compose 用法见 [部署说明](deploy.md#可选同机拆分通话节点)。
+
 ## 玩法状态
 
 | 玩法 | 状态 |
