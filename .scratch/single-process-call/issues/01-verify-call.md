@@ -1,15 +1,15 @@
 # 验证单进程通话
 
-Status: ready-for-agent
+Status: done
 
 ## 验收项
 
-- [ ] 使用已有非收费测试验证自建角色 voice_id 传至 Fish Audio 请求，以及 Soniox/百炼自带 key 的选择。
-- [ ] 验证用户隔离、通话时长写入、限额与自带 key 免限额，以及独立的单通时长上限；先跑已有覆盖，只补缺口。
-- [ ] 本地构建版使用 Playwright、假麦克风和模拟通话验证删除外壳持有的通话角色后，连接结束时通话层、通话条和导航 inert 清除，覆盖拨号、展开和收起状态。
-- [ ] 同样验证与 A 通话时进入 B 编辑页，返回 B 对话需确认挂断；取消后仍在 B 编辑页且 A 通话继续；返回 A 不误问。
-- [ ] 记录模拟 UI 与真实语音端到端证据的区别；真实 STT/TTS、音色、模型行为和公网头像留待人工或公网复验，不更改地址安全检查。
-- [ ] 按仓库规则运行受影响检查；关闭本次服务和临时数据库并检查端口，记录命令、计数与缺口。
+- [x] 使用已有非收费测试验证自建角色 voice_id 传至 Fish Audio 请求，以及 Soniox/百炼自带 key 的选择。
+- [x] 验证用户隔离、通话时长写入、限额与自带 key 免限额，以及独立的单通时长上限；先跑已有覆盖，只补缺口。
+- [x] 本地构建版使用 Playwright、假麦克风和模拟通话验证删除外壳持有的通话角色后，连接结束时通话层、通话条和导航 inert 清除，覆盖拨号、展开和收起状态。
+- [x] 同样验证与 A 通话时进入 B 编辑页，返回 B 对话需确认挂断；取消后仍在 B 编辑页且 A 通话继续；返回 A 不误问。
+- [x] 记录模拟 UI 与真实语音端到端证据的区别；真实 STT/TTS、音色、模型行为和公网头像留待人工或公网复验，不更改地址安全检查。
+- [x] 按仓库规则运行受影响检查；关闭本次服务和临时数据库并检查端口，记录命令、计数与缺口。
 
 ## Comments
 
@@ -33,3 +33,20 @@ Status: ready-for-agent
 - 文件编辑工具本次已能直接修改实际开发目录，此前工具不可编辑的阻碍已解除。没有推送，也不开 PR。
 - 本票继续保持未完成：自建角色 `voice_id` 到 Fish 请求的完整链路仍未确认。本次只补数据库通话测试，不以此声称真实 STT/TTS 或 M3 多节点已经跑通。
 - 两份只读审查报告：任务要求 0 项问题；代码规范发现 1 项重复场景（CODING_STANDARDS.md 的 Same setup, assertions split）。已将新断言并入现有双数据库测试，删除新增的重复测试。
+
+### 实现说明（票 01，2026-11-17 收尾）
+
+- 本轮起点 `af2a7dfb`。只补测试和记录；不修改产品实现、不开始 M3、不推送或开 PR。
+- `test_own_speech_keys.py::test_custom_characters_voice_and_own_key_reach_fish` 通过真实 API 创建私有角色，将其保存的 `custom-fish-voice` 用于真实 WebRTC 通话和一个文字回合。使用生产 `SpeechServices`、`FishTTS` 与 Fish 消息编码，只替换外部识别服务和 WebSocket 网络连接。断言编码后的 `reference_id`、网络连接的 Authorization，以及回合正常结束。Soniox/百炼选择沿用既有测试。
+- `UV_NO_SYNC=1 uv run pytest -q tests/test_own_speech_keys.py tests/test_fish_segments.py tests/test_avatar.py`：41 passed，12 warnings，36.07 秒。覆盖自带语音服务、Fish 分段及头像；没有收费服务请求。
+- `UV_NO_SYNC=1 uv run pytest -q tests/test_call.py tests/test_call_outcome.py tests/test_own_keys.py tests/test_usage.py tests/test_exempting_keys.py tests/test_call_stats.py tests/test_call_records.py tests/test_concurrent_calls.py`：95 passed，53 warnings，25.61 秒。运行结束后另有四条 aioice `Connection.check_start` 后台任务错误（关闭后的 UDP transport 为 None），不能把这一运行描述为没有错误输出；见票 02。未修改第三方库，也未过滤或吞掉这些错误。
+- 当前代码的构建版、独立临时 PostgreSQL、系统 Chromium、Playwright 运行六个场景：公开头像成功显示；拨号中删除；接通收起时删除；接通展开时删除；A 通话中从 B 编辑页返回并取消；A 通话中从 A 编辑页返回。全部断言通过，页面脚本错误 0。
+- 三种删除均确认通话层、通话条与 `[inert]` 为 0，浏览器客户端 RTCPeerConnection 均关闭，真实角色 API 返回 404。展开场景将 DELETE 响应挂起后，程序触发已有通话条的展开按钮，再放行真实删除响应；这是覆盖响应到达时的状态，不声称鼠标可点击弹窗遮住的控件。
+- 跨角色取消后仍在 B 编辑页，A 通话条继续计时；同角色返回直接进入 A 对话，无挂断确认。通话准备和 offer/PATCH 由本机浏览器 WebRTC 对端代答，发送 bot-ready，使用假麦克风；此结果证明页面状态处理，不证明真实 STT/TTS 或用户音色的实际听感。
+- `CI=1 BACKEND_URL=http://127.0.0.1:18000 npm run build` 首次被 Next.js 安全升级提示中止，重试原命令后通过；保留 LINE Seed JP 字体提醒。Next.js 提示另记在维护票，不在本次收尾中擅自升级框架。
+- 真实服务仍需要用户在自己的浏览器「设置 → 自带密钥」填写配置，再打一通电话；key 不应发送到聊天或写入本票。缺少相关资料时是否编造，仍在 M2 资料票 05 等待真实模型试用。
+- `UV_NO_SYNC=1 sh scripts/affected-tests.sh af2a7dfb`：Ruff 通过，Pyright 0 errors / 0 warnings；`test_avatar.py`、`test_own_speech_keys.py` 共 27 passed，12 条弃用提醒，1.99 秒。此次输出没有 aioice 后台任务错误。
+- 临时 Playwright 脚本和后端启动脚本已删除；没有读取 `.env` 或真实凭据。
+- 临时前后端服务已停止。服务停止没有触发 pgserver 最后一个句柄的清理：其句柄记录仍指向已退出的启动进程，因此仅对本轮 `/tmp/eidolon-pre-m3-bmkzdlnh/postgres` 执行 pg_ctl fast stop，并删除本轮临时目录；命令返回 server stopped。没有停止或修改用户数据库。
+- 清理后 `/usr/bin/ss -ltn '( sport = :3000 or sport = :18000 )'` 没有监听行，`/usr/bin/ps -C postgres -o pid=,args=` 没有进程行。浏览器及其 WebRTC 对端已关闭。
+- 两份只读报告（任务要求、代码规范）均未发现需要修改的问题。未将真实收费语音、aioice 收尾问题或 Next.js 安全提醒描述为已解决。

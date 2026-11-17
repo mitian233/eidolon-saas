@@ -11,11 +11,14 @@ LLM, synthesis and recognition are all the user's own (text turns on their own L
 test_admission). How long a call may last and how many turns it may take is the same for
 everyone."""
 
+import asyncio
 from dataclasses import replace
+from typing import Any
 
 import httpx
 import pytest
 
+from eidolon.call import FishTTS, SpeechServices
 from eidolon.config import Settings, SttKey, UsageLimits
 from tests.browser import Browser, open_browser
 from tests.conftest import ClientFactory
@@ -28,6 +31,7 @@ from tests.fakes import (
     FakeSpeech,
 )
 from tests.test_delete_account import rows_mentioning
+from tests.test_fish_segments import FakeFish, FakeFishSocket
 from tests.test_text_turn import start_conversation
 
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
@@ -116,6 +120,48 @@ async def test_a_call_hears_and_speaks_on_the_keys_it_brings(
 
     assert [stt.key for stt in speech.stts] == [SttKey("soniox", MY_SONIOX)]
     assert [(tts.api_key, tts.voice_id) for tts in speech.ttss] == [(MY_FISH, "kogane-voice")]
+
+
+async def test_custom_characters_voice_and_own_key_reach_fish(
+    make_client: ClientFactory, speech: FakeSpeech, browser: Browser, monkeypatch: pytest.MonkeyPatch
+):
+    fish = FakeFish()
+    headers: list[dict[str, str]] = []
+    started = asyncio.Event()
+    send = FakeFishSocket.send
+
+    async def connect(self: FishTTS, uri: str, **kwargs: Any) -> Any:
+        headers.append(kwargs["additional_headers"])
+        return await fish.connect()
+
+    async def record_start(self: FakeFishSocket, data: bytes) -> None:
+        await send(self, data)
+        if fish.starts:
+            started.set()
+
+    monkeypatch.setattr(FishTTS, "_websocket_connect", connect)
+    monkeypatch.setattr(FakeFishSocket, "send", record_start)
+    monkeypatch.setattr(SpeechServices, "stt", lambda self, key, *, own: speech.stt(key, own=own))
+    client = make_client(FakeLLM(REPLY), speech=SpeechServices())
+
+    created = await client.post("/api/characters", json={
+        "name": "向导", "sheet": "你是山间向导。", "voice_id": "custom-fish-voice",
+        "language_mode": "bilingual",
+    })
+    assert created.status_code == 201, created.text
+    character = created.json()
+    assert character["voice_id"] == "custom-fish-voice"
+    conversation_id = await start_conversation(client, character["id"])
+    called = await browser.call(client, conversation_id=conversation_id, own_keys=own_keys("tts"))
+    assert called.status_code == 200, called.text
+    await browser.connect()
+    browser.type("你好")
+    turn = await browser.turn()
+    await asyncio.wait_for(started.wait(), 10)
+
+    assert turn[0]["text"] == "你好" and turn[-1]["type"] == "done"
+    assert fish.starts and all(start["reference_id"] == "custom-fish-voice" for start in fish.starts)
+    assert headers and all(header["Authorization"] == f"Bearer {MY_FISH}" for header in headers)
 
 
 async def test_the_deployers_keys_serve_what_the_call_did_not_bring(
