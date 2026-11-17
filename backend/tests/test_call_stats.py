@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from eidolon import database
 from eidolon.config import Settings
 from tests.browser import TIMEOUT, Browser, open_browser
 from tests.conftest import ClientFactory
@@ -41,17 +42,23 @@ async def kept(client: httpx.AsyncClient, calls: int) -> dict:
     return got
 
 
-async def recorded_calls(database: Path, calls: int) -> list[float | None]:
+async def recorded_calls(database_target: Path | str, calls: int) -> list[float | None]:
     """How long each call lasted once connected, as its activity record says, once there are
     `calls` of them, oldest first."""
+    def read_durations() -> list[float | None]:
+        db = database.connect(database_target)
+        try:
+            return [duration for (duration,) in db.execute(
+                "SELECT duration_s FROM activity_records WHERE kind = 'call' ORDER BY id"
+            ).fetchall()]
+        finally:
+            db.close()
+
     async with asyncio.timeout(TIMEOUT):
         while True:
-            with sqlite3.connect(database) as db:
-                rows = db.execute(
-                    "SELECT duration_s FROM activity_records WHERE kind = 'call' ORDER BY id"
-                ).fetchall()
-            if len(rows) == calls:
-                return [duration for (duration,) in rows]
+            durations = await asyncio.to_thread(read_durations)
+            if len(durations) == calls:
+                return durations
             await asyncio.sleep(0.05)
 
 
@@ -80,21 +87,37 @@ async def call(client: httpx.AsyncClient, conversation: str, speech: FakeSpeech)
 
 
 async def test_a_call_that_connected_counts_for_as_long_as_its_record_says_and_one_that_did_not_does_not(
-    make_client: ClientFactory, settings: Settings, speech: FakeSpeech, browser: Browser,
-    clock: FakeClock,
+    database_target: Path | str, make_client: ClientFactory, settings: Settings,
+    speech: FakeSpeech, browser: Browser, clock: FakeClock,
 ):
-    client = make_client(FakeLLM(REPLY), clock=clock)
+    client = make_client(
+        FakeLLM(REPLY),
+        settings=replace(settings, database_path=database_target),
+        clock=clock,
+    )
     conversation = await start_conversation(client, "kogane")
     await call(client, conversation, speech)
     got = await kept(client, 1)
-    [lasted] = await recorded_calls(settings.database_path, 1)
+    [lasted] = await recorded_calls(database_target, 1)
+
+    def read_call() -> tuple[str, float]:
+        db = database.connect(database_target)
+        try:
+            [row] = db.execute("SELECT conversation_id, duration_s FROM calls").fetchall()
+            return row
+        finally:
+            db.close()
+
+    conversation_id, duration = await asyncio.to_thread(read_call)
+    assert conversation_id == conversation
+    assert duration == lasted
 
     # Its speech synthesis failing before any turn, the next never really connected.
     await browser.call(client, conversation_id=conversation)
     await browser.connect()
     await speech.ttss[-1].break_down()
     assert (await browser.next_server_message("ended"))["reason"] == "not_connected"
-    await recorded_calls(settings.database_path, 2)
+    await recorded_calls(database_target, 2)
     after = (await stats(client))["range"]
 
     assert lasted is not None and lasted > 0
