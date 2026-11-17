@@ -27,3 +27,5 @@ cd backend && UV_NO_SYNC=1 uv run pytest -q tests/test_call.py tests/test_call_o
 ## Comments
 
 本轮仅记录；没有修改 aioice/aiortc、产品通话逻辑或测试关闭流程。新增的语音和头像测试组合 41 passed，未出现这些后台任务错误。该组合结果不能证明这里的竞态已经解决。
+
+M3 提交 `8ebbf2e7` 后用上面的原命令重跑，95 项通过，53 条弃用提醒，用时 26.14 秒。此次没有出现此前的 aioice 后台任务错误。该问题仍可能偶发，保留本票。
