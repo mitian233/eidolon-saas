@@ -18,7 +18,6 @@ import {
   chosenCategories,
   exportHref,
   importSummary,
-  isDisabled,
   packageFailure,
   readManifest,
   selectAll,
@@ -27,7 +26,6 @@ import {
 } from "@/lib/dataPackage";
 import { type Failure } from "@/lib/failure";
 import { toDraft } from "@/lib/producerProfile";
-import { cn } from "@/lib/utils";
 import { SuccessIcon } from "@/theme/icons";
 
 const t = copy.settings.dataPackage;
@@ -183,7 +181,7 @@ function ImportSection() {
   );
 }
 
-/** 几类的勾选框，按清单的顺序；照片缩进挂在对话下面。 */
+/** 按清单顺序列出可选类别。 */
 function Categories({
   offered,
   choice,
@@ -196,25 +194,18 @@ function Categories({
   const id = useId();
   return (
     <ul className="flex flex-col">
-      {offered.map((category) => {
-        const disabled = isDisabled(choice, category);
-        return (
-          <li key={category}>
-            <label
-              htmlFor={`${id}-${category}`}
-              className={cn("flex items-center gap-3 py-1.5", category === "photos" && "pl-7")}
-            >
-              <Checkbox
-                id={`${id}-${category}`}
-                checked={Boolean(choice[category]) && !disabled}
-                disabled={disabled}
-                onCheckedChange={(checked) => onChange(choose(choice, category, checked))}
-              />
-              <span className="text-body">{t.categories[category]}</span>
-            </label>
-          </li>
-        );
-      })}
+      {offered.map((category) => (
+        <li key={category}>
+          <label htmlFor={`${id}-${category}`} className="flex items-center gap-3 py-1.5">
+            <Checkbox
+              id={`${id}-${category}`}
+              checked={Boolean(choice[category])}
+              onCheckedChange={(checked) => onChange(choose(choice, category, checked))}
+            />
+            <span className="text-body">{t.categories[category]}</span>
+          </label>
+        </li>
+      ))}
     </ul>
   );
 }

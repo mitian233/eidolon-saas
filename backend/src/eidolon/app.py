@@ -401,10 +401,13 @@ def create_app(backend: Backend) -> FastAPI:
         if body.call is None:
             raise HTTPException(422, "缺少要通话的对话")
         conversation = await conversation_to_call(body.call.conversation_id, user_id)
+        character = characters.get(conversation.character_id)
+        if character is None:
+            raise CallNotFound()
         return await calls.start(
             user_id,
             conversation,
-            characters[conversation.character_id],
+            character,
             CallOptions(body.call.muted, body.call.quality, device_timezone),
             description,
             body.call.own_keys.brought() if body.call.own_keys else BroughtKeys(),

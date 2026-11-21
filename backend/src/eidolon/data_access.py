@@ -156,22 +156,31 @@ class Database:
         return await asyncio.shield(running)
 
     @asynccontextmanager
-    async def advisory_lock(self, key: str) -> AsyncIterator[None]:
-        """Serialize work spanning transactions, across Postgres connections or the local SQLite loop."""
+    async def advisory_lock(self, key: str, *, wait: bool = True) -> AsyncIterator[bool]:
+        """Serialize work spanning transactions across Postgres connections or the local SQLite
+        loop. With `wait=False`, yield whether the lock was available immediately."""
         if self._postgres_url:
-            # A dedicated transaction owns the lock without occupying a writer or reader.
-            # Ending it, including on cancellation or disconnect, releases the lock.
+            # A dedicated transaction releases the lock on exit without occupying a writer or reader.
             async with await psycopg.AsyncConnection.connect(self._postgres_url, connect_timeout=30) as conn:
-                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
-                yield
+                if wait:
+                    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+                    yield True
+                else:
+                    result = await conn.execute("SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+                    row = await result.fetchone()
+                    assert row is not None
+                    yield row[0]
             return
         assert self._sqlite_path is not None
         scope = (asyncio.get_running_loop(), self._sqlite_path, key)
         lock = _sqlite_locks.get(scope)
         if lock is None:
             lock = _sqlite_locks[scope] = asyncio.Lock()
+        if not wait and lock.locked():
+            yield False
+            return
         async with lock:
-            yield
+            yield True
 
     async def checkpoint(self) -> None:
         """Have the write-ahead log emptied into the database file, as a write task handed

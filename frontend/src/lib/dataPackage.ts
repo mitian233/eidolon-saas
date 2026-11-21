@@ -7,8 +7,8 @@ import { copy } from "@/i18n";
 import { ApiError, type DataPackageImported } from "@/lib/api";
 import { toFailure, type Failure } from "@/lib/failure";
 
-/** 数据包里可能有的几类，按清单里的顺序。照片挂在对话下面，不带对话就不带照片。 */
-export const CATEGORIES = ["conversations", "photos", "memories", "profile", "cycles", "letters"] as const;
+/** 这个部署能导出和导入的类别，按数据包中的顺序。 */
+export const CATEGORIES = ["conversations", "memories", "profile"] as const;
 
 export type Category = (typeof CATEGORIES)[number];
 
@@ -31,22 +31,14 @@ export function selectAll(categories: readonly Category[]): Choice {
   return Object.fromEntries(categories.map((category) => [category, true]));
 }
 
-/** 勾上或取消一类。没勾对话时照片勾不上；取消对话时照片也一起取消。 */
+/** 勾上或取消一类。 */
 export function choose(choice: Choice, category: Category, checked: boolean): Choice {
-  if (isDisabled(choice, category)) return choice;
-  const next = { ...choice, [category]: checked };
-  if (category === "conversations" && !checked && "photos" in next) next.photos = false;
-  return next;
-}
-
-/** 这一类现在勾不了：不勾对话时的照片。 */
-export function isDisabled(choice: Choice, category: Category): boolean {
-  return category === "photos" && !choice.conversations;
+  return { ...choice, [category]: checked };
 }
 
 /** 勾了的几类，按顺序。 */
 export function chosenCategories(choice: Choice): Category[] {
-  return CATEGORIES.filter((category) => choice[category] && !isDisabled(choice, category));
+  return CATEGORIES.filter((category) => choice[category]);
 }
 
 /** 导出的地址：浏览器直接跳过去下载，不经过 JS 的内存。被拒时浏览器只拿到一页 JSON，所以先用 `checkDataPackageExport` 问一次。 */
@@ -130,15 +122,12 @@ function fromManifest(decoder: TextDecoder, chunks: Uint8Array[]): ManifestReadi
   return { kind: "package", categories: CATEGORIES.filter((category) => categories.includes(category)) };
 }
 
-/** 导入完的一句话：导入了什么（只算这次新加的），跳过了和谁的几段对话、几条周期记录、几封信。 */
+/** 导入完的一句话，说明这次新加了什么，以及哪些对话因找不到角色而跳过。 */
 export function importSummary(result: DataPackageImported): string {
   const t = copy.settings.dataPackage;
   const counts = [
     result.conversations > 0 && t.count.conversations(result.conversations),
-    result.photos > 0 && t.count.photos(result.photos),
     result.memories > 0 && t.count.memories(result.memories),
-    result.cycles > 0 && t.count.cycles(result.cycles),
-    result.letters > 0 && t.count.letters(result.letters),
   ].filter((count): count is string => Boolean(count));
   let imported: string;
   if (counts.length === 0) imported = result.profile ? t.importedProfile : t.nothingNew;
@@ -148,8 +137,7 @@ export function importSummary(result: DataPackageImported): string {
     const skipped = result.skipped.map((s) => t.skippedPart(s.character_name, s.conversations)).join(t.separator);
     imported += t.skipped(skipped, result.skipped.length > 1);
   }
-  if (result.cycles_skipped > 0) imported += t.skippedCycles(result.cycles_skipped);
-  return result.letters_skipped > 0 ? imported + t.skippedLetters(result.letters_skipped) : imported;
+  return imported;
 }
 
 /**

@@ -150,6 +150,11 @@ class CharacterRepository:
         return character
 
 
+def read_character_names(conn: sqlite3.Connection, owner_id: str) -> dict[str, str]:
+    """The owner's character names in the caller's transaction."""
+    return dict(conn.execute("SELECT id, name FROM characters WHERE owner_id = ?", (owner_id,)))
+
+
 def shown_character(character: Character) -> dict:
     """As the browser is told her: her settings, the greeting as plain text without delivery
     cues, the birthday as "MM-DD" (None when unset), and the avatar URL, never a local file."""

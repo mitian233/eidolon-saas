@@ -244,6 +244,6 @@ def build(
         identity_providers=identity_providers, activity=activity, config=config,
         prices=prices, announcements=announcements, sponsor=sponsor, invites=invites,
         affinities=affinities, backups=backups, service_status=service_status,
-        data_packages=DataPackages(database, store, memories, characters, {}, clock),
+        data_packages=DataPackages(database, memories, clock),
         her_now=her_now, documents=documents, reports=reports, _closers=closers,
     )

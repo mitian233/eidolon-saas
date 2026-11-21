@@ -27,7 +27,6 @@ from tests.fakes import (
     FakeReranker,
     context_of,
 )
-from tests.test_delete_account import rows_mentioning, user_id
 from tests.test_memories import KYOTO, OSAKA, TOKYO, superseding
 from tests.test_memory_management import memories
 from tests.test_shared_memory import CAT, REPLY, memories_section, memorized, turn
@@ -112,6 +111,7 @@ async def test_the_producer_profile_moves_to_another_deployment(
     res = await here.get("/api/account/data-package", params={"include": "profile"})
     assert res.status_code == 200, res.text
     assert res.headers["content-type"] == "application/zip"
+    assert res.headers.get("cache-control") == "private, no-store"
     disposition = res.headers["content-disposition"]
     assert disposition.startswith("attachment")
     assert "eidolon-data-package-" in disposition and disposition.endswith('.zip"')
@@ -536,16 +536,3 @@ async def test_imports_that_fail_do_not_count(
     for _ in range(3):
         assert (await import_package(client, PROFILE_PACKAGE, "profile")).status_code == 200
     assert (await import_package(client, PROFILE_PACKAGE, "profile")).status_code == 429
-
-
-async def test_deleting_the_user_deletes_the_imports_they_made(
-    make_client: ClientFactory, settings: Settings
-):
-    client = make_client(FakeLLM())
-    assert (await import_package(client, PROFILE_PACKAGE, "profile")).status_code == 200
-    producer = user_id(settings.database_path, "producer")
-    assert rows_mentioning(settings.database_path, producer).get("data_package_imports") == 1
-
-    assert (await client.post("/api/account/delete", json={"confirm": True})).status_code == 204
-
-    assert rows_mentioning(settings.database_path, producer) == {}

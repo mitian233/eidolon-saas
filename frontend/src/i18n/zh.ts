@@ -827,46 +827,36 @@ export const zh = {
     /** 数据包（GLOSSARY.md「数据包」）：导出带走、导入接着用。 */
     dataPackage: {
       exportTitle: "导出",
-      exportHint: "把你的数据下载成一个文件，带到这里或别的部署导入。",
+      exportHint: "下载一份对话、记忆和档案。请自行保管，文件没有加密。",
       categories: {
         conversations: "对话",
-        photos: "照片",
         memories: "记忆",
-        profile: "制作人档案",
-        cycles: "周期记录",
-        letters: "信",
+        profile: "档案",
       },
       export: "导出",
       importTitle: "导入",
-      importHint: "导入的内容并进你现有的数据。",
+      importHint: "对话和记忆会加入现有数据，勾选档案会替换当前档案。旧数据包也只导入这三类。",
       chooseFile: "选择数据包",
       import: "导入",
       importing: "正在导入…",
       reading: "正在读取…",
       nothingToChoose: "这个数据包里没有能导入的内容。",
-      /** 「导入了 3 段对话、2 张照片。」 */
       imported: (counts: string) => `导入了 ${counts}。`,
-      importedWithProfile: (counts: string) => `导入了 ${counts}和制作人档案。`,
-      importedProfile: "导入了制作人档案。",
+      importedWithProfile: (counts: string) => `导入了 ${counts}和档案。`,
+      importedProfile: "导入了档案。",
       count: {
         conversations: (n: number) => `${n} 段对话`,
-        photos: (n: number) => `${n} 张照片`,
         memories: (n: number) => `${n} 条记忆`,
-        cycles: (n: number) => `${n} 条周期记录`,
-        letters: (n: number) => `${n} 封信`,
       },
       separator: "、",
       nothingNew: "没有新的内容要导入。",
       /** 「跳过了和月岡恋鐘的 2 段、櫻木真乃的 1 段对话，这里没有她们。」 */
       skipped: (parts: string, many: boolean) => `跳过了和${parts}对话，这里没有${many ? "她们" : "她"}。`,
       skippedPart: (name: string, n: number) => `${name}的 ${n} 段`,
-      /** 「跳过了 2 条周期记录。」：角色不在、天数不对、在未来，或和已有的重叠。 */
-      skippedCycles: (n: number) => `跳过了 ${n} 条周期记录。`,
-      skippedLetters: (n: number) => `跳过了 ${n} 封信。`,
       failures: {
         broken: "这不是一个能用的数据包",
         too_new: "这个数据包来自更新的版本，请部署者升级后再导入",
-        too_large: "数据包太大了（最大 200 MB），可以不带照片重新导出",
+        too_large: "数据包太大了（最大 200 MB），可以少选几类重新导出",
         busy: "已经有一个数据包在导入或导出",
       },
       usedUp: (time: string) => `今天的导入次数用完了，${time} 以后可以再导入`,
@@ -876,9 +866,8 @@ export const zh = {
       hint: "彻底删除你在这里的所有数据，无法恢复。",
       start: "删除我的全部数据",
       confirmTitle: "删除全部数据？",
-      // 完整后果只在按下确认前看到，措辞跟以前一模一样。
       confirmHint:
-        "彻底删除你的记忆、对话、制作人档案、登录方式、登录状态和限额的计数，无法恢复，这个浏览器里的自带密钥也一并清除；每天的加密备份里的副本最多 30 天后清除。运行记录会保留到期满 90 天，但不再关联到你。所有设备都会退出登录；之后再用同一种登录方式登录，会是一位全新的用户。",
+        "确认后会挂断正在进行的通话，删除你在这里的角色、导入的资料、对话、记忆、档案和登录方式。所有设备都会退出登录。这个浏览器里的自带密钥也会清除。删除后无法恢复。加密备份里的副本最多 30 天后清除。运行记录在 90 天后清除，删除后就不再关联到你。",
       confirm: "确认删除，无法恢复",
       exportFirst: "先导出数据包",
     },

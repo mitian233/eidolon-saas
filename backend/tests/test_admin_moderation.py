@@ -16,7 +16,8 @@ from tests.conftest import SITE, ClientFactory, sign_in_as
 from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeIdentityProvider, FakeJudge, FakeLLM, FakeReranker
 from tests.test_admin_users import admin_beside
 from tests.test_admin_users import settings  # noqa: F401
-from tests.test_delete_account import REPLY, use_everything
+from tests.test_data_package import PROFILE_PACKAGE, import_package
+from tests.test_delete_account import DELETE, REPLY, use_everything
 from tests.test_service_status import backend_of
 from tests.test_shared_memory import CAT, memorized
 from tests.test_text_turn import start_conversation
@@ -54,7 +55,7 @@ async def test_admin_ban_revokes_every_session_and_ends_the_call_before_periodic
         assert response.json()["id"] == user_id
 
 
-async def test_admin_deletion_clears_the_accounts_data_but_keeps_other_users(
+async def test_self_deletion_clears_the_accounts_data_but_keeps_other_users(
     moderation_settings: Settings, make_client: ClientFactory, github: FakeIdentityProvider, browser: Browser,
 ):
     split = isinstance(moderation_settings.database_path, str)
@@ -74,6 +75,7 @@ async def test_admin_deletion_clears_the_accounts_data_but_keeps_other_users(
     await node.documents.import_text(other_id, "mano-friend", "留下资料", "狗", FakeEmbedder())
 
     await use_everything(user)
+    assert (await import_package(user, PROFILE_PACKAGE, "profile")).status_code == 200
     [entry] = (await user.get("/api/conversations", params={"character_id": "mano"})).json()
     conversation = entry["id"]
     if not split:
@@ -101,6 +103,7 @@ async def test_admin_deletion_clears_the_accounts_data_but_keeps_other_users(
             ("SELECT COUNT(*) FROM memory_vectors WHERE user_id = ?", user_id, 1, 0),
             ("SELECT COUNT(*) FROM producer_profiles WHERE user_id = ?", user_id, 1, 0),
             ("SELECT COUNT(*) FROM sessions WHERE user_id = ?", user_id, 2, 0),
+            ("SELECT COUNT(*) FROM data_package_imports WHERE user_id = ?", user_id, 1, 0),
         )
 
         async def counts() -> list[int]:
@@ -109,7 +112,7 @@ async def test_admin_deletion_clears_the_accounts_data_but_keeps_other_users(
             ])
 
         assert await counts() == [before for _, _, before, _ in queries]
-        response = await admin.delete(f"/api/admin/users/{user_id}")
+        response = await user.post("/api/account/delete", json=DELETE)
         assert response.status_code == 204, response.text
         await browser.hung_up()
         assert await counts() == [after for _, _, _, after in queries]
@@ -117,3 +120,18 @@ async def test_admin_deletion_clears_the_accounts_data_but_keeps_other_users(
             assert (await device.get("/api/account")).status_code == 401
         assert (await admin.get(f"/api/admin/users/{user_id}")).status_code == 404
         assert (await other.get("/api/characters/mano-friend/documents")).json()[0]["origin"] == "留下资料"
+
+
+async def test_an_admin_can_delete_another_account_but_not_an_admin(
+    moderation_settings: Settings, make_client: ClientFactory, github: FakeIdentityProvider,
+):
+    user = make_client(FakeLLM(), settings=moderation_settings)
+    user_id = (await user.get("/api/account")).json()["id"]
+    path = f"/api/admin/users/{user_id}"
+    assert (await user.delete(path)).status_code == 404
+    async with admin_beside(user, github) as admin:
+        admin_id = (await admin.get("/api/account")).json()["id"]
+        assert (await admin.delete(f"/api/admin/users/{admin_id}")).status_code == 409
+        assert (await admin.delete(path)).status_code == 204
+        assert (await user.get("/api/account")).status_code == 401
+        assert (await admin.get("/api/account")).status_code == 200

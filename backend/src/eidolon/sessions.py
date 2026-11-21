@@ -72,7 +72,9 @@ def session_middleware(
             return JSONResponse({"detail": "请求来自其他网站，已拒绝"}, status_code=403)
         response = await call_next(request)
         if (token := getattr(request.state, "renewed_session", None)) is not None:
-            set_session_cookie(response, token, settings)
+            # A route that sets or clears the cookie takes precedence over renewal.
+            if not any(cookie.startswith(f"{SESSION_COOKIE}=") for cookie in response.headers.getlist("set-cookie")):
+                set_session_cookie(response, token, settings)
         return response
 
     return middleware

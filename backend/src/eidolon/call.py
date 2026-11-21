@@ -1144,7 +1144,7 @@ class Calls:
                 placing.done.set()
                 raise
         try:
-            if self._nodes is not None and await self._store.get_conversation(conversation.id) is None:
+            if await self._store.get_conversation(conversation.id) is None:
                 raise CallNotFound()
             return await self._admit_and_start(
                 user_id, conversation, character, options, offer, brought, placing
@@ -1181,7 +1181,7 @@ class Calls:
         try:
             if self._nodes is not None:
                 await self._nodes.stop(user_id, "left", excluding=placing.claim)
-            await self._hang_up_local(user_id, "left")
+            await self._hang_up_local(user_id, "left", excluding=placing)
         except BaseException:
             await outcome.set_up_failed()
             raise
@@ -1310,17 +1310,15 @@ class Calls:
     async def hang_up(
         self, user_id: str, reason: CallEndReason = "deleted", *, character_id: str | None = None
     ) -> None:
-        """Hang up the user's calls, for `reason`, and wait for them to end; a reply in
-        progress is dropped. With `character_id`, only the calls with her: one still being
-        placed is cancelled, never to be served, and waited for to fail as the live ones
-        are waited for to end. Unless banned, a user's calls are hung up as they are
-        deleted."""
+        """Cancel unanswered offers and hang up live calls, waiting for them to end.
+        With `character_id`, do this only for calls with that character."""
         if self._nodes is not None:
             await self._nodes.stop(user_id, reason, character_id=character_id)
         await self._hang_up_local(user_id, reason, character_id=character_id)
 
     async def _hang_up_local(
-        self, user_id: str, reason: CallEndReason, *, character_id: str | None = None
+        self, user_id: str, reason: CallEndReason, *, character_id: str | None = None,
+        excluding: "_Placing | None" = None,
     ) -> None:
         live = [
             call for call in list(self._live)
@@ -1329,8 +1327,8 @@ class Calls:
         ]
         placing = [
             call for call in list(self._placing)
-            if character_id is not None
-            and call.user_id == user_id and call.character_id == character_id
+            if call is not excluding and call.user_id == user_id
+            and (character_id is None or call.character_id == character_id)
         ]
         for call in placing:
             call.cancelled = True
@@ -1408,7 +1406,7 @@ class Calls:
 
 class _Placing:
     """A call placed by the user, from being placed until it is served or fails to be.
-    `cancelled` says the character was deleted meanwhile: the call is never to be served.
+    `cancelled` prevents an in-progress offer from being served after hang-up.
     `done` is set once it is served or has failed to be, however it ends."""
 
     def __init__(self, user_id: str, character_id: str) -> None:

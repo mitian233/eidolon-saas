@@ -8,38 +8,21 @@ import {
   exportHref,
   packageFailure,
   importSummary,
-  isDisabled,
   readManifest,
   selectAll,
 } from "@/lib/dataPackage";
 
 describe("勾选框", () => {
   it("默认全选给出的几类", () => {
-    expect(chosenCategories(selectAll(["conversations", "photos", "memories", "profile"]))).toEqual([
-      "conversations",
-      "photos",
-      "memories",
-      "profile",
+    expect(chosenCategories(selectAll(["conversations", "memories", "profile"]))).toEqual([
+      "conversations", "memories", "profile",
     ]);
     expect(chosenCategories(selectAll(["profile"]))).toEqual(["profile"]);
   });
 
-  it("不勾对话时照片既不能勾、也算没勾；再勾上对话，照片仍是没勾", () => {
-    const all = selectAll(["conversations", "photos", "memories", "profile"]);
-
-    const noConversations = choose(all, "conversations", false);
-    expect(isDisabled(noConversations, "photos")).toBe(true);
-    expect(chosenCategories(noConversations)).toEqual(["memories", "profile"]);
-    expect(chosenCategories(choose(noConversations, "photos", true))).toEqual(["memories", "profile"]);
-
-    const back = choose(noConversations, "conversations", true);
-    expect(isDisabled(back, "photos")).toBe(false);
-    expect(chosenCategories(back)).toEqual(["conversations", "memories", "profile"]);
-  });
-
   it("导出地址按顺序列出勾了的几类", () => {
-    const choice = choose(selectAll(["conversations", "photos", "memories", "profile"]), "memories", false);
-    expect(exportHref(chosenCategories(choice))).toBe("/api/account/data-package?include=conversations%2Cphotos%2Cprofile");
+    const choice = choose(selectAll(["conversations", "memories", "profile"]), "memories", false);
+    expect(exportHref(chosenCategories(choice))).toBe("/api/account/data-package?include=conversations%2Cprofile");
   });
 });
 
@@ -54,13 +37,19 @@ const MANIFEST = { format: 1, exported_at: "2026-10-19T08:00:00.000000+00:00", c
 
 describe("读数据包开头的 manifest.json", () => {
   it("列出包里有、这里能导入的几类", async () => {
-    const manifest = { ...MANIFEST, categories: ["conversations", "photos", "profile", "cycles", "letters", "albums"] };
+    const manifest = { ...MANIFEST, format: 5, categories: ["conversations", "photos", "profile", "cycles", "letters"] };
     const file = zip({ "manifest.json": [JSON.stringify(manifest), 0], "data.json": ["{}", 6] });
 
     expect(await readManifest(file)).toEqual({
       kind: "package",
-      categories: ["conversations", "photos", "profile", "cycles", "letters"],
+      categories: ["conversations", "profile"],
     });
+  });
+
+  it("旧包里只有关闭的类别时，没有可导入的内容", async () => {
+    const manifest = { ...MANIFEST, format: 5, categories: ["cycles", "letters"], counts: { cycles: 1, letters: 1 } };
+    const file = zip({ "manifest.json": [JSON.stringify(manifest), 0], "data.json": ["{}", 6] });
+    expect(await readManifest(file)).toEqual({ kind: "package", categories: [] });
   });
 
   it("格式比这里新时是 too_new", async () => {
@@ -94,15 +83,11 @@ describe("导入结果的一句话", () => {
   const nothing = { conversations: 0, photos: 0, memories: 0, profile: false, skipped: [], cycles: 0, cycles_skipped: 0, letters: 0, letters_skipped: 0 };
 
   it("说导入了什么", () => {
-    expect(importSummary({ ...nothing, profile: true })).toBe("导入了制作人档案。");
-    expect(importSummary({ ...nothing, conversations: 3, photos: 2, memories: 12, profile: true })).toBe(
-      "导入了 3 段对话、2 张照片、12 条记忆和制作人档案。",
+    expect(importSummary({ ...nothing, profile: true })).toBe("导入了档案。");
+    expect(importSummary({ ...nothing, conversations: 3, memories: 12, profile: true })).toBe(
+      "导入了 3 段对话、12 条记忆和档案。",
     );
     expect(importSummary({ ...nothing, memories: 1 })).toBe("导入了 1 条记忆。");
-    expect(importSummary({ ...nothing, memories: 1, cycles: 5, profile: true })).toBe(
-      "导入了 1 条记忆、5 条周期记录和制作人档案。",
-    );
-    expect(importSummary({ ...nothing, conversations: 1, letters: 2 })).toBe("导入了 1 段对话、2 封信。");
   });
 
   it("什么也没新加时照实说", () => {
@@ -124,14 +109,6 @@ describe("导入结果的一句话", () => {
       "没有新的内容要导入。跳过了和月岡恋鐘的 2 段对话，这里没有她。",
     );
   });
-
-  it("带上跳过的周期记录", () => {
-    expect(importSummary({ ...nothing, cycles: 3, cycles_skipped: 2 })).toBe("导入了 3 条周期记录。跳过了 2 条周期记录。");
-    expect(importSummary({ ...nothing, letters: 1, letters_skipped: 2 })).toBe("导入了 1 封信。跳过了 2 封信。");
-    expect(
-      importSummary({ ...nothing, skipped: [{ character_name: "月岡恋鐘", conversations: 2 }], cycles_skipped: 1 }),
-    ).toBe("没有新的内容要导入。跳过了和月岡恋鐘的 2 段对话，这里没有她。跳过了 1 条周期记录。");
-  });
 });
 
 describe("导入、导出被拒时的提示", () => {
@@ -143,9 +120,9 @@ describe("导入、导出被拒时的提示", () => {
     );
   });
 
-  it("反向代理挡下的太大没有错误码，也提示不带照片重新导出", () => {
+  it("反向代理挡下的太大没有错误码，也提示少选几类重新导出", () => {
     expect(packageFailure(new ApiError("请求失败（413）", 413)).message).toBe(
-      "数据包太大了（最大 200 MB），可以不带照片重新导出",
+      "数据包太大了（最大 200 MB），可以少选几类重新导出",
     );
   });
 

@@ -32,6 +32,7 @@ from eidolon.assembly import Backend
 from eidolon import data_package
 from eidolon.data_package import (
     CATEGORIES,
+    AccountDeleted,
     BrokenPackage,
     Busy,
     Category,
@@ -39,13 +40,13 @@ from eidolon.data_package import (
     TooLarge,
     TooNew,
 )
-from eidolon.sessions import DeviceTimezone, UserId
+from eidolon.sessions import UserId
 
 log = logging.getLogger(__name__)
 
 _TOO_NEW = "这个数据包来自更新的版本，请部署者升级后再导入"
 _BROKEN = "这不是一个能用的数据包"
-_TOO_LARGE = "数据包太大了（最大 200 MB），可以不带照片重新导出"
+_TOO_LARGE = "数据包太大了（最大 200 MB），可以少选几类重新导出"
 _BUSY = "已经有一个数据包在导入或导出"
 
 
@@ -80,7 +81,8 @@ def add_data_package_routes(app: FastAPI, backend: Backend) -> None:
         """Whether the user could export a package with the categories `include` names now:
         204 if so, refused as the export would be if not."""
         _categories(include)
-        packages.check_not_busy(user_id)
+        async with packages.one_at_a_time(user_id):
+            pass
 
     @app.get("/api/account/data-package")
     async def export_data_package(user_id: UserId, include: str = "") -> FileResponse:
@@ -91,7 +93,7 @@ def add_data_package_routes(app: FastAPI, backend: Backend) -> None:
         categories = _categories(include)
         path = _temporary_file()
         try:
-            with packages.one_at_a_time(user_id):
+            async with packages.one_at_a_time(user_id):
                 await packages.export(user_id, categories, path)
         except BaseException as e:
             path.unlink(missing_ok=True)
@@ -101,13 +103,14 @@ def add_data_package_routes(app: FastAPI, backend: Backend) -> None:
         return FileResponse(
             path,
             media_type="application/zip",
+            headers={"Cache-Control": "private, no-store"},
             filename=f"eidolon-data-package-{day_of(clock()).isoformat()}.zip",  # Beijing's day
             background=BackgroundTask(path.unlink, missing_ok=True),
         )
 
     @app.post("/api/account/data-package")
     async def import_data_package(
-        request: Request, user_id: UserId, include: str = "", device_timezone: DeviceTimezone = None
+        request: Request, user_id: UserId, include: str = "",
     ) -> dict:
         """Import the package in the request body, the zip itself, into the user's data: the
         categories both `include` names and the package holds. What it added
@@ -119,7 +122,7 @@ def add_data_package_routes(app: FastAPI, backend: Backend) -> None:
             raise TooLarge()
         path = _temporary_file()
         try:
-            with packages.one_at_a_time(user_id):
+            async with packages.one_at_a_time(user_id):
                 await packages.check_imports_left(user_id)
                 # The disk written on a thread, so a slow disk keeps no one else waiting.
                 file = await asyncio.to_thread(path.open, "wb")
@@ -132,9 +135,11 @@ def add_data_package_routes(app: FastAPI, backend: Backend) -> None:
                         await asyncio.to_thread(file.write, chunk)
                 finally:
                     await asyncio.to_thread(file.close)
-                imported = await packages.import_(user_id, path, categories, device_timezone)
+                imported = await packages.import_(user_id, path, categories)
         except (Busy, ImportsUsedUp, TooLarge, TooNew, BrokenPackage):
             raise
+        except AccountDeleted:
+            raise HTTPException(401, "请先登录") from None
         except Exception:
             log.error("importing a data package failed", exc_info=True)
             raise

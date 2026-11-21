@@ -22,6 +22,7 @@ from tests.conftest import (
 )
 from tests.fakes import (
     FakeBackgroundLLM,
+    FakeClock,
     FakeEmbedder,
     FakeIdentityProvider,
     FakeJudge,
@@ -31,6 +32,7 @@ from tests.fakes import (
 )
 from tests.test_concurrent_calls import another_user
 from tests.test_data_access import emptied, log_of, reading
+from tests.test_service_status import backend_of
 from tests.test_shared_memory import CAT, memorized
 from tests.test_text_turn import send_turn, start_conversation
 
@@ -106,12 +108,16 @@ async def test_deleting_leaves_nothing_of_the_user_in_any_table(
 
 
 async def test_deleting_signs_the_user_out_everywhere(make_client: ClientFactory):
-    desktop = make_client(FakeLLM())
-    phone = make_client(FakeLLM())
+    clock = FakeClock()
+    desktop = make_client(FakeLLM(), clock=clock)
+    phone = make_client(FakeLLM(), clock=clock)
+    clock.advance(hours=2)  # The delete request itself is due to renew the cookie.
 
     res = await desktop.post("/api/account/delete", json=DELETE)
 
-    assert 'eidolon_session=""' in res.headers["set-cookie"]
+    [cookie] = res.headers.get_list("set-cookie")
+    assert 'eidolon_session=""' in cookie
+    assert "eidolon_session" not in desktop.cookies
     for client in (desktop, phone):
         assert (await client.get("/api/account")).status_code == 401
 
@@ -203,6 +209,64 @@ async def test_deleting_hangs_up_the_users_call(
     await client.post("/api/account/delete", json=DELETE)
 
     await browser.hung_up()
+
+
+async def test_deleting_waits_for_an_unanswered_offer_to_be_cancelled(
+    make_client: ClientFactory, browser: Browser, monkeypatch: pytest.MonkeyPatch,
+):
+    phone = make_client(FakeLLM())
+    desktop = httpx.AsyncClient(transport=phone._transport, base_url=phone.base_url, headers=phone.headers)
+    conversation_id = await start_conversation(phone)
+    calls = backend_of(phone).calls
+    answer = calls._answer
+    answering, finish = asyncio.Event(), asyncio.Event()
+
+    async def held_answer(*args):
+        answering.set()
+        await finish.wait()
+        return await answer(*args)
+
+    monkeypatch.setattr(calls, "_answer", held_answer)
+    async with desktop, asyncio.TaskGroup() as tasks:
+        assert (await desktop.post("/api/auth/dev-login", json={"name": "producer"})).status_code == 204
+        placing = tasks.create_task(browser.call(phone, conversation_id=conversation_id))
+        try:
+            await asyncio.wait_for(answering.wait(), 5)
+            deleting = tasks.create_task(desktop.post("/api/account/delete", json=DELETE))
+            early, _ = await asyncio.wait({deleting}, timeout=0.5)
+        finally:
+            finish.set()
+    assert not early, "account deletion returned while the offer could still be answered"
+    assert deleting.result().status_code == 204
+    assert placing.result().status_code == 500
+    assert (await phone.get("/api/account")).status_code == 401
+
+
+@pytest.mark.parametrize("separate_api", [False, True], ids=["same-api", "separate-api"])
+async def test_an_offer_already_authorized_is_refused_after_account_deletion(
+    make_client: ClientFactory, browser: Browser, monkeypatch: pytest.MonkeyPatch, separate_api: bool,
+):
+    client = make_client(FakeLLM())
+    deleting = make_client(FakeLLM()) if separate_api else client
+    conversation_id = await start_conversation(client)
+    store = backend_of(client).store
+    ended = store.ended
+    checking, finish = asyncio.Event(), asyncio.Event()
+
+    async def held_ended(conversation_id: str):
+        checking.set()
+        await finish.wait()
+        return await ended(conversation_id)
+
+    monkeypatch.setattr(store, "ended", held_ended)
+    async with asyncio.TaskGroup() as tasks:
+        offer = tasks.create_task(browser.call(client, conversation_id=conversation_id))
+        try:
+            await asyncio.wait_for(checking.wait(), 5)
+            assert (await deleting.post("/api/account/delete", json=DELETE)).status_code == 204
+        finally:
+            finish.set()
+    assert offer.result().status_code == 404
 
 
 async def test_deleted_data_is_gone_from_the_database_files_too(
