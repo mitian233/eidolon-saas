@@ -3,6 +3,7 @@
 import pytest
 
 from eidolon import engine
+from eidolon.documents import Documents
 from eidolon.engine import MAX_TOOL_ROUNDS
 from eidolon.llm import ChatMessage, Reasoning, ToolCall
 from eidolon.retrieval import RECALL_STORY_TOOL
@@ -22,10 +23,8 @@ def recall(query: str, id: str = "call_1") -> ToolCall:
 
 @pytest.fixture
 async def embedder(monkeypatch: pytest.MonkeyPatch) -> FakeEmbedder:
-    import eidolon.assembly
-
     documents = FakeDocuments()
-    monkeypatch.setattr(eidolon.assembly, "EmptyDocumentSource", lambda: documents)
+    monkeypatch.setattr(Documents, "source", lambda self, embedder: documents)
     return FakeEmbedder()
 
 
@@ -33,11 +32,11 @@ def tool_results(prompt: list[ChatMessage]) -> list[str]:
     return [m.content for m in prompt if m.role == "tool"]
 
 
-async def test_the_reply_is_based_on_the_recalled_episode_and_its_place_in_the_catalog(
+async def test_the_recalled_passage_reaches_the_model_and_the_tool_exchange_is_not_stored(
     make_client: ClientFactory, embedder: FakeEmbedder
 ):
     llm = FakeLLM([recall("公園で鳩と歌った日")], ANSWER)
-    # Jev sees no need to retrieve; the model asks for the episode itself.
+    # Jev sees no need to retrieve, so the chat model requests the lookup.
     client = make_client(
         llm, retrieval_judge=FakeJudge(answer="nothing"), embedder=embedder, reranker=FakeReranker(PARK_LINE)
     )
@@ -55,10 +54,7 @@ async def test_the_reply_is_based_on_the_recalled_episode_and_its_place_in_the_c
     call, result = second[len(first) :]
     assert (call.role, call.tool_calls) == ("assistant", (recall("公園で鳩と歌った日"),))
     assert (result.role, result.tool_call_id) == ("tool", "call_1")
-    # Where the episode sits in her catalog, the other episodes there, and what happened.
     assert PARK_LINE in result.content
-    assert "「決勝後コミュ」" not in result.content
-    assert "歌が好きなのか？" not in result.content  # the producer's choices never were
 
     assert events[-1]["type"] == "done"
     assert events[-1]["message"]["ja"] == "公園でピーちゃんたちと歌ってたんです"
@@ -91,22 +87,6 @@ async def test_what_the_model_thought_goes_back_with_its_calls_within_the_turn_a
     assert not any(m.reasoning for m in llm.prompts[-1])
     messages = (await client.get(f"/api/conversations/{conversation_id}/messages")).text
     assert "制作人问的是公园那次" not in messages
-
-
-async def test_a_character_only_recalls_episodes_she_is_cast_in(
-    make_client: ClientFactory, embedder: FakeEmbedder
-):
-    llm, reranker = FakeLLM([recall("公園の鳩")], ANSWER), FakeReranker(PARK_LINE, others=0.01)
-    client = make_client(llm, retrieval_judge=FakeJudge(answer="nothing"), embedder=embedder, reranker=reranker)
-    conversation_id = await start_conversation(client, "kogane")
-
-    await send_turn(client, conversation_id, "那次在公园和鸽子唱歌是怎么回事？", own_keys=RETRIEVAL_KEYS)
-
-    # Mano's park episode is never a candidate for Kogane, and nothing of hers is about it.
-    assert not any(PARK_LINE in doc for _, docs in reranker.calls for doc in docs)
-    [result] = tool_results(llm.prompts[-1])
-    assert PARK_LINE not in result
-    assert "没有想起" in result
 
 
 async def test_the_tool_is_not_offered_without_retrieval(make_client: ClientFactory):
@@ -221,7 +201,7 @@ async def test_with_more_tool_rounds_only_the_last_results_carry_the_note(
     assert llm.forbidden == [False, False, True]
 
 
-async def test_when_jev_sees_a_recall_question_the_episode_is_recalled_before_the_model_answers(
+async def test_the_judge_recalls_a_passage_before_the_model_answers(
     make_client: ClientFactory, embedder: FakeEmbedder
 ):
     llm, reranker = FakeLLM(ANSWER), FakeReranker(PARK_LINE)
@@ -230,8 +210,7 @@ async def test_when_jev_sees_a_recall_question_the_episode_is_recalled_before_th
 
     events = await send_turn(client, conversation_id, "那次在公园唱歌是怎么回事？", own_keys=RETRIEVAL_KEYS)
 
-    # One model call: the episode is already in the prompt, and the tool, offered as on every
-    # turn so the prompt opens the same, is not to be called again.
+    # The first model call already includes the passage, and the tool is disabled for that call.
     [prompt] = llm.prompts
     assert [tools[0] for tools in llm.tools] == [RECALL_STORY_TOOL]
     assert llm.forbidden == [True]
@@ -241,7 +220,6 @@ async def test_when_jev_sees_a_recall_question_the_episode_is_recalled_before_th
     # Recalling takes the place of the turn's general retrieval.
     assert "# 回忆与资料" in system
     assert [query for query, _ in reranker.calls] == ["那次在公园唱歌是怎么回事？"]
-    assert "「決勝後コミュ」" not in system
     # Embedded once, as the turn began, for recalling and writing down alike.
     assert embedder.queries == ["那次在公园唱歌是怎么回事？"]
     # The browser is told she is recalling, as if she had called the tool herself.
@@ -250,11 +228,9 @@ async def test_when_jev_sees_a_recall_question_the_episode_is_recalled_before_th
     assert events[-1]["type"] == "done"
 
 
-async def test_with_the_reranker_down_the_nearest_episode_is_recalled(
+async def test_with_the_reranker_down_the_nearest_passage_is_recalled(
     make_client: ClientFactory, embedder: FakeEmbedder
 ):
-    """By the judge model's recall and the recall-story tool alike, with its place in the
-    catalog."""
     reranker = FakeReranker()
     reranker.down = True
     llm = FakeLLM(ANSWER, [recall("公園で鳩と歌った日")], ANSWER)
@@ -271,8 +247,7 @@ async def test_with_the_reranker_down_the_nearest_episode_is_recalled(
     assert events[-1]["type"] == "done"
     assert len(reranker.calls) == 2  # each asked, each failing
     for recalled in [judged[judged.index("# 回顾资料") :], called]:
-        assert recalled.count("\n## ") == 1  # the nearest episode alone
-        assert "「決勝後コミュ」" not in recalled
+        assert recalled.count("\n## ") == 1
         assert PARK_LINE in recalled
 
 
@@ -321,7 +296,7 @@ async def test_the_tool_looks_up_what_the_model_wrote_alone(
     assert PARK_LINE in result
 
 
-async def test_a_recall_question_about_someone_elses_episode_recalls_nothing(
+async def test_the_judges_recall_reports_when_no_passage_is_relevant(
     make_client: ClientFactory, embedder: FakeEmbedder
 ):
     llm = FakeLLM(ANSWER)

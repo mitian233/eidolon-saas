@@ -19,7 +19,6 @@ from eidolon.characters import Character
 from eidolon.character_repository import CharacterRepository
 from eidolon.clock import Clock, utc_now
 from eidolon.config import DEFAULT_BAILIAN_STT_MODEL, Settings
-from eidolon.corpus import StoryCorpus
 from eidolon.data_access import Database
 from eidolon.data_package import DataPackages
 from eidolon.documents import Documents
@@ -80,7 +79,6 @@ class Backend:
     data_packages: DataPackages
     her_now: HerNow
     documents: Documents
-    corpus: StoryCorpus | None = None
     _closers: list[Closer] = field(default_factory=list, repr=False)
     _tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
 
@@ -97,8 +95,6 @@ class Backend:
             asyncio.create_task(keep_tidy(self.usage.forget_old, self.activity.forget_old)),
             asyncio.create_task(watch_the_loop(lambda: self.calls.in_progress)),
         ]
-        if self.corpus is not None:
-            self._tasks.append(asyncio.create_task(self.corpus.load()))
 
     async def aclose(self) -> None:
         for task in self._tasks:
@@ -177,7 +173,6 @@ def build(
     )
     embedder, reranker = metered_retrieval(activity, settings, embedder, reranker)
     retrieval = None
-    corpus = None
     if embedder is not None:
         references = open_reference_sources(embedder, documents.source(embedder))
         retrieval = Retrieval(
@@ -245,5 +240,5 @@ def build(
         prices=prices, announcements=announcements, sponsor=sponsor, invites=invites,
         affinities=affinities, backups=backups, service_status=service_status,
         data_packages=DataPackages(database, store, memories, characters, {}, clock),
-        her_now=her_now, documents=documents, corpus=corpus, _closers=closers,
+        her_now=her_now, documents=documents, _closers=closers,
     )

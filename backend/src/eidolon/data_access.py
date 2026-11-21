@@ -25,11 +25,15 @@ import queue
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+import weakref
+from collections.abc import AsyncIterator, Callable
 from concurrent.futures import Future
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar, TypeVarTuple, Unpack, cast
+
+import psycopg
 
 from eidolon.database import connect, postgres_url
 
@@ -45,6 +49,11 @@ slipped through fails no turn nor call."""
 
 READERS = 4
 """How many read-only connections there are: some to spare on a server of 2 cores."""
+
+
+_sqlite_locks: weakref.WeakValueDictionary[
+    tuple[asyncio.AbstractEventLoop, Path, str], asyncio.Lock
+] = weakref.WeakValueDictionary()
 
 SLOW = 0.2
 """Seconds a write task may wait in the queue, or take, and a read wait for a connection,
@@ -89,7 +98,8 @@ class Database:
 
     def __init__(self, path: Path | str, readers: int = READERS) -> None:
         self.path = cast(Path, path)
-        self._postgres = postgres_url(path) is not None
+        self._postgres_url = postgres_url(path)
+        self._sqlite_path = None if self._postgres_url else Path(path).resolve()
         self._writer = connect(path)
         self._readers: list[sqlite3.Connection] = []
         try:
@@ -112,7 +122,7 @@ class Database:
         self._waiting = 0
         """How many reads wait for a connection."""
         self._closed = False
-        self._checkpoint_due: float | None = None if self._postgres else time.monotonic()
+        self._checkpoint_due: float | None = None if self._postgres_url else time.monotonic()
         """When the checkpoint left undone is to be tried again, on the monotonic clock;
         None if none is. On the writing thread only, which first tries one at once."""
         self._undone_since: float | None = None
@@ -145,12 +155,30 @@ class Database:
         # Cancelling the wait leaves the read to finish, so that closing waits for it.
         return await asyncio.shield(running)
 
+    @asynccontextmanager
+    async def advisory_lock(self, key: str) -> AsyncIterator[None]:
+        """Serialize work spanning transactions, across Postgres connections or the local SQLite loop."""
+        if self._postgres_url:
+            # A dedicated transaction owns the lock without occupying a writer or reader.
+            # Ending it, including on cancellation or disconnect, releases the lock.
+            async with await psycopg.AsyncConnection.connect(self._postgres_url, connect_timeout=30) as conn:
+                await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (key,))
+                yield
+            return
+        assert self._sqlite_path is not None
+        scope = (asyncio.get_running_loop(), self._sqlite_path, key)
+        lock = _sqlite_locks.get(scope)
+        if lock is None:
+            lock = _sqlite_locks[scope] = asyncio.Lock()
+        async with lock:
+            yield
+
     async def checkpoint(self) -> None:
         """Have the write-ahead log emptied into the database file, as a write task handed
         in now but not waited for, which waits `CHECKPOINT_BUSY` at most for readers; left
         undone, it is tried again every `CHECKPOINT_RETRY` until it is done, and logged as
         an error once overdue."""
-        if self._postgres:
+        if self._postgres_url:
             return  # Postgres manages its WAL; SQLite's truncation has no equivalent.
         self._submit(self._checkpoint, (), in_transaction=False)
 

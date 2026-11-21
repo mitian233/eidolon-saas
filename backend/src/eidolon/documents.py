@@ -1,9 +1,9 @@
 """Character-owned documents and their model-specific passage vectors."""
 
 import asyncio
+import json
 import sqlite3
 import uuid
-import weakref
 from datetime import UTC, datetime
 from collections.abc import Sequence
 
@@ -41,15 +41,7 @@ class Documents:
 
     def __init__(self, db: Database) -> None:
         self._db = db
-        self._locks: weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock] = weakref.WeakValueDictionary()
         db.prepare(_prepare)
-
-    def _lock_for(self, character_id: str, model: str) -> asyncio.Lock:
-        key = (character_id, model)
-        lock = self._locks.get(key)
-        if lock is None:
-            lock = self._locks[key] = asyncio.Lock()
-        return lock
 
     async def import_text(self, owner_id: str, character_id: str, origin: str, text: str,
                           embedder: Embedder, dimensions: int | None = None) -> str:
@@ -61,10 +53,9 @@ class Documents:
         text = normalize_text(text)
         if not text:
             raise ValueError("文档为空")
-        async with self._lock_for(character_id, embedder.model):
-            document_id = await self._db.write(_import, owner_id, character_id, origin, text)
-            await self._embed_missing(character_id, embedder, dimensions)
-            return document_id
+        document_id = await self._db.write(_import, owner_id, character_id, origin, text)
+        await self._embed_missing(character_id, embedder, dimensions)
+        return document_id
 
     async def list(self, owner_id: str, character_id: str) -> list[dict]:
         return await self._db.read(_list, owner_id, character_id)
@@ -78,16 +69,34 @@ class Documents:
     async def _embed_missing(
         self, character_id: str, embedder: Embedder, dimensions: int | None = None
     ) -> None:
-        rows = await self._db.read(_missing, character_id, embedder.model, dimensions)
-        if not rows:
+        model = embedder.model
+        if not await self._db.read(_missing, character_id, model, dimensions):
             return
-        vectors = await embedder.embed_documents([Document(text) for _, text in rows])
-        values = [(pid, embedder.model, len(vector), to_blob(vector))
-                  for (pid, _), vector in zip(rows, vectors, strict=True)]
-        if any(size == 0 or (dimensions is not None and size != dimensions)
-               for _, _, size, _ in values):
-            raise ValueError("文档向量维度与查询不匹配")
-        await self._db.write(_save_vectors, values)
+        # Without configured dimensions an import can share work with a search of any size.
+        key = json.dumps(["document_embeddings", character_id, model])
+        async with self._db.advisory_lock(key):
+            rows = await self._db.read(_missing, character_id, model, dimensions)
+            if not rows:
+                return
+            vectors = await embedder.embed_documents([Document(text) for _, text in rows])
+            values = [(pid, model, len(vector), to_blob(vector))
+                      for (pid, _), vector in zip(rows, vectors, strict=True)]
+            if any(size == 0 or (dimensions is not None and size != dimensions)
+                   for _, _, size, _ in values):
+                raise ValueError("文档向量维度与查询不匹配")
+            # Database.write keeps queued writes on cancellation. Hold the lock until
+            # the save commits so a waiting caller cannot pay for the same batch again.
+            saving = asyncio.create_task(self._db.write(_save_vectors, values))
+            try:
+                await asyncio.shield(saving)
+            except asyncio.CancelledError:
+                while not saving.done():
+                    try:
+                        await asyncio.shield(saving)
+                    except asyncio.CancelledError:
+                        continue
+                saving.result()
+                raise
 
 
 class DocumentSource:
@@ -99,11 +108,10 @@ class DocumentSource:
                      limit: int) -> list[DocumentPassage]:
         if not query_vector or limit <= 0:
             return []
-        async with self._documents._lock_for(character_id, self._embedder.model):
-            await self._documents._embed_missing(character_id, self._embedder, len(query_vector))
-            rows = await self._documents._db.read(
-                _vectors, character_id, self._embedder.model, len(query_vector)
-            )
+        await self._documents._embed_missing(character_id, self._embedder, len(query_vector))
+        rows = await self._documents._db.read(
+            _vectors, character_id, self._embedder.model, len(query_vector)
+        )
         return [DocumentPassage(rows[i][0], rows[i][1], score)
                 for i, score in nearest([row[2] for row in rows], query_vector, limit)]
 

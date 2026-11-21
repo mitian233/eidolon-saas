@@ -5,6 +5,7 @@ import asyncio
 import httpx
 import pytest
 
+from eidolon.documents import Documents
 from eidolon.retrieval import FALLBACK_REFERENCES, MAX_REFERENCES
 from tests.conftest import KOGANE_SHEET, MANO_SHEET, Characters, ClientFactory
 from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, context_of, system_of
@@ -48,10 +49,8 @@ def characters() -> Characters:
 
 @pytest.fixture
 async def embedder(monkeypatch: pytest.MonkeyPatch) -> FakeEmbedder:
-    import eidolon.assembly
-
     documents = FakeDocuments()
-    monkeypatch.setattr(eidolon.assembly, "EmptyDocumentSource", lambda: documents)
+    monkeypatch.setattr(Documents, "source", lambda self, embedder: documents)
     return FakeEmbedder()
 
 
@@ -85,7 +84,7 @@ async def system_prompt(
 
 
 def reference_count(system: str) -> int:
-    return system.count("\n## 剧情\n") + system.count("\n## 角色资料\n")
+    return system.count("\n## 角色资料\n")
 
 
 async def test_small_talk_retrieves_nothing(
@@ -106,52 +105,6 @@ async def test_small_talk_retrieves_nothing(
     assert PARK_LINE not in system
 
 
-async def test_a_character_recalls_episodes_she_is_cast_in(
-    make_client: ClientFactory, embedder: FakeEmbedder
-):
-    llm = FakeLLM(REPLY)
-    client = make_client(llm, retrieval_judge=FakeJudge(), embedder=embedder, reranker=FakeReranker(PARK_LINE))
-
-    system = await system_prompt(client, llm, "公園の鳩のこと覚えてる？")
-
-    assert "# 回忆与资料" in system
-    references = system[system.index("# 回忆与资料") :]
-    assert "## 角色资料" in references
-    assert PARK_LINE in references
-
-
-async def test_a_character_cannot_recall_episodes_she_is_not_in(
-    make_client: ClientFactory, embedder: FakeEmbedder
-):
-    llm, reranker = FakeLLM(REPLY, REPLY), FakeReranker()
-    client = make_client(llm, retrieval_judge=FakeJudge(), embedder=embedder, reranker=reranker)
-
-    # Mano's park episode is the closest match, but Kogane is not in it.
-    kogane = await system_prompt(client, llm, "公園の鳩のこと覚えてる？", "kogane")
-    candidates = reranker.calls[-1][1]
-    assert not any(PARK_LINE in c for c in candidates)
-    assert PARK_LINE not in kogane
-    assert "ちゃんぽん" in kogane  # her own card is still there
-
-    # Hiori's event is about a photo shoot in the park; no configured character is in it.
-    mano = await system_prompt(client, llm, "公園で写真を撮ったこと", "mano")
-    assert "撮影、頑張ります" not in mano
-    assert not any("撮影、頑張ります" in c for _, docs in reranker.calls for c in docs)
-
-
-async def test_character_facts_are_retrieved_for_their_own_character(
-    make_client: ClientFactory, embedder: FakeEmbedder
-):
-    llm = FakeLLM(REPLY)
-    client = make_client(llm, retrieval_judge=FakeJudge(), embedder=embedder, reranker=FakeReranker("風野灯織"))
-
-    system = await system_prompt(client, llm, "灯織ちゃんは元気？")
-
-    references = system[system.index("# 回忆与资料") :]
-    assert "## 角色资料\n人物关系 / 風野灯織\nillumination STARS 的伙伴，性格认真。" in references
-    assert "来自长崎" not in system  # Kogane's facts are hers alone
-
-
 async def test_references_are_reranked_then_capped(
     make_client: ClientFactory, embedder: FakeEmbedder
 ):
@@ -162,9 +115,9 @@ async def test_references_are_reranked_then_capped(
 
     [(query, candidates)] = reranker.calls
     assert query == "鳩の話をしよう"
-    # Mano's three episodes and five facts all go to the reranker...
+    # All eight document passages go to the reranker.
     assert len(candidates) == 8 > MAX_REFERENCES
-    # ...but only the best few reach the prompt, in the reranker's order.
+    # Only the best few reach the prompt, in the reranker's order.
     assert reference_count(system) == MAX_REFERENCES
     references = system[system.index("# 回忆与资料") :]
     assert references.index("ピーちゃん") < references.index(PARK_LINE)
@@ -227,25 +180,6 @@ async def test_irrelevant_references_are_left_out(
     system = await system_prompt(client, llm, "長崎のちゃんぽん、好き？")
 
     assert "# 回忆与资料" not in system
-
-
-async def test_edited_facts_are_retrieved(
-    make_client: ClientFactory, embedder: FakeEmbedder, characters: Characters,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    # Simulate an edit to this character's document in the in-memory source.
-    import eidolon.assembly
-
-    documents = FakeDocuments()
-    documents.texts["mano"] = ["最近学会了说「ほわっ」。"]
-    monkeypatch.setattr(eidolon.assembly, "EmptyDocumentSource", lambda: documents)
-    llm = FakeLLM(REPLY)
-    client = make_client(llm, retrieval_judge=FakeJudge(), embedder=embedder, reranker=FakeReranker())
-
-    system = await system_prompt(client, llm, "ピーちゃんは元気？")
-
-    assert "最近学会了说「ほわっ」。" in system
-    assert "常和真乃在一起的鸽子。" not in system
 
 
 async def test_retrieval_goes_ahead_when_jev_is_down(
@@ -372,20 +306,3 @@ async def test_a_turn_needing_nothing_drops_what_it_found_while_the_judge_model_
     assert "# 回忆与资料" not in system and CAT not in system
     await client.get("/api/memories")  # once written down, with the query embedded already
     assert embedder.queries.count("公園の鳩と猫、かわいいね") == 1
-
-
-async def test_a_recall_question_is_recalled_though_her_facts_cannot_be_embedded(
-    make_client: ClientFactory, embedder: FakeEmbedder
-):
-    """Her facts are embedded the first time they are searched, which a turn does as it
-    begins; recalling never needed them."""
-    embedder.documents_down = True
-    llm = FakeLLM(REPLY)
-    client = make_client(
-        llm, retrieval_judge=FakeJudge(answer="recall"), embedder=embedder,
-        reranker=FakeReranker(PARK_LINE),
-    )
-
-    system = await system_prompt(client, llm, "那次在公园唱歌是怎么回事？")
-
-    assert PARK_LINE in system

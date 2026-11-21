@@ -199,21 +199,11 @@ async def test_user_vector_error_never_repeats_key_in_traceback(settings, servic
 
 
 async def test_user_recall_uses_document_source_after_model_or_dimension_change(
-    make_client, own_vectors, monkeypatch
+    make_client, own_vectors
 ):
-    import eidolon.assembly
     from eidolon.llm import ToolCall
-    from eidolon.retrieval import DocumentPassage
     from tests.test_text_turn import send_turn, start_conversation
 
-    calls = []
-
-    class Documents:
-        async def search(self, query_vector, character_id, limit):
-            calls.append((character_id, list(query_vector)))
-            return [DocumentPassage("约好在图书馆见面", "note", 1.0)]
-
-    monkeypatch.setattr(eidolon.assembly, "EmptyDocumentSource", Documents)
     own = FakeLLMService(FakeLLM(
         [ToolCall("recall1", "recall_story", {"query": "见面"})],
         ["<ja>图书馆</ja><zh>图书馆</zh>"], ['{"memories":[]}'],
@@ -221,14 +211,18 @@ async def test_user_recall_uses_document_source_after_model_or_dimension_change(
         ["<ja>图书馆</ja><zh>图书馆</zh>"], ['{"memories":[]}'],
     ))
     client = make_client(FakeLLM(), own_llm_service=own, own_retrieval_service=own_vectors)
+    body = payload(judge_enabled=False, rerank=None)
+    body["embedding"].update(model="first", dimensions=2)
+    imported = await client.post("/api/characters/mano/documents", json={
+        "origin": "note", "text": "约好在图书馆见面", "own_keys": {"embedding": body["embedding"]},
+    })
+    assert imported.status_code == 201, imported.text
     for model, dimensions in [("first", 2), ("second", 3)]:
-        body = payload(judge_enabled=False, rerank=None)
         body["embedding"].update(model=model, dimensions=dimensions)
         events = await send_turn(client, await start_conversation(client), "在哪里见面", own_keys=body)
         assert events[-1]["type"] == "done"
         assert any("图书馆" in message.content for message in own.llm.prompts[-1] if message.role == "tool")
         await client.get("/api/memories")
-    assert [character for character, _ in calls] == ["mano", "mano"]
 
 
 async def test_disabling_user_judge_keeps_affinity_and_cannot_bypass_existing_cooldown(make_client, settings):

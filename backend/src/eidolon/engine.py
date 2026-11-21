@@ -546,9 +546,6 @@ class ConversationEngine:
         except Exception:  # the turn has started; report instead of dropping it
             log.exception("turn failed in conversation %s", conversation.id)
             yield TurnFailed(FAILED)
-        finally:
-            if llms.services is not None and retrieval is not None:
-                await retrieval.aclose()
 
     async def _reply(
         self,
