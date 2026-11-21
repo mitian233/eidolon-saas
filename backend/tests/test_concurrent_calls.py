@@ -5,6 +5,8 @@ one refused is refused before anything is asked of it, both as the browser asks 
 needs to call and as it places the call."""
 
 import asyncio
+import re
+import socket
 from dataclasses import replace
 from typing import Any
 
@@ -69,6 +71,43 @@ async def test_a_users_new_call_hangs_up_the_one_they_had(
 
     assert asked.status_code == 200
     assert placed.status_code == 200
+
+
+async def test_a_users_new_call_stops_ice_checks_on_the_one_still_connecting(
+    make_client: ClientFactory, one_call_at_once: Settings, browser: Browser,
+):
+    client = make_client(FakeLLM(), settings=one_call_at_once)
+    conversation_id = await start_conversation(client)
+    loop = asyncio.get_running_loop()
+
+    # The first tab advertises a candidate but never takes up the answer or sends
+    # end-of-candidates. Receive a real STUN request without answering it.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as peer:
+        peer.bind(("127.0.0.1", 0))
+        peer.setblocking(False)
+        port = peer.getsockname()[1]
+        offer = await browser.offer(conversation_id=conversation_id)
+        offer["sdp"] = re.sub(
+            r"a=candidate:[^\r\n]+",
+            f"a=candidate:1 1 udp 2130706431 127.0.0.1 {port} typ host",
+            offer["sdp"],
+        ).replace("a=end-of-candidates\r\n", "")
+        first = await client.post("/api/offer", json=offer)
+        assert first.status_code == 200
+        async with asyncio.timeout(TIMEOUT):
+            await loop.sock_recvfrom(peer, 2048)
+        checks = [
+            task for task in asyncio.all_tasks()
+            if getattr(task.get_coro(), "__qualname__", "") == "Connection.check_start"
+        ]
+        assert checks
+
+        async with open_browser() as again:
+            assert (await again.call(client, conversation_id=conversation_id)).status_code == 200
+            for check in checks:
+                assert check.done(), "the replaced call still has an ICE check running"
+                assert check.cancelled() or check.exception() is None
+            await again.connect()
 
 
 async def test_a_call_placed_while_the_users_last_is_still_being_placed_is_refused(

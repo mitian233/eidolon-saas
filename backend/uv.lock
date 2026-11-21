@@ -191,15 +191,15 @@ wheels = [
 
 [[package]]
 name = "aioice"
-version = "0.10.2"
+version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dnspython" },
     { name = "ifaddr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/67/04/df7286233f468e19e9bedff023b6b246182f0b2ccb04ceeb69b2994021c6/aioice-0.10.2.tar.gz", hash = "sha256:bf236c6829ee33c8e540535d31cd5a066b531cb56de2be94c46be76d68b1a806", size = 44307, upload-time = "2025-11-28T15:56:48.836Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8f/2b/3fc36e3531590b809c2369220bac0ac70f46a2b153167e7faafa83c3e623/aioice-0.12.1.tar.gz", hash = "sha256:0986585f5bc3848392ac4aa9207e1b311aa605ca3c88c3f68e33916b9c2059cc", size = 62239, upload-time = "2026-11-03T05:32:56.472Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c7/e3/0d23b1f930c17d371ce1ec36ee529f22fd19ebc2a07fe3418e3d1d884ce2/aioice-0.10.2-py3-none-any.whl", hash = "sha256:14911c15ab12d096dd14d372ebb4aecbb7420b52c9b76fdfcf54375dec17fcbf", size = 24875, upload-time = "2025-11-28T15:56:47.847Z" },
+    { url = "https://files.pythonhosted.org/packages/84/bb/bf4b9d254fe7eac8c04d0c475f73d980f17c0ae5436c64352879b1f589c2/aioice-0.12.1-py3-none-any.whl", hash = "sha256:91b195bd4fd6b7f475f8f99d750153c2e4cf063ac819813c4a3aaceaf76154c5", size = 28222, upload-time = "2026-11-03T05:32:55.283Z" },
 ]
 
 [[package]]
@@ -581,6 +581,7 @@ name = "eidolon"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aioice" },
     { name = "cryptography" },
     { name = "fastapi" },
     { name = "holidays" },
@@ -612,6 +613,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aioice", specifier = ">=0.12.1" },
     { name = "cryptography", specifier = ">=50.0.2" },
     { name = "fastapi", specifier = ">=0.143.0" },
     { name = "holidays", specifier = ">=0.107" },

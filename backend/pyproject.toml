@@ -5,6 +5,7 @@ description = "Eidolon-SC backend: conversation engine and API"
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
 dependencies = [
+    "aioice>=0.12.1",  # Stop pending WebRTC connectivity checks before closing their sockets.
     "cryptography>=50.0.2",
     "fastapi>=0.143.0",
     "holidays>=0.107",
