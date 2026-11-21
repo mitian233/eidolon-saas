@@ -116,6 +116,7 @@ NOT_USER_DATA = frozenset(
         "sponsor", "gifts_opened", "reset_card_grants", "backup_runs", "record_rollups",
         "taken_rollups", "call_rollups", "spread_rollups", "achievements_launched",
         "weekly_jobs", "invites",
+        "reports", "report_rate_limits",
         "call_nodes",
     }
 )

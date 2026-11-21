@@ -8,6 +8,7 @@ describe("adminPage", () => {
       ["/admin", "dashboard"],
       ["/admin/users", "users"],
       ["/admin/users/u-123", "users"],
+      ["/admin/reports", "reports"],
       ["/admin/usersettings", "dashboard"],
     ];
     for (const [path, page] of cases) expect(adminPage(path), path).toBe(page);

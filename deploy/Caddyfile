@@ -16,5 +16,12 @@
 			header Content-Type application/json*
 		}
 	}
-	reverse_proxy 127.0.0.1:3000
+	# Give the report limiter the client address Caddy sees, through Uvicorn's trusted loopback proxy.
+	@report {
+		method POST
+		path /api/reports
+	}
+	reverse_proxy @report 127.0.0.1:8000
+
+	reverse_proxy {$EIDOLON_FRONTEND_UPSTREAM:127.0.0.1:3000}
 }

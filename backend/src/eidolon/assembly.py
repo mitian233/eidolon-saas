@@ -37,6 +37,7 @@ from eidolon.price_catalog import Catalog
 from eidolon.prices import Prices
 from eidolon.proxy import ProxyRoutes, reach as reach_provider
 from eidolon.rerank import Reranker
+from eidolon.reports import Reports
 from eidolon.retrieval import ModelRetrievalJudge, Retrieval, open_reference_sources
 from eidolon.service_clients import ProviderClients, ServiceClients
 from eidolon.service_status import ServiceStatus, probes
@@ -79,6 +80,7 @@ class Backend:
     data_packages: DataPackages
     her_now: HerNow
     documents: Documents
+    reports: Reports
     _closers: list[Closer] = field(default_factory=list, repr=False)
     _tasks: list[asyncio.Task] = field(default_factory=list, repr=False)
 
@@ -92,7 +94,9 @@ class Backend:
         self._tasks = [
             asyncio.create_task(self.prices.catalog.keep_fresh()),
             asyncio.create_task(self.service_status.keep_probing()),
-            asyncio.create_task(keep_tidy(self.usage.forget_old, self.activity.forget_old)),
+            asyncio.create_task(keep_tidy(
+                self.usage.forget_old, self.activity.forget_old, self.reports.forget_old_limits,
+            )),
             asyncio.create_task(watch_the_loop(lambda: self.calls.in_progress)),
         ]
 
@@ -146,6 +150,7 @@ def build(
     closers.append(catalog.aclose)
     prices = Prices(database, clock, catalog)
     announcements = Announcements(database, clock)
+    reports = Reports(database, clock)
     sponsor = Sponsor(database, clock)
     invites = Invites(database, clock)
     backups = Backups(database, clock, transport=backup_transport)
@@ -240,5 +245,5 @@ def build(
         prices=prices, announcements=announcements, sponsor=sponsor, invites=invites,
         affinities=affinities, backups=backups, service_status=service_status,
         data_packages=DataPackages(database, store, memories, characters, {}, clock),
-        her_now=her_now, documents=documents, _closers=closers,
+        her_now=her_now, documents=documents, reports=reports, _closers=closers,
     )

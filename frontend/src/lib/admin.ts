@@ -1,5 +1,5 @@
 /** The admin console's pages, in the order its navigation lists them. */
-export const ADMIN_PAGES = ["dashboard", "config", "users", "announcements"] as const;
+export const ADMIN_PAGES = ["dashboard", "config", "users", "announcements", "reports"] as const;
 
 export type AdminPage = (typeof ADMIN_PAGES)[number];
 
@@ -9,6 +9,7 @@ export const ADMIN_HREFS: Record<AdminPage, string> = {
   config: "/admin/config",
   users: "/admin/users",
   announcements: "/admin/announcements",
+  reports: "/admin/reports",
 };
 
 /** The page of the admin console `pathname` is on, or under (a user's details are under

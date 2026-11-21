@@ -185,6 +185,7 @@ def add_admin_user_routes(app: FastAPI, backend: Backend) -> None:
         if found["is_admin"]:
             raise HTTPException(409, "不能在后台封禁管理者")
         await store.set_banned(user_id, clock(), (body.note or "").strip() or None)
+        await backend.calls.hang_up(user_id, "banned")
         return await details(user_id)
 
     @app.delete("/api/admin/users/{user_id}", status_code=204)

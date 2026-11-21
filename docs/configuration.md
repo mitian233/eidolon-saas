@@ -81,7 +81,8 @@ key 只存在浏览器里，回合/通话期间随请求带给后端、在进程
 - 登录：GitHub 或 Google OAuth，至少配一家（`GITHUB_CLIENT_*`、`GOOGLE_CLIENT_*`，见 deploy.md）。本地开发用 `EIDOLON_DEV_LOGIN=1` 按名字登录。
 - `EIDOLON_ADMINS`：管理者名单，逗号分隔的 `provider:subject`（`eidolon user list` 查）。不填时后台不存在（开发登录除外）。
 - `EIDOLON_REGISTRATION`：`open`（默认）或 `invite`（只让受邀的人注册，邀请链接在后台「注册」里生成）。
-- `EIDOLON_CONTACT`：被封禁的用户、没有邀请链接被挡下的人看到的联系方式。
+- `EIDOLON_CONTACT`：举报页和站点条款显示的联系信息，登录被封禁或需要邀请时也会显示。
+- `NEXT_PUBLIC_EIDOLON_SOURCE_URL`：前端构建时指定此版本的公开源码地址。默认链接到 Eidolon-SaaS fork 的 `saas/main` 分支。部署修改版时可指向对应的公开源码。
 - 限额（都可选，0 为不限）：`EIDOLON_TURNS_PER_HOUR`（默认 60）、`EIDOLON_CALLS_PER_HOUR`（默认 5）、`EIDOLON_CALL_MINUTES`（默认 10）、`EIDOLON_TURNS_PER_CALL`（默认 40）、`EIDOLON_CONCURRENT_CALLS`（默认 10）。后台可以按用户单独设。
 - `EIDOLON_HISTORY_TURNS`：每回合带给模型的历史回合数下限（默认 20，0 为整段对话）。
 - `EIDOLON_SECRET_KEY`：加密后台保存的 key、给封禁名单做哈希；`openssl rand -hex 32`，填了不要换。用户的自带密钥跟它无关。

@@ -25,6 +25,7 @@ export { ChevronDown as ShowMoreIcon, ChevronUp as ShowLessIcon } from "lucide-r
 export {
   LayoutDashboard as DashboardIcon,
   Megaphone as AnnouncementsIcon,
+  ShieldAlert as ReportIcon,
   SlidersHorizontal as ConfigIcon,
   Users as UsersIcon,
 } from "lucide-react";

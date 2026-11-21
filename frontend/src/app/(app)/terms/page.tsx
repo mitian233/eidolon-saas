@@ -1,6 +1,7 @@
 import { AppLink } from "@/components/app/AppLink";
 import { PageShell } from "@/components/app/PageShell";
 import { SubpageHeader } from "@/components/app/SubpageHeader";
+import { DeployerContact } from "@/components/DeployerContact";
 import { LegalFooter } from "@/components/LegalFooter";
 import { copy } from "@/i18n";
 import { interpolate } from "@/i18n/interpolate";
@@ -31,6 +32,8 @@ export default function TermsPage() {
             ),
           })}
         </p>
+        <p className="text-body"><AppLink href="/report">{copy.legal.report}</AppLink></p>
+        <DeployerContact />
         <p className="text-meta text-muted-foreground">{t.lastUpdated}</p>
       </div>
     </PageShell>

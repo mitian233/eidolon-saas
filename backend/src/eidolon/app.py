@@ -57,6 +57,7 @@ from eidolon.admin_users_api import add_admin_user_routes
 from eidolon.admin_config_api import add_admin_config_routes
 from eidolon.admin_prices_api import add_admin_price_routes
 from eidolon.announcements_api import add_announcement_routes
+from eidolon.reports_api import MAX_REPORT_REQUEST_BYTES, add_report_routes
 from eidolon.invites_api import add_invite_routes
 from eidolon.calendar_api import add_calendar_routes
 from eidolon.sessions import DeviceTimezone, UserId, session_middleware
@@ -241,15 +242,22 @@ def create_app(backend: Backend) -> FastAPI:
         return await call_next(request)
 
     @app.middleware("http")
-    async def limit_document_body(request: Request, call_next: Callable) -> Response:
+    async def limit_request_body(request: Request, call_next: Callable) -> Response:
+        if request.method != "POST":
+            return await call_next(request)
         parts = request.url.path.split("/")
-        if request.method == "POST" and len(parts) == 5 and parts[1:3] == ["api", "characters"] and parts[4] == "documents":
-            body = bytearray()
-            async for chunk in request.stream():
-                if len(body) + len(chunk) > MAX_DOCUMENT_REQUEST_BYTES:
-                    return JSONResponse({"detail": "资料请求体过大"}, status_code=413)
-                body.extend(chunk)
-            request._body = bytes(body)
+        if parts == ["", "api", "reports"]:
+            maximum, reason = MAX_REPORT_REQUEST_BYTES, "举报请求体过大"
+        elif len(parts) == 5 and parts[1:3] == ["api", "characters"] and parts[4] == "documents":
+            maximum, reason = MAX_DOCUMENT_REQUEST_BYTES, "资料请求体过大"
+        else:
+            return await call_next(request)
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > maximum:
+                return JSONResponse({"detail": reason}, status_code=413)
+            body.extend(chunk)
+        request._body = bytes(body)
         return await call_next(request)
 
     @app.exception_handler(OverLimit)
@@ -358,6 +366,7 @@ def create_app(backend: Backend) -> FastAPI:
     add_admin_config_routes(app, backend)
     add_admin_price_routes(app, backend)
     add_announcement_routes(app, backend)
+    add_report_routes(app, backend)
     add_calendar_routes(app)
     add_sponsor_routes(app, backend)
     add_data_package_routes(app, backend)

@@ -22,7 +22,7 @@ cd frontend && npm ci
 BACKEND_URL=http://localhost:8000 npm run dev  # :3000
 ```
 
-用 Docker：`cp .env.example .env && docker compose up -d --build`，打开 http://localhost:3000。
+用 Docker：`cp .env.example .env && docker compose up -d --build`，打开 http://localhost:3000。这里的 Caddy 使用 HTTP，把公开举报和其他页面分别转给后端和前端。
 开发登录按名字直接登录；配了 `EIDOLON_DOMAIN` 时开发登录会被拒绝启动（它让任何人冒充任何用户）。
 
 ## 公网部署
@@ -47,6 +47,8 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 四个服务都用 host 网络：前端和后端只监听 127.0.0.1，公网只开 Caddy 和 coturn。第一次启动 Caddy 申请证书要稍等；后端启动失败时 `docker compose -f docker-compose.prod.yml logs backend` 看原因。
 
+公开举报的 `POST /api/reports` 由 Caddy 直接转给后端，后端按 Caddy 提供的客户端地址限频。更换入口代理时，保留这条转发，让后端只信任已知代理提供的客户端地址。
+
 ### 配置 OAuth 应用
 
 登录走后端：FastAPI 处理回调，会话存数据库，httpOnly cookie 保持登录，前端只是同源代理。
@@ -64,7 +66,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose -f docker-compose.prod.yml exec backend eidolon user list
 ```
 
-每个登录方式后面括号里的 `provider:subject` 就是。填进 `.env` 的 `EIDOLON_ADMINS`（逗号分隔），重启后端。管理者从设置页进 `/admin` 后台：看板、配置、用户管理（封禁/解封）。后台改过的配置优先于 `.env`；启动日志会列出哪些项被后台覆盖。命令行同样能管理用户：`eidolon user list/ban/unban/usage`。
+每个登录方式后面括号里的 `provider:subject` 就是。填进 `.env` 的 `EIDOLON_ADMINS`（逗号分隔），重启后端。管理者从设置页进 `/admin` 后台，可以在「举报」中查看和记录处理结果，在「用户」中封禁、解封或删除账号。后台改过的配置优先于 `.env`。命令行同样能管理用户：`eidolon user list/ban/unban/usage`。
 
 ## 可选：同机拆分通话节点
 
