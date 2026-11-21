@@ -36,40 +36,9 @@ function pairs(hex: string) {
 }
 
 describe("imageColorScale", () => {
-  const officials = {
-    真乃: "#ffbad6",
-    恋鐘: "#f84cad",
-    灯織: "#144384",
-    めぐる: "#ffe012",
-    摩美々: "#a846fb",
-    咲耶: "#006047",
-    結華: "#3b91c4",
-    霧子: "#d9f2ff",
-    透: "#50d0d0",
-    円香: "#be1e3e",
-    小糸: "#7967c3",
-    雛菜: "#ffc639",
-    にちか: "#a6ceb6",
-    美琴: "#760f10",
-    あさひ: "#f30100",
-    冬優子: "#5ce626",
-    愛依: "#ff00ff",
-    果穂: "#e5461c",
-    智代子: "#f93b90",
-    樹里: "#ffc602",
-    凛世: "#89c3eb",
-    夏葉: "#90e667",
-    甘奈: "#f54275",
-    甜花: "#e75bec",
-    千雪: "#fbfafa",
-    ルカ: "#24130d",
-    羽那: "#e0b5d3",
-    はるき: "#ead7a4",
-    はづき: "#c3d825",
-  };
-
-  it("官方印象色和任意色相、任意深浅的印象色，每一对颜色在明暗两种模式下都看得清", () => {
-    const colors = Object.entries(officials).map(([name, hex]) => ({ name: `${name} ${hex}`, hex }));
+  it("任意色相和深浅的印象色在明暗两种模式下都看得清", () => {
+    const colors = ["#f9c6d9", "#d44a96", "#184776", "#e6d92e", "#edf5ff", "#251914"]
+      .map((hex) => ({ name: hex, hex }));
     for (let r = 0; r < 256; r += 51)
       for (let g = 0; g < 256; g += 51)
         for (let b = 0; b < 256; b += 51) {

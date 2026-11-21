@@ -130,7 +130,7 @@ async def test_the_dashboard_counts_turns_by_how_they_turned_out_and_says_nothin
     assert board["active_users"] == 2
     assert turns["time_to_speak_ms"]["p50"] is not None
     assert [(c["character_id"], c["name"], c["turns"]) for c in board["characters"]] == [
-        ("mano", "櫻木真乃", 4), ("kogane-friend", "月岡恋鐘", 1)
+        ("mano", "櫻庭紗季", 4), ("kogane-friend", "北川恋鈴", 1)
     ]
     assert sum(point["turns"] for point in board["trend"]) == 5
     # Each turn that reached the model called it once; only the one that failed failed.

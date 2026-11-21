@@ -31,7 +31,7 @@ async def test_each_character_talks_with_her_own_character_sheet(
 async def test_a_character_added_to_the_registry_can_be_talked_to(
     make_client: ClientFactory, characters: Characters
 ):
-    characters.add("hiori", "風野灯織", "# 人设\n你是風野灯織。", intro="认真的努力家")
+    characters.add("hiori", "井原灯里", "# 人设\n你是井原灯里。", intro="认真的努力家")
     llm = FakeLLM(["<ja>はい</ja><zh>好</zh>"])
     client = make_client(llm)
 
@@ -40,13 +40,13 @@ async def test_a_character_added_to_the_registry_can_be_talked_to(
     await send_turn(client, conversation_id, "你好")
 
     assert [c["id"] for c in listed] == ["mano", "kogane", "hiori"]
-    assert "你是風野灯織。" in llm.prompts[0][0].content
+    assert "你是井原灯里。" in llm.prompts[0][0].content
 
 
 async def test_conversation_with_a_deleted_character_is_gone(
     make_client: ClientFactory, characters: Characters
 ):
-    characters.add("hiori", "風野灯織", "# 人设\n你是風野灯織。")
+    characters.add("hiori", "井原灯里", "# 人设\n你是井原灯里。")
     client = make_client(FakeLLM())
     conversation_id = await start_conversation(client, "hiori")
 
@@ -59,14 +59,14 @@ async def test_conversation_with_a_deleted_character_is_gone(
 
 def test_character_facts_are_split_by_heading(characters: Characters):
     characters.add(
-        "hiori", "風野灯織", "sheet",
-        facts="# 档案\n生日是2月27日。\n\n# 人物关系\n\n## 櫻木真乃\n同组合的伙伴。\n### 趣事\n一起去看鸟。\n",
+        "hiori", "井原灯里", "sheet",
+        facts="# 档案\n生日是2月27日。\n\n# 人物关系\n\n## 櫻庭紗季\n同组合的伙伴。\n### 趣事\n一起去看鸟。\n",
     )
 
     assert characters["hiori"].facts == (
         Fact("档案", "档案\n生日是2月27日。"),
-        Fact("人物关系 / 櫻木真乃", "人物关系 / 櫻木真乃\n同组合的伙伴。"),
-        Fact("人物关系 / 櫻木真乃 / 趣事", "人物关系 / 櫻木真乃 / 趣事\n一起去看鸟。"),
+        Fact("人物关系 / 櫻庭紗季", "人物关系 / 櫻庭紗季\n同组合的伙伴。"),
+        Fact("人物关系 / 櫻庭紗季 / 趣事", "人物关系 / 櫻庭紗季 / 趣事\n一起去看鸟。"),
     )
 
 

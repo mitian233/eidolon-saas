@@ -90,7 +90,7 @@ async def test_jev_reads_the_segment_with_its_cues_after_those_before_it(mano_ca
     await mano_call.run(llm, [spoken("你今天很可爱"), SETTLE], judge=judge)
 
     first, second = judge.segments
-    assert (first.character, first.user_said) == ("櫻木真乃", "你今天很可爱")
+    assert (first.character, first.user_said) == ("櫻庭紗季", "你今天很可爱")
     assert (first.before, first.ja, first.zh) == ("（这是回复的第一段）", "[shyly]ほわっ、", "哇，")
     assert second.before == ["[shyly]ほわっ、（哇，）"]
     assert (second.ja, second.zh) == ("ありがとうございます！", "谢谢！")

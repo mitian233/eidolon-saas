@@ -46,7 +46,6 @@ from tests.fakes import (
     build_faked,
     registry_of,
 )
-from tests.stories import write_sample_stories
 
 # A connection to the database taken on the event loop's thread fails the test, so that
 # every path the tests run keeps the database off the loop.
@@ -155,8 +154,8 @@ class Admin:
 
 ClientFactory = Callable[..., httpx.AsyncClient]
 
-MANO_SHEET = "# 人设\n你是櫻木真乃。口癖是「ほわっ」。"
-KOGANE_SHEET = "# 人设\n你是月岡恋鐘。说长崎方言。"
+MANO_SHEET = "# 人设\n你是櫻庭紗季。在社区电台做深夜节目。"
+KOGANE_SHEET = "# 人设\n你是北川恋鈴。在海边开一家纸艺店。"
 
 
 class Characters(Mapping[str, Character]):
@@ -340,27 +339,20 @@ async def seed_characters(
 
 @pytest.fixture
 def characters() -> Characters:
-    """Mano and Kogane, bilingual as the legacy tests' replies are."""
+    """Two fictional characters, bilingual to exercise the legacy reply format."""
     return (
         Characters()
         .add(
-            "mano", "櫻木真乃", MANO_SHEET, intro="illumination STARS 的中心",
-            color="#ffbad6", speakers=["真乃"], voice_id="mano-voice", idol_id=1,
-            birthday="04-25", age=16, language_mode="bilingual",
+            "mano", "櫻庭紗季", MANO_SHEET, intro="社区电台的主持人",
+            color="#ffbad6", speakers=["紗季"], voice_id="mano-voice", idol_id=1,
+            birthday="05-12", age=27, language_mode="bilingual",
         )
         .add(
-            "kogane", "月岡恋鐘", KOGANE_SHEET, intro="L'Antica 的偶像", color="#f84cad",
-            speakers=["恋鐘"], voice_id="kogane-voice", birthday="02-25", age=19,
+            "kogane", "北川恋鈴", KOGANE_SHEET, intro="海边小店的店主", color="#f84cad",
+            speakers=["恋鈴"], voice_id="kogane-voice", birthday="03-16", age=31,
             language_mode="bilingual",
         )
     )
-
-
-@pytest.fixture
-def story(tmp_path: Path) -> Path:
-    """A directory of sample story CSVs: Mano's W.I.N.G. episodes (won, and failure endings),
-    a card of Kogane's that Mano also speaks in, and an event with neither."""
-    return write_sample_stories(tmp_path / "story")
 
 
 @pytest.fixture

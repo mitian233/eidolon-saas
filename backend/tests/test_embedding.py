@@ -31,7 +31,7 @@ async def test_documents_are_embedded_in_batches_and_kept_in_order():
     requests: list[dict] = []
 
     vectors = await embedder(requests).embed_documents(
-        [Document(f"doc {i}", "W.I.N.G.編「公園の歌声」") for i in range(20)]
+        [Document(f"doc {i}", "町の音楽祭「雨の日の公園」") for i in range(20)]
     )
 
     assert [len(r["input"]) for r in requests] == [16, 4]

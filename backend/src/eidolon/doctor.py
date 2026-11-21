@@ -362,9 +362,9 @@ class Report:
 
     @property
     def invite_without_admins(self) -> bool:
-        """Only those invited may sign up, but there is no admin console to make an invite
-        link in: no one but the first user can. Only warned of, for the first user signs in
-        before their identity can be put on the admin list."""
+        """Invite registration is on but there is no admin console to create links.
+
+        Keep this a warning so the first user can sign in to find their admin identity."""
         return self.registration == "invite" and not self.admins
 
     @property
@@ -421,8 +421,8 @@ class Report:
             said += [
                 "! 注册：设了只让受邀的人注册（EIDOLON_REGISTRATION=invite），却没设管理者名单"
                 "（EIDOLON_ADMINS）",
-                "  → 没有后台就生成不了邀请链接，除了第一位用户谁都注册不了。"
-                f"先登录一次，再配好管理者名单（{GUIDE}「公网部署」）",
+                "  → 配好管理者名单后，才能在后台生成新邀请。新站还不知道登录标识时，"
+                f"先限制访问范围，再用自己的身份登录一次（{GUIDE}「管理者与邀请注册」）",
             ]
         elif self.registration == "invite":
             said.append("注册：只让受邀的人注册，邀请链接在后台配置页「注册」里生成")

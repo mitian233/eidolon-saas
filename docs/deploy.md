@@ -1,14 +1,14 @@
 # 部署
 
-Eidolon-SaaS 是公益 BYOK 服务：平台零凭据也能启动和服务，模型费用由用户自带 key 承担。
+Eidolon-SaaS 是公益 BYOK 服务。用户在设置页自带模型、语音和向量化密钥。部署者提供主机、数据库、通话网络和网站的 OAuth 登录。
 配置项的完整说明见 [configuration.md](configuration.md) 和仓库根目录的 [`.env.example`](../.env.example)。
 
 ## 准备
 
 - 一台 Linux 服务器（有公网 IPv4）和一个域名（A 记录指向服务器）。国内服务器要求域名已备案，否则 80、443 会被拦截。
-- Docker 和 Docker Compose。镜像只有 linux/amd64；arm64 服务器用 `--build` 在本机构建。
+- Docker 和 Docker Compose 插件。在部署机上从本仓库构建前后端，Caddy 和 coturn 使用各自的公开镜像。
 - 防火墙放行：80、443（TCP，Caddy），3478（TCP+UDP，coturn），49160–49259（UDP，coturn 中继，可用 `EIDOLON_TURN_MIN_PORT`/`EIDOLON_TURN_MAX_PORT` 改）。
-- 本 fork 的镜像尚未发布到 GHCR（M4 做）：`docker-compose.prod.yml` 里的镜像名仍是上游的，**部署本 fork 要用 `up -d --build` 在本机构建**，不要 `pull` 上游镜像。
+- 取本仓库的 `saas/main` 或本次部署选定的提交。两份生产 Compose 均可从这份代码构建。
 
 ## 本地开发
 
@@ -16,10 +16,12 @@ Eidolon-SaaS 是公益 BYOK 服务：平台零凭据也能启动和服务，模�
 
 ```sh
 cp .env.example .env     # 默认 EIDOLON_DEV_LOGIN=1，第三方 key 都不用填
+# 终端一，从仓库根目录启动后端（:8000）
 cd backend && uv sync
-uv run --env-file=../.env eidolon serve        # :8000
+uv run --env-file=../.env eidolon serve
+# 终端二，从仓库根目录启动前端（:3000）
 cd frontend && npm ci
-BACKEND_URL=http://localhost:8000 npm run dev  # :3000
+BACKEND_URL=http://localhost:8000 npm run dev
 ```
 
 用 Docker：`cp .env.example .env && docker compose up -d --build`，打开 http://localhost:3000。这里的 Caddy 使用 HTTP，把公开举报和其他页面分别转给后端和前端。
@@ -37,13 +39,14 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 | 变量 | 说明 |
 |---|---|
+| `EIDOLON_DEV_LOGIN` | 新建 `.env` 后改为 `0` |
 | `EIDOLON_DOMAIN` | 域名，Caddy 用它自动申请 HTTPS 证书；后端据此拼 OAuth 回调、只接受这个网站的请求 |
 | `EIDOLON_PUBLIC_IP` | 服务器公网 IPv4，coturn 只把语音中继到这台服务器 |
 | `EIDOLON_TURN_SECRET` | `openssl rand -hex 32`，后端和 coturn 共用，给浏览器签发会过期的 TURN 凭据 |
-| `EIDOLON_SECRET_KEY` | `openssl rand -hex 32`，加密后台保存的 key。**填了之后不要更换** |
+| `EIDOLON_SECRET_KEY` | 用 `openssl rand -hex 32` 生成，用于封禁名单等操作。填好后保持固定 |
 | GitHub 或 Google 的 OAuth | 至少一家，见下节 |
 
-可选：`EIDOLON_PRIVATE_IP`（公网地址不在网卡上的 1:1 NAT 云主机）、`EIDOLON_ADMINS`（管理者名单）、`EIDOLON_CONTACT`、`EIDOLON_REGISTRATION=invite`（只让受邀的人注册，M4 起步推荐）。
+**公开服务建议填写** `EIDOLON_REGISTRATION=invite`、`EIDOLON_ADMINS` 和 `EIDOLON_CONTACT`。联系信息显示在举报页、条款页和部分登录失败提示中。`NEXT_PUBLIC_EIDOLON_SOURCE_URL` 指定页脚所链接的公开源码，应指向运行版本对应的源码。修改此地址后重新构建前端。公网地址不在本机网卡上的 1:1 NAT 云主机可填 `EIDOLON_PRIVATE_IP`。
 
 四个服务都用 host 网络：前端和后端只监听 127.0.0.1，公网只开 Caddy 和 coturn。第一次启动 Caddy 申请证书要稍等；后端启动失败时 `docker compose -f docker-compose.prod.yml logs backend` 看原因。
 
@@ -58,19 +61,33 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 把 client id/secret 填进 `.env` 的 `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` 或 `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`。也可以用交互式脚本 `sh scripts/setup-oauth.sh` 引导填写。
 
-### 管理者
+### 管理者与邀请注册
 
-先在网站上登录一次，再在服务器上查自己的身份标识：
+已知管理者的 OAuth 标识时，直接填 `EIDOLON_ADMINS`（逗号分隔的 `provider:subject`，如 `github:12345`）。在 `invite` 模式下，名单中的身份可以直接注册，已注册的用户照常登录。
+
+如果还不知道自己的标识，先限制测试站的访问范围。空库未设名单时，允许第一位用户登录取得标识。用自己的 OAuth 登录一次，再在服务器上运行：
 
 ```sh
 docker compose -f docker-compose.prod.yml exec backend eidolon user list
 ```
 
-每个登录方式后面括号里的 `provider:subject` 就是。填进 `.env` 的 `EIDOLON_ADMINS`（逗号分隔），重启后端。管理者从设置页进 `/admin` 后台，可以在「举报」中查看和记录处理结果，在「用户」中封禁、解封或删除账号。后台改过的配置优先于 `.env`。命令行同样能管理用户：`eidolon user list/ban/unban/usage`。
+把登录方式后面括号里的 `provider:subject` 填进 `EIDOLON_ADMINS`。执行 `docker compose -f docker-compose.prod.yml up -d` 让容器重新读取 `.env`。拆分部署时沿用启动时的两个 `-f` 参数。确认管理者能从设置页进后台后，再开放站点访问。
+
+在后台「配置 → 注册」生成、查看或删除邀请链接。过期、用尽或删除的链接不能用于新注册。后台修改的注册方式等运营设置优先于 `.env`，可在后台恢复为 `.env` 的值。`eidolon doctor` 会提示 `.env` 中设置了 `invite` 却缺少管理者。
+
+### 举报和处置
+
+页脚的举报表单向访客和登录用户开放。管理者在「举报」列表查看、处理并记录结果，如需封禁、解封或删除账号，使用「用户」页。命令行也可列出用户、封禁、解封及查看用量（`eidolon user list/ban/unban/usage`）。
+
+### 选择数据库
+
+默认用数据卷中的 SQLite。单进程也可以使用 PostgreSQL。在 `.env` 设置 `DATABASE_URL=postgresql://…` 连接已运行的 PostgreSQL。生产容器使用 host 网络，同机 PostgreSQL 用宿主机可达的地址。切换连接地址时需要另行搬运旧数据。
+
+从旧 `.env.example` 复制过配置的部署，如果仍有空的 `EIDOLON_DATABASE_PATH=`，请删除这一行，让容器使用数据卷中的默认路径。
 
 ## 可选：同机拆分通话节点
 
-默认 `EIDOLON_ROLE=all`，一个后端同时处理文字与通话，不需要额外设置。需要单独运行通话进程时，先准备 PostgreSQL，在 `.env` 的 `DATABASE_URL` 填共享地址，然后：
+默认 `EIDOLON_ROLE=all`，一个后端进程处理文字与通话。需要独立通话进程时，先准备 PostgreSQL，在 `.env` 的 `DATABASE_URL` 填共享地址，然后运行：
 
 ```sh
 docker compose -f docker-compose.prod.yml -f docker-compose.calls.yml up -d --build
@@ -86,15 +103,15 @@ docker compose -f docker-compose.prod.yml -f docker-compose.calls.yml up -d --bu
 
 前端、API 和通话进程的节点表应同时更新，并使用相同的站点域名、会话数据库与运营设置。后台改过的设置会在拆分进程处理下一次请求前读取。退出登录沿用前端挂断、服务端撤销会话；这不新增服务端立即强制挂断的承诺。
 
-此文件只演示同一台 Linux 主机，继续使用生产 compose 的 host 网络及 coturn 同机地址限制。不能直接把节点地址改成另一台机器就当作跨机部署：那还需要调整防火墙、TURN 允许的 peer 地址和 ICE 公网地址。本次没有完成跨机通话试用。用户自己的模型和语音 key 只随首次 offer 到所选节点内存，不写节点登记或控制记录；节点重启后无法接续旧通话。
+示例适用于同一台 Linux 主机，沿用生产 Compose 的 host 网络及 coturn 的同机地址限制。跨机部署需要另行配置防火墙、TURN 中继允许的地址和 ICE 公网地址。用户的模型和语音密钥随首次 offer 到所选节点内存，节点重启后需要重新拨号。
 
 ## 零凭据语义
 
-平台不配任何第三方 key 也能启动：每个回合用用户自带的 LLM key；用户没带 key 时，文字回合被拒绝并提示去设置里填。部署者也可以在 `.env` 或后台配自己的 key 作兜底（用户没带时用部署者的，费用部署者出）。向量化/重排/判断模型配了才有主动资料召回和记忆；没配时角色只凭人设回复，召回退到模型自己发起的 `recall_story` 工具。
+公益部署把部署者的模型、语音等可选密钥留空，文字和语音按用户填写的密钥调用。没填语言模型密钥的用户会收到去设置页填写的提示。记忆提炼和资料召回需要用户填写向量化端点。重排可选，判断功能开启后使用用户自己的语言模型。部署者也可显式在 `.env` 配置对话和语音兜底，费用由部署者承担。
 
 ## 备份
 
-数据库每天备份到私有的 S3 兼容存储桶（推荐 Cloudflare R2），压缩、用 age 公钥加密（ADR-0012）。
+下文的脚本用于 SQLite。PostgreSQL 请用 `pg_dump` 和 `pg_restore`，并按站点隐私政策设置保留期限。SQLite 可以每天备份到私有 S3 兼容存储桶，压缩并用 age 公钥加密（ADR-0012）。
 
 1. 建一个**私有**存储桶，配好 `EIDOLON_BACKUP_S3_*`（写法见 `.env.example`）。
 2. 本机 `age-keygen` 生成密钥对：公钥（`age1…`）填 `EIDOLON_BACKUP_AGE_RECIPIENT`，私钥离线保存——丢了所有备份都解不开。
@@ -130,7 +147,7 @@ EIDOLON_PROXY_URL=http://127.0.0.1:7890
 EIDOLON_PROXY_SERVICES=chat_llm,judge,tts,stt
 ```
 
-可走代理的服务：`chat_llm`、`memory_llm`、`judge`、`embedding`、`rerank`、`tts`、`stt`、`image`、`gpt_image`，用户自带的 `own_llm`、`own_tts`、`own_stt`、`own_image`，或 `all`。自带 LLM 只在地址属于已知服务商时才走代理。`HTTPS_PROXY` 等环境变量对后端的服务调用不起作用。生产用 host 网络，宿主机上的代理直接写 `127.0.0.1`。后台「网络」标签也能改。
+可按服务指定代理；完整列表见 [`.env.example`](../.env.example)。自带 LLM 等端点只在地址属于已知服务商时才走代理。后端服务调用使用上述变量。生产使用 host 网络，宿主机上的代理可以写 `127.0.0.1`。
 
 ## 升级
 
@@ -139,7 +156,7 @@ git pull
 docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-数据库迁移在启动时自动做。数据都在 `eidolon-data` 卷里，重建容器不丢。升级出问题：先 `deploy/db-backup.sh` 备份，再按「从备份恢复」回到旧库；镜像版本可用 `EIDOLON_IMAGE_TAG` 固定（fork 镜像发布后适用）。
+拆分部署时沿用启动时的两个 `-f` 参数。升级前先备份数据库。后端在启动时执行数据库迁移，容器重建会继续使用原来的数据卷或 PostgreSQL。需要回到旧版本时，用原部署提交重建，并按相应数据库的流程恢复升级前的备份。
 
 ## 排障
 

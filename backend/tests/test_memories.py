@@ -61,8 +61,8 @@ async def world(tmp_path: Path) -> AsyncIterator[World]:
     db = Database(tmp_path / "eidolon.db")
     try:
         yield await World.made(db, {
-            "mano": Character("mano", "櫻木真乃", "简介", "v1", "# 人设"),
-            "kogane": Character("kogane", "月岡恋鐘", "简介", "v2", "# 人设"),
+            "mano": Character("mano", "櫻庭紗季", "简介", "v1", "# 人设"),
+            "kogane": Character("kogane", "北川恋鈴", "简介", "v2", "# 人设"),
         })
     finally:
         await db.close()
@@ -147,7 +147,7 @@ async def test_what_the_user_told_mano_reaches_kogane_as_hearsay(
     section = await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？")
 
     line = line_of(section, CAT)
-    assert "櫻木真乃" in line and "转述" in line
+    assert "櫻庭紗季" in line and "转述" in line
 
 
 async def test_a_memory_told_to_the_character_herself_is_not_hearsay(
@@ -203,7 +203,7 @@ async def test_a_memory_from_another_owners_character_never_reveals_its_name(
     [cat] = await memories.entries(world.producer)
     await memories.aclose()
 
-    assert "櫻木真乃" not in section
+    assert "櫻庭紗季" not in section
     assert "转述" in line_of(section, CAT)
     assert cat.source_character_name is None
 
@@ -238,7 +238,7 @@ async def test_the_background_model_reads_the_exchange_and_what_is_already_remem
     listed = await memories.entries(world.producer)
 
     first, second = ("\n".join(m.content for m in p) for p in background.prompts)
-    assert "我家的猫叫小白哦" in first and "櫻木真乃" in first
+    assert "我家的猫叫小白哦" in first and "櫻庭紗季" in first
     assert "2026年9月25日" in first  # so relative dates can be written down as dates
     assert "我家的猫叫小白哦" in second and "下周六我要去北海道出差" in second
     assert CAT in second.split("# 用户和")[0]  # already remembered, not written down again
@@ -532,7 +532,7 @@ async def test_a_new_memory_supersedes_what_it_updates_whoever_it_was_told_to(
 
     assert await listed(memories, world) == {TOKYO: None, DOG: None, OSAKA: TOKYO}
     section = await find(memories, world, await world.conversation("mano"), "你知道我住在哪吗？")
-    assert TOKYO in section and "听月岡恋鐘说" in line_of(section, TOKYO)
+    assert TOKYO in section and "听北川恋鈴说" in line_of(section, TOKYO)
     assert OSAKA not in section and DOG in section
 
 

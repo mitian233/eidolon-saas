@@ -261,4 +261,4 @@ DeepSeek 分**高峰和空闲两档价**。原文："Off-peak rates are half of 
 **从 VPS 访问**
 
 - 宿主机直连两个地址都返回 200。models.dev 不压缩时 5.3 MB、用时 30.7 秒；带 `Accept-Encoding: gzip` 时下载 0.44 MB、用时 3.2 秒。OpenRouter 不压缩时 0.98 MB、用时 4.3 秒。
-- 后端镜像（`ghcr.io/sallyn0225/eidolon-sc-backend:main`）起一个临时容器，用 Python `urllib` 带 gzip 访问：models.dev 1.5 秒，OpenRouter 0.5 秒。容器里不需要代理。
+- 上游当时用自己的后端容器试过 Python `urllib` 的 gzip 请求。models.dev 1.5 秒，OpenRouter 0.5 秒，容器内直连。

@@ -22,28 +22,28 @@ MANO_FACTS = """\
 生日是3月4日，喜欢鸟。
 
 # 人物关系
-## 風野灯織
-illumination STARS 的伙伴，性格认真。
-## 八宮めぐる
-illumination STARS 的伙伴，总是很有精神。
+## 井原灯里
+社区电台的同事，性格认真。
+## 深町あおい
+社区电台的同事，总是很有精神。
 
 # 鸟
-## ピーちゃん
-常和真乃在一起的鸽子。
+## ポポちゃん
+常和紗季在一起的鸽子。
 ## 公園
-真乃常去公园看鸟。
+紗季常去公园看鸟。
 """
 KOGANE_FACTS = "# 家乡\n来自长崎，最喜欢什锦面。"
 
-PARK_LINE = "公園で鳩と一緒に歌っていました"
+PARK_LINE = "雨の公園で鳩を数えていました"
 
 
 @pytest.fixture
 def characters() -> Characters:
     return (
         Characters()
-        .add("mano", "櫻木真乃", MANO_SHEET, speakers=["真乃"], facts=MANO_FACTS)
-        .add("kogane", "月岡恋鐘", KOGANE_SHEET, speakers=["恋鐘"], facts=KOGANE_FACTS)
+        .add("mano", "櫻庭紗季", MANO_SHEET, speakers=["紗季"], facts=MANO_FACTS)
+        .add("kogane", "北川恋鈴", KOGANE_SHEET, speakers=["恋鈴"], facts=KOGANE_FACTS)
     )
 
 
@@ -96,7 +96,7 @@ async def test_small_talk_retrieves_nothing(
     system = await system_prompt(client, llm, "早上好")
     await client.get("/api/memories")  # wait for post-turn work before counting embeddings
 
-    assert jev.asked == [("櫻木真乃", "早上好")]
+    assert jev.asked == [("櫻庭紗季", "早上好")]
     # The judge model answering at once, nothing was looked up before it did: embedded only
     # to show the background model the memories nearest the turn, after it.
     assert embedder.queries == ["早上好"]
@@ -108,7 +108,7 @@ async def test_small_talk_retrieves_nothing(
 async def test_references_are_reranked_then_capped(
     make_client: ClientFactory, embedder: FakeEmbedder
 ):
-    reranker, llm = FakeReranker("ピーちゃん"), FakeLLM(REPLY)
+    reranker, llm = FakeReranker("ポポちゃん"), FakeLLM(REPLY)
     client = make_client(llm, retrieval_judge=FakeJudge(), embedder=embedder, reranker=reranker)
 
     system = await system_prompt(client, llm, "鳩の話をしよう")
@@ -120,7 +120,7 @@ async def test_references_are_reranked_then_capped(
     # Only the best few reach the prompt, in the reranker's order.
     assert reference_count(system) == MAX_REFERENCES
     references = system[system.index("# 回忆与资料") :]
-    assert references.index("ピーちゃん") < references.index(PARK_LINE)
+    assert references.index("ポポちゃん") < references.index(PARK_LINE)
 
 
 PARK_REPLY = ["<ja>[happy] 公園で鳩さんと歌った日ですね</ja><zh>[happily] 是和鸽子一起在公园唱歌的那天吧</zh>"]
@@ -147,7 +147,7 @@ async def test_references_are_looked_up_with_her_previous_reply_as_people_see_it
     assert query in embedder.queries
     assert "那时候累吗？" not in embedder.queries  # nor are memories found without it
     # The judge model is told what it was before: the latest messages and what was said.
-    assert jev.asked[-1] == ("櫻木真乃", "那时候累吗？")
+    assert jev.asked[-1] == ("櫻庭紗季", "那时候累吗？")
     assert PARK_LINE in context_of(llm.prompts[-1])
 
 
@@ -223,7 +223,7 @@ async def test_with_the_reranker_down_the_nearest_references_are_brought_but_no_
     assert sorted(len(docs) for _, docs in reranker.calls) == [1, 8]  # it was asked
     assert reference_count(system) == FALLBACK_REFERENCES == 3
     references = system[system.index("# 回忆与资料") :]
-    assert PARK_LINE in references and "真乃常去公园看鸟。" in references
+    assert PARK_LINE in references and "紗季常去公园看鸟。" in references
     # A memory the reranker never judged might be what the user never said.
     assert CAT not in system
 

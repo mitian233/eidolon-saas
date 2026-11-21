@@ -47,8 +47,8 @@ async def test_lists_every_memory_with_the_character_it_was_told_to(
     listed = await memories(client)  # right away: what was just said is already there
     assert [(m["text"], m["source_character_id"], m["source_character_name"])
             for m in listed] == [
-        (TRIP, "kogane", "月岡恋鐘"),  # newest first
-        (CAT, "mano", "櫻木真乃"),
+        (TRIP, "kogane", "北川恋鈴"),  # newest first
+        (CAT, "mano", "櫻庭紗季"),
     ]
     assert all(set(m) == {"id", "text", "source_character_id", "source_character_name",
                           "created_at", "superseded"} for m in listed)

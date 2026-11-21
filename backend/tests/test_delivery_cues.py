@@ -186,7 +186,7 @@ async def test_jev_reads_earlier_replies_without_cues():
 
     await judge_answering(requests, 0.1).judge(MANO, [message("character", "[shyly] ほわっ")], "嗯")
 
-    assert requests[0]["state"]["上文"] == ["櫻木真乃：ほわっ"]
+    assert requests[0]["state"]["上文"] == ["櫻庭紗季：ほわっ"]
 
 
 @pytest.mark.parametrize(

@@ -410,21 +410,21 @@ async def test_hanging_up_while_her_last_reply_plays_closes_every_connection():
 # dictionary; what she is to say goes as written.
 
 READINGS = (
-    Reading("櫻木真乃", "さくらぎ まの", "sa0ku1ra1gi0ma1no0"),
+    Reading("櫻庭紗季", "さくらば さき", "sa0ku1ra1ba0sa1ki0"),
     Reading("283", "つばさ", "tsu0ba1sa1"),
 )
 DICTIONARY = [{"items": [
-    {"key": "櫻木真乃", "value": "sa0ku1ra1gi0ma1no0", "case_sensitive": True},
+    {"key": "櫻庭紗季", "value": "sa0ku1ra1ba0sa1ki0", "case_sensitive": True},
     {"key": "283", "value": "tsu0ba1sa1", "case_sensitive": True},
 ]}]
 
 
 async def test_each_session_starts_with_the_readings_as_its_pronunciation_dictionary():
-    fish = await run(*reply(1, ["櫻木真乃です。"], ["283の、"]), fish=FakeFish(readings=READINGS))
+    fish = await run(*reply(1, ["櫻庭紗季です。"], ["283の、"]), fish=FakeFish(readings=READINGS))
 
     assert len(fish.starts) == len(fish.sockets) >= 2
     assert all(start["pronunciation_dictionary"] == DICTIONARY for start in fish.starts)
-    assert "text 櫻木真乃です。" in fish.of(1)
+    assert "text 櫻庭紗季です。" in fish.of(1)
     assert "text 283の、" in fish.of(2)
 
 
@@ -448,6 +448,6 @@ async def test_calls_speak_with_the_readings_whoever_s_key_they_are_on(monkeypat
     )
     tts._pause_frame_processing = False  # as `FishUnderTest`: no transport says she stopped
 
-    await run(*reply(1, ["櫻木真乃です。"]), fish=fish, tts=tts)  # pyright: ignore[reportArgumentType]
+    await run(*reply(1, ["櫻庭紗季です。"]), fish=fish, tts=tts)  # pyright: ignore[reportArgumentType]
 
     assert fish.starts and all(start["pronunciation_dictionary"] == DICTIONARY for start in fish.starts)

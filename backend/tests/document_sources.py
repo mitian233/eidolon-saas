@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from eidolon.retrieval import DocumentPassage
 from tests.fakes import FakeEmbedder
 
-PARK_LINE = "公園で鳩と一緒に歌っていました"
+PARK_LINE = "雨の公園で鳩を数えていました"
 
 
 class FakeDocuments:
@@ -13,13 +13,13 @@ class FakeDocuments:
         self.texts = {
             "mano": [
                 PARK_LINE,
-                "WING 優勝 決勝後コミュ",
+                "町の音楽祭で優勝した日",
                 "ドームで歌いました",
                 "生日是3月4日，喜欢鸟。",
-                "人物关系 / 風野灯織\nillumination STARS 的伙伴，性格认真。",
-                "八宮めぐる是伙伴。",
-                "ピーちゃん 常和真乃在一起的鸽子。",
-                "公園 真乃常去公园看鸟。",
+                "人物关系 / 井原灯里\n社区电台的同事，性格认真。",
+                "深町あおい是伙伴。",
+                "ポポちゃん 常和紗季在一起的鸽子。",
+                "公園 紗季常去公园看鸟。",
             ],
             "kogane": ["来自长崎，最喜欢ちゃんぽん。"],
         }

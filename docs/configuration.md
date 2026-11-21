@@ -1,15 +1,15 @@
 # 配置
 
-Eidolon-SaaS 是公益 BYOK 服务：**平台零凭据也能启动和服务**。所有第三方 key 都可选——不配时每个回合用用户自带的 key；配了部署者的 key 就作兜底（用户没带时用部署者的）。环境变量的完整清单和写法见仓库根目录 [`.env.example`](../.env.example)，部署步骤见 [deploy.md](deploy.md)。
+Eidolon-SaaS 使用用户自带的模型、语音和向量化密钥（BYOK）。公益部署把部署者的模型和语音密钥留空即可。可选的对话和语音兜底由部署者在 `.env` 显式配置，使用时费用由部署者承担。配置清单见 [`.env.example`](../.env.example)，从本仓库构建和部署的步骤见 [部署](deploy.md)。
 
 有后台时（设了 `EIDOLON_ADMINS`，或开着开发登录），可在 `/admin` 修改限额、玩法开关和注册方式。后台不再展示或接受平台模型、语音、向量、重排、判断及天气服务的凭据；用户自己的 key 只在用户浏览器里填写。后台改过的运营设置优先于 `.env`，要重新使用 `.env` 的值可在后台恢复。
 
 ## 数据库
 
-多个 API 实例共用 Postgres 时，给每个实例设置同一个连接地址：
+单进程可以用 SQLite 或 PostgreSQL。使用 PostgreSQL 时，填已有数据库的连接地址；多个 API 或通话进程使用同一个地址：
 
-```sh
-DATABASE_URL=postgresql://eidolon:password@postgres:5432/eidolon
+```env
+DATABASE_URL=postgresql://<用户>:<密码>@<数据库主机>:5432/<数据库名>
 ```
 
 地址支持 `postgresql://` 和 `postgres://`；可在地址里加 `sslmode=require` 等 Postgres 参数。程序使用 psycopg 3，保留原有 `Store` 接口；读操作在只读、REPEATABLE READ 事务中完成。写操作仍按原有规则串行提交，数据库事务锁让不同 API 进程里的「先读再写」也不会互相覆盖。每个进程默认开 1 个写连接、4 个读连接。
@@ -22,7 +22,7 @@ DATABASE_URL=postgresql://eidolon:password@postgres:5432/eidolon
 
 ## 角色
 
-角色存在数据库里，通过 API 创建和管理（M0 没有编辑界面，通用壳在 M2）。登录拿到会话 cookie 后：
+登录后在角色目录创建或管理角色，在角色编辑页的「资料」区粘贴文本或上传文本文件。角色也可通过以下 API 操作，需要登录会话：
 
 | 接口 | 作用 |
 |---|---|
@@ -41,7 +41,7 @@ DATABASE_URL=postgresql://eidolon:password@postgres:5432/eidolon
 | `intro` | 字符串 | 一句话介绍，≤2000 字 |
 | `avatar_url` | http/https URL 或 null | 头像外链；平台不托管素材文件 |
 | `greeting` | 字符串 | 问候语，≤10000 字 |
-| `voice_id` | 字符串 | 用户自己的 Fish Audio 音色 ID（通话用，M3） |
+| `voice_id` | 字符串 | 用户自己的 Fish Audio 音色 ID（通话用） |
 | `color` | `#rrggbb` | 印象色，默认 `#64748b` |
 | `user_address` | 字符串 | 角色怎么称呼用户，默认「你」，1–80 字 |
 | `language_mode` | `single` / `bilingual` | 输出语言：单语言（默认）或 `<ja><zh>` 双语 |
@@ -59,7 +59,7 @@ DATABASE_URL=postgresql://eidolon:password@postgres:5432/eidolon
 | LLM | 对话、记忆提炼、起标题 | 任何 OpenAI 兼容 / Responses / Anthropic 接口的服务 |
 | TTS | 语音合成 | Fish Audio |
 | STT | 语音识别 | Soniox 或阿里云百炼 |
-| 生图 | 照片（玩法待后续里程碑） | NovelAI 或 OpenAI 图像格式 |
+| 生图 | 密钥设置保留，当前版本关闭照片玩法 | NovelAI 或 OpenAI 图像格式 |
 | 向量化 | 长期记忆、资料召回 | 任何 OpenAI 兼容 `/embeddings` 端点 |
 | 重排 | 对召回的资料与记忆排序（可不填） | SiliconFlow `/rerank` 格式端点 |
 
@@ -79,15 +79,17 @@ key 只存在浏览器里，回合/通话期间随请求带给后端、在进程
 ## 登录、用户与限额
 
 - 登录：GitHub 或 Google OAuth，至少配一家（`GITHUB_CLIENT_*`、`GOOGLE_CLIENT_*`，见 deploy.md）。本地开发用 `EIDOLON_DEV_LOGIN=1` 按名字登录。
-- `EIDOLON_ADMINS`：管理者名单，逗号分隔的 `provider:subject`（`eidolon user list` 查）。不填时后台不存在（开发登录除外）。
-- `EIDOLON_REGISTRATION`：`open`（默认）或 `invite`（只让受邀的人注册，邀请链接在后台「注册」里生成）。
-- `EIDOLON_CONTACT`：举报页和站点条款显示的联系信息，登录被封禁或需要邀请时也会显示。
-- `NEXT_PUBLIC_EIDOLON_SOURCE_URL`：前端构建时指定此版本的公开源码地址。默认链接到 Eidolon-SaaS fork 的 `saas/main` 分支。部署修改版时可指向对应的公开源码。
+- `EIDOLON_ADMINS`：管理者名单，逗号分隔的 `provider:subject`（`eidolon user list` 查）。设置后可在设置页进入后台。仅在本地开启开发登录且名单为空时，所有用户都是管理者。
+- `EIDOLON_REGISTRATION`：`open`（默认）或 `invite`。新站建议从 `invite` 起步。管理者在后台「配置 → 注册」生成或删除邀请，已注册用户照常登录；管理者初次登录可直接注册。空数据库没设管理者时，允许首位用户暂时登录以取得自己的身份标识。对外开放前先把管理者填入名单。
+- `EIDOLON_CONTACT`：公开联系信息，显示于举报页和站点条款，登录被封禁或需要邀请时也会显示。
+- `NEXT_PUBLIC_EIDOLON_SOURCE_URL`：前端构建时指定运行版本对应的公开源码地址，默认链接到本项目的 `saas/main`。部署修改版时填修改版的源码地址，再构建前端。
 - 限额（都可选，0 为不限）：`EIDOLON_TURNS_PER_HOUR`（默认 60）、`EIDOLON_CALLS_PER_HOUR`（默认 5）、`EIDOLON_CALL_MINUTES`（默认 10）、`EIDOLON_TURNS_PER_CALL`（默认 40）、`EIDOLON_CONCURRENT_CALLS`（默认 10）。后台可以按用户单独设。
 - `EIDOLON_HISTORY_TURNS`：每回合带给模型的历史回合数下限（默认 20，0 为整段对话）。
-- `EIDOLON_SECRET_KEY`：加密后台保存的 key、给封禁名单做哈希；`openssl rand -hex 32`，填了不要换。用户的自带密钥跟它无关。
+- `EIDOLON_SECRET_KEY`：部署密钥，用于封禁名单等操作。用 `openssl rand -hex 32` 生成，填好后保持固定。
 
 后台配置页仅提供限额、玩法开关和注册设置。模型、语音、向量化、重排、天气等平台凭据不会出现在 `/api/admin/config` 响应中，也不能通过后台配置接口保存；旧的模型和网络配置标签已移除。
+
+访客和登录用户都可以从页脚提交内容举报。管理者在后台「举报」查看、更新处理状态和记录理由，并在「用户」页操作封禁、解封或删除。
 
 ## 部署者的模型（可选兜底）
 
@@ -131,7 +133,7 @@ WebRTC：`EIDOLON_ICE_SERVERS`（默认 Google 公共 STUN）、`EIDOLON_TURN_UR
 | 玩法 | 状态 |
 |---|---|
 | 文字对话、通话、长期记忆、资料召回、好感度 | 保留（记忆/召回/好感度按上面的配置降级） |
-| 礼物、照片、主动搭话、生理期、酒吧、朋友圈、信、日程、天气、朗读、抽奖/重置卡 | 关闭，留待 M4 之后按需改造（依赖部署者凭据或原作目录） |
+| 礼物、照片、主动搭话、生理期、酒吧、朋友圈、信、日程、天气、朗读、抽奖/重置卡 | 当前版本关闭 |
 
 `EIDOLON_AFFINITY_AND_GIFTS`（默认 1）控制平台是否启用好感度；产生新的好感度变化还需用户开启判断功能。其余关闭玩法的开关变量不再在 `.env.example` 里列出。
 

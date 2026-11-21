@@ -162,11 +162,11 @@ describe("arrange", () => {
 
 describe("arrange 加上隐藏、置顶和搜索", () => {
   const characters = [
-    idol("mano", "櫻木真乃", "星"),
-    idol("hiori", "風野灯織", "星"),
-    idol("meguru", "八宮めぐる", "星"),
-    idol("kogane", "月岡恋鐘", "咖啡"),
-    idol("mamimi", "田中摩美々", "咖啡"),
+    idol("mano", "櫻庭紗季", "星"),
+    idol("hiori", "井原灯里", "星"),
+    idol("meguru", "深町あおい", "星"),
+    idol("kogane", "北川恋鈴", "咖啡"),
+    idol("mamimi", "森川奈々", "咖啡"),
   ];
 
   // meguru 最近，其次 kogane，再其次 mano；hiori 和 mamimi 没聊过。

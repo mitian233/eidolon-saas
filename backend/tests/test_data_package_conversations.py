@@ -130,7 +130,7 @@ async def test_conversations_move_to_another_deployment_as_they_were(
     assert manifest["counts"] == {"conversations": 4}
     first = data["conversations"][0]
     assert first["id"] == ended
-    assert (first["character_id"], first["character_name"]) == ("mano", "櫻木真乃")
+    assert (first["character_id"], first["character_name"]) == ("mano", "櫻庭紗季")
     assert [m["role"] for m in first["messages"]] == ["user", "character"]
     assert first["messages"][1]["ja"] == "[小声で]はい"
     assert first["messages"][1]["segments"] == [{"ja": "[小声で]はい", "zh": "好的"}]
@@ -176,7 +176,7 @@ def replied(zh: str, at: str) -> dict:
 
 
 def packaged_conversation(
-    id: str, begun: str, *, character: tuple[str, str | None] = ("mano", "櫻木真乃"),
+    id: str, begun: str, *, character: tuple[str, str | None] = ("mano", "櫻庭紗季"),
     events: list[dict] | None = None, said_then: str | None = None,
 ) -> dict:
     """A conversation begun on the day `begun` (as `2026-09-01`), the user saying `said_then`
@@ -225,7 +225,7 @@ async def test_her_conversation_here_stays_current_and_one_imported_is_where_the
     res = await import_package(client, conversations_package(
         packaged_conversation("older", "2026-09-01"),
         packaged_conversation("newer", "2026-09-02"),
-        packaged_conversation("hers", "2026-09-03", character=("kogane", "月岡恋鐘")),
+        packaged_conversation("hers", "2026-09-03", character=("kogane", "北川恋鈴")),
     ), "conversations")
 
     assert res.json()["conversations"] == 3
@@ -259,13 +259,13 @@ async def test_a_conversation_already_here_is_passed_over_whole(
     assert await said_in(client) == ["c", "b", "a"]
 
 
-HAZUKI = ("hazuki", "七草はづき")
+HAZUKI = ("hazuki", "若狭真琴")
 """Someone not configured here."""
 
 
 def told(id: int, text: str, conversation: str | None) -> dict:
     return {
-        "id": id, "source_character_id": "mano", "source_character_name": "櫻木真乃",
+        "id": id, "source_character_id": "mano", "source_character_name": "櫻庭紗季",
         "conversation": conversation, "text": text,
         "created_at": "2026-09-01T09:00:00.000000+00:00", "superseded_by": None,
     }
@@ -296,7 +296,7 @@ async def test_conversations_with_someone_not_here_are_skipped_and_the_user_told
     assert res.json() == {
         "conversations": 1, "photos": 0, "memories": 2, "profile": False,
         "skipped": [
-            {"character_name": "七草はづき", "conversations": 2},
+            {"character_name": "若狭真琴", "conversations": 2},
             {"character_name": "chiyuki", "conversations": 1},
         ],
         "cycles": 0, "cycles_skipped": 0, "letters": 0, "letters_skipped": 0,

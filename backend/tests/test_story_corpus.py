@@ -18,20 +18,20 @@ from tests.fakes import FakeEmbedder
 from tests.stories import corpus_in
 
 PARK = Episode(
-    "produce_events/100100101", "produce", "W.I.N.G.編", "第1話", frozenset({"mano"}),
-    (Line("真乃", "公園で鳩と一緒に歌っていました"),),
+    "sample/park", "produce", "町の音楽祭", "第1話", frozenset({"mano"}),
+    (Line("紗季", "雨の公園で鳩を数えていました"),),
 )
 WON = Episode(
-    "produce_events/100100106", "produce", "W.I.N.G.編", "第6話", frozenset({"mano"}),
-    (Line("真乃", "優勝、したんですねっ"),),
+    "sample/won", "produce", "町の音楽祭", "第6話", frozenset({"mano"}),
+    (Line("紗季", "音楽祭で優勝しましたよ"),),
 )
 NAGASAKI = Episode(
-    "produce_events/201100401", "produce", "恋鐘のカード", "第1話", frozenset({"kogane", "mano"}),
-    (Line("恋鐘", "長崎のちゃんぽん、ばりうまかよ！写真ば撮ろう、公園で"),),
+    "sample/picnic", "produce", "恋鈴のお出かけ", "第1話", frozenset({"kogane", "mano"}),
+    (Line("恋鈴", "長崎で買ったパンを食べてから公園で写真を撮ろう"),),
 )
 HIORI = Episode(
-    "game_event_communications/400100401", "event", "イベント", "第1話", frozenset({"hiori"}),
-    (Line("灯織", "公園で写真の撮影、頑張ります"),),
+    "sample/photography", "event", "写真の会", "第1話", frozenset({"hiori"}),
+    (Line("灯里", "公園で写真を撮るので予備の電池を持ってきました"),),
 )
 
 
@@ -89,7 +89,7 @@ async def test_a_character_finds_only_the_passages_of_the_episodes_she_is_cast_i
     assert await found(corpus, "公園で写真", "kogane") == [NAGASAKI.id]
     assert await found(corpus, "公園", "hazuki") == []
     [passage] = await corpus.search("優勝", "mano", 1)
-    assert passage.text == "W.I.N.G.編「第6話」\n真乃：優勝、したんですねっ"
+    assert passage.text == "町の音楽祭「第6話」\n紗季：音楽祭で優勝しましたよ"
 
 
 async def test_the_scores_are_the_cosine_similarity_of_the_stored_vectors(

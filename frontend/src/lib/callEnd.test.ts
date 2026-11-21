@@ -57,11 +57,11 @@ describe("droppedEnd", () => {
 
 describe("endCard", () => {
   const now = new Date("2026-10-13T03:00:00Z");
-  const context = { name: "真乃", now, timeZone: "Asia/Tokyo", exemptingKeys: ["llm", "tts", "stt"] } as const;
+  const context = { name: "紗季", now, timeZone: "Asia/Tokyo", exemptingKeys: ["llm", "tts", "stt"] } as const;
 
   it("says only that she hung up, when she did for what the user said, and offers a redial", () => {
     expect(endCard({ reason: "she_hung_up", detail: null, counts: true }, context)).toEqual({
-      title: "真乃挂断了电话。",
+      title: "紗季挂断了电话。",
       detail: null,
       body: null,
       counts: true,
@@ -73,7 +73,7 @@ describe("endCard", () => {
     const end = { reason: "cooldown", detail: null, counts: true, cooldownUntil: "2026-10-14T01:30:00Z" } as const;
 
     expect(endCard(end, context)).toEqual({
-      title: "真乃挂断了电话。",
+      title: "紗季挂断了电话。",
       detail: null,
       body: "她现在不想说话，明天 10:30 以后可以再找她。",
       counts: true,

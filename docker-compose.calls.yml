@@ -1,5 +1,6 @@
 # 在单台 Linux 主机拆分通话：与生产 compose 一起使用，默认部署不加载本文件。
 # DATABASE_URL 指向已运行的 PostgreSQL；api、calls 和 frontend 使用同一节点列表。
+# 两个通话服务沿用生产 backend 的本地构建配置，与 API 使用同一份代码。
 x-call-nodes: &call-nodes '{"voice-a":"http://127.0.0.1:8101","voice-b":"http://127.0.0.1:8102"}'
 
 services:

@@ -12,8 +12,8 @@ import {
 
 describe("excerpt", () => {
   it("drops the Markdown marks, keeping the words of links and code", () => {
-    expect(excerpt("**新角色**上线了：*樱木真乃*，见[说明](https://example.com)和 `设置`")).toBe(
-      "新角色上线了：樱木真乃，见说明和 设置",
+    expect(excerpt("**新角色**上线了：*樱庭纱季*，见[说明](https://example.com)和 `设置`")).toBe(
+      "新角色上线了：樱庭纱季，见说明和 设置",
     );
   });
 

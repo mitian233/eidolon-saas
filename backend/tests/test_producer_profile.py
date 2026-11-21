@@ -152,7 +152,7 @@ async def test_without_a_form_of_address_the_character_sheet_decides(
 
     prompt = await system_prompt(client, llm)
 
-    assert "你是櫻木真乃" in prompt
+    assert "你是櫻庭紗季" in prompt
 
 
 async def test_gender_enters_the_prompt_without_rewriting_the_story(

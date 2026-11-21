@@ -6,6 +6,8 @@ with the providers faked."""
 
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
+from typing import cast
 from unittest.mock import ANY
 from urllib.parse import parse_qs, urlsplit
 
@@ -13,7 +15,7 @@ import httpx
 import pytest
 
 from eidolon.config import Settings
-from tests.conftest import ClientFactory, github_identity, sign_in_with
+from tests.conftest import ClientFactory, agree_to_terms, github_identity, sign_in_with
 from tests.fakes import START, FakeClock, FakeIdentityProvider, FakeLLM
 from tests.test_admin_users import ADMIN, admin_beside, admin_client
 from tests.test_sign_in import signed_in
@@ -22,8 +24,11 @@ INVITES = "/api/admin/invites"
 
 
 @pytest.fixture
-def settings(settings: Settings) -> Settings:
-    return replace(settings, admins=frozenset({ADMIN}), registration="invite")
+def settings(settings: Settings, database_target: Path | str) -> Settings:
+    return replace(
+        settings, database_path=cast(Path, database_target), dev_login=False,
+        admins=frozenset({ADMIN}), registration="invite",
+    )
 
 
 def code_of(link: str) -> str:
@@ -44,11 +49,14 @@ async def invites(admin: httpx.AsyncClient) -> list[dict]:
 
 
 async def test_while_only_those_invited_may_sign_up_new_identities_need_an_invite_link(
-    make_client: ClientFactory, github: FakeIdentityProvider
+    make_client: ClientFactory, github: FakeIdentityProvider, settings: Settings,
 ):
-    first = make_client(FakeLLM(), user=None)
+    first = make_client(FakeLLM(), user=None, settings=replace(settings, registration="open"))
     stranger = make_client(FakeLLM(), user=None)
     returning = make_client(FakeLLM(), user=None)
+    before_first_signup = await sign_in_with(stranger, github, github_identity("2002", "stranger"))
+    assert before_first_signup.headers["location"] == "/login?error=not_invited"
+    assert not await signed_in(stranger)
 
     first_signed_up = await sign_in_with(first, github, github_identity("1001"))
     turned_away = await sign_in_with(stranger, github, github_identity("2002", "stranger"))
@@ -56,11 +64,30 @@ async def test_while_only_those_invited_may_sign_up_new_identities_need_an_invit
     signed_in_again = await sign_in_with(returning, github, github_identity("1001"))
 
     assert first_signed_up.headers["location"] == "/conversations"
+    assert await signed_in(first)
     assert turned_away.headers["location"] == "/login?error=not_invited"
     assert not await signed_in(stranger)
     assert (await admin.get("/api/admin")).status_code == 200
     assert (await admin.get("/api/admin/users")).json()["total"] == 2
     assert signed_in_again.headers["location"] == "/conversations"
+    assert await signed_in(returning)
+
+
+async def test_first_user_can_find_their_admin_identity_if_no_admins_are_set(
+    make_client: ClientFactory, github: FakeIdentityProvider, settings: Settings,
+):
+    unset = replace(settings, admins=frozenset())
+    first = make_client(FakeLLM(), user=None, settings=unset)
+    second = make_client(FakeLLM(), user=None, settings=unset)
+
+    signed_up = await sign_in_with(first, github, github_identity("1001"))
+    refused = await sign_in_with(second, github, github_identity("1002"))
+
+    assert signed_up.headers["location"] == "/conversations"
+    assert await signed_in(first)
+    assert (await first.get(INVITES)).status_code == 404
+    assert refused.headers["location"] == "/login?error=not_invited"
+    assert not await signed_in(second)
 
 
 async def test_an_invite_link_signs_up_as_many_as_it_may_be_used_for_and_says_whom(
@@ -75,8 +102,9 @@ async def test_an_invite_link_signs_up_as_many_as_it_may_be_used_for_and_says_wh
         github_identity("1000", created_at=START - timedelta(days=30)), invite=code,
     )
     # As a chat app may stick the full stop after it onto the link.
+    visitor = make_client(FakeLLM(), user=None)
     friend = await sign_in_with(
-        make_client(FakeLLM(), user=None), github, github_identity("1001", "friend"),
+        visitor, github, github_identity("1001", "friend"),
         invite=f"{code}。",
     )
     second = await sign_in_with(
@@ -92,9 +120,18 @@ async def test_an_invite_link_signs_up_as_many_as_it_may_be_used_for_and_says_wh
     assert made["link"] == f"http://localhost:3000/login?invite={code}"
     assert too_new.headers["location"] == "/login?error=too_new"
     assert friend.headers["location"] == "/conversations"
+    assert await signed_in(visitor)
+    await agree_to_terms(visitor)
+    assert (await visitor.get(INVITES)).status_code == 404
+    assert (await visitor.post(INVITES, json={})).status_code == 404
+    assert (await visitor.delete(f"{INVITES}/{made['id']}")).status_code == 404
     assert second.headers["location"] == "/conversations"
     assert third.headers["location"] == "/login?error=invite_invalid"
     assert friend_again.headers["location"] == "/conversations"
+    admin_returning = make_client(FakeLLM(), user=None)
+    admin_login = await sign_in_with(admin_returning, github, github_identity(ADMIN[1]))
+    assert admin_login.headers["location"] == "/conversations"
+    assert (await admin_returning.get(INVITES)).status_code == 200
     assert await invites(admin) == [{
         "id": made["id"], "link": made["link"], "note": "群里", "max_uses": 2, "used": 2,
         "expires_at": None, "created_at": made["created_at"], "state": "used_up",

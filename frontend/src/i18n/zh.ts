@@ -850,7 +850,7 @@ export const zh = {
       },
       separator: "、",
       nothingNew: "没有新的内容要导入。",
-      /** 「跳过了和月岡恋鐘的 2 段、櫻木真乃的 1 段对话，这里没有她们。」 */
+      /** 「跳过了和北川恋鈴的 2 段、櫻庭紗季的 1 段对话，这里没有她们。」 */
       skipped: (parts: string, many: boolean) => `跳过了和${parts}对话，这里没有${many ? "她们" : "她"}。`,
       skippedPart: (name: string, n: number) => `${name}的 ${n} 段`,
       failures: {

@@ -36,7 +36,7 @@ async def test_jev_is_asked_both_questions_of_the_segment_at_once():
     [request] = requests
     assert set(request) == {"state", "questions"}
     assert request["state"] == {
-        "角色": "櫻木真乃",
+        "角色": "櫻庭紗季",
         "用户这句话": "你今天很可爱",
         "这条回复前面几段": ["[shyly]ほわっ……（哇……）"],
         "这一段台词": "ありがとうございます！",

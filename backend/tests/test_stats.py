@@ -79,7 +79,7 @@ def clock() -> FakeClock:
 def meguru(characters: Characters) -> None:
     """Meguru as well, configured after Kogane but before her in the idols' order, as Kogane
     has no idol number."""
-    characters.add("meguru", "八宮めぐる", "# 人设\n你是八宮めぐる。", idol_id=2)
+    characters.add("meguru", "深町あおい", "# 人设\n你是深町あおい。", idol_id=2)
 
 
 async def test_stats_need_a_session(make_client: ClientFactory):
@@ -247,7 +247,7 @@ async def test_each_character_has_her_turns_and_the_days_since_the_first_thing_l
     current = await start_conversation(client)
     await say(client, database, current, "这周", tokyo(TODAY - timedelta(days=4), 12))
     with_kogane = await start_conversation(client, "kogane")
-    await say(client, database, with_kogane, "恋鐘", tokyo(TODAY - timedelta(days=2), 12))
+    await say(client, database, with_kogane, "恋鈴", tokyo(TODAY - timedelta(days=2), 12))
     with_meguru = await start_conversation(client, "meguru")
     await say(client, database, with_meguru, "めぐる", tokyo(TODAY, 12))
 

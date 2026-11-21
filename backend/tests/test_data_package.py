@@ -281,7 +281,7 @@ async def test_memories_move_to_another_deployment_superseded_as_they_were(
     assert osaka["text"] == OSAKA and tokyo["text"] == TOKYO and cat["text"] == CAT
     assert osaka["superseded_by"] == tokyo["id"]
     assert tokyo["superseded_by"] is None and cat["superseded_by"] is None
-    assert (tokyo["source_character_id"], tokyo["source_character_name"]) == ("kogane", "月岡恋鐘")
+    assert (tokyo["source_character_id"], tokyo["source_character_name"]) == ("kogane", "北川恋鈴")
     assert all(m["conversation"] is None for m in data["memories"])
     assert set(osaka) == {
         "id", "source_character_id", "source_character_name", "conversation", "text",
@@ -303,7 +303,7 @@ def memories_package(*memories: dict) -> bytes:
 
 
 def packaged_memory(id: int, text: str, superseded_by: int | None = None, *,
-                    source: tuple[str, str] = ("mano", "櫻木真乃")) -> dict:
+                    source: tuple[str, str] = ("mano", "櫻庭紗季")) -> dict:
     return {
         "id": id, "source_character_id": source[0], "source_character_name": source[1],
         "conversation": None, "text": text, "created_at": f"2026-09-0{id}T08:00:00.000000+00:00",
@@ -349,7 +349,7 @@ async def test_memories_told_to_someone_not_here_are_imported_all_the_same(
     client = remembering(make_client)
 
     res = await import_package(
-        client, memories_package(packaged_memory(1, CAT, source=("hazuki", "七草はづき"))),
+        client, memories_package(packaged_memory(1, CAT, source=("hazuki", "若狭真琴"))),
         "memories",
     )
 

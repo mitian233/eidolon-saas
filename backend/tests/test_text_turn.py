@@ -170,7 +170,7 @@ async def test_prompt_carries_the_character_sheet_and_the_conversation_so_far(
     make_client: ClientFactory,
 ):
     llm = FakeLLM(
-        ["<ja>ピーちゃんです！</ja><zh>是小皮！</zh>"],
+        ["<ja>ポポちゃんです！</ja><zh>是小皮！</zh>"],
         ["<ja>はいっ</ja><zh>嗯！</zh>"],
     )
     client = make_client(llm)
@@ -185,11 +185,11 @@ async def test_prompt_carries_the_character_sheet_and_the_conversation_so_far(
     assert shared.role == "system" and shared.cache_breakpoint
     assert MANO_SHEET in shared.content
     system = system_of(llm.prompts[1])
-    assert "櫻木真乃" in system
+    assert "櫻庭紗季" in system
     assert "<ja>" in system and "<zh>" in system
     assert [(m.role, m.content) for m in llm.prompts[1] if m.role != "system"] == [
         ("user", "这只鸽子叫什么？"),
-        ("assistant", "<ja>ピーちゃんです！</ja><zh>是小皮！</zh>"),
+        ("assistant", "<ja>ポポちゃんです！</ja><zh>是小皮！</zh>"),
         ("user", "好可爱"),
     ]
 

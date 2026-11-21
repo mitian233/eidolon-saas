@@ -7,10 +7,9 @@ another identity by hand. The only gate is against throwaway accounts: a GitHub 
 must be a year old, and a Google account's email address verified. A banned user's
 identities cannot sign in.
 
-Unless the deployment takes only those invited (GLOSSARY.md「注册方式」, ADR-0006 revised
-2026-10-29): a new identity then signs up only through an invite link (`invites`), but an
-admin's, and the deployment's first user. Users who already are sign in as ever, and
-linking another identity is not signing up.
+With invite-only registration, a new identity needs an invite unless it is on the admin
+list, or there is no admin list and no user yet (GLOSSARY.md「注册方式」, ADR-0006).
+Existing users can sign in and link another identity without an invite.
 
 Users can delete themselves, and admins can delete them, and with them everything of
 theirs, for good: signing in with the same identity afterwards makes a new user. Unless
@@ -173,7 +172,7 @@ class Accounts:
         nor for an admin's identity; else the invite link `invite` (`Invites.admit`)."""
         if self.registration() == "open" or (identity.provider, identity.subject) in self.admins:
             return None
-        return self.invites.admit(invite)
+        return self.invites.admit(invite, allow_first_user=not self.admins)
 
     def _method(self, identity: Identity) -> SignInMethod:
         return SignInMethod(

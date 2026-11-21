@@ -44,7 +44,7 @@ OUT_OF_LINE = level(1, out_of_line=True)
 @pytest.fixture
 def characters(characters: Characters) -> Characters:
     """Mano and Kogane, and Meguru."""
-    return characters.add("meguru", "八宮めぐる", "# 人设\n你是八宮めぐる。")
+    return characters.add("meguru", "深町あおい", "# 人设\n你是深町あおい。")
 
 
 @pytest.fixture
@@ -101,15 +101,15 @@ async def test_the_section_sums_up_the_judged_turns_and_ranks_the_characters_by_
         "characters": [
             # As many judged as Mano, but she ended a conversation.
             {
-                "character_id": "kogane", "name": "月岡恋鐘", "judged": 20,
+                "character_id": "kogane", "name": "北川恋鈴", "judged": 20,
                 "raised_share": 0.0, "lowered_share": 0.25, "cooldowns": 1, "she_ended": 1,
             },
             {
-                "character_id": "mano", "name": "櫻木真乃", "judged": 20,
+                "character_id": "mano", "name": "櫻庭紗季", "judged": 20,
                 "raised_share": 0.05, "lowered_share": 0.1, "cooldowns": 0, "she_ended": 0,
             },
             {
-                "character_id": "meguru", "name": "八宮めぐる", "judged": 1,
+                "character_id": "meguru", "name": "深町あおい", "judged": 1,
                 "raised_share": None, "lowered_share": None, "cooldowns": 1, "she_ended": 1,
             },
         ],

@@ -1,6 +1,6 @@
 # Eidolon-SaaS（工作名）公益 BYOK 版改造设计
 
-日期：2026-11-12　状态：已确认；M0 已完成（提交 `9df63455`），M1 已完成（提交 `2a4362e3`，本地 `saas/main`，均未开 PR），M2 待实现
+日期：2026-11-12　状态：M0–M4 的代码与部署文档已完成。上线前仍需人工试用真实模型的资料召回与无资料回答（M2）、真实语音服务和公网 TURN（M3）、公网 OAuth 邀请注册与举报处理（M4）；确认公开仓库及站点源码链接后，再提交全年龄 showcase 登记。
 代码位置：fork `mitian233/eidolon-saas`，本地 worktree `/home/leonid/myproj/eidolon-saas`，分支 `saas/main`（起点 `5875cdff`，与上游 main 一致）。
 
 ## 1. 意图与缘由

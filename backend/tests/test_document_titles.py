@@ -12,8 +12,8 @@ from tests.fakes import FakeEmbedder
 from tests.stories import corpus_in
 
 PARK = Episode(
-    "produce_events/100100101", "培育剧情", "W.I.N.G.編", "公園の歌声", frozenset({"mano"}),
-    (Line("真乃", "ほわっ……"),),
+    "sample/park", "培育剧情", "町の音楽祭", "雨の日の公園", frozenset({"mano"}),
+    (Line("紗季", "傘を持ってきました"),),
 )
 
 
@@ -22,14 +22,14 @@ async def test_a_passage_is_titled_with_its_card_or_event_and_episode(tmp_path: 
     async with corpus_in(tmp_path / "eidolon.db", embedder) as corpus:
         await corpus.save([PARK])
 
-    assert embedder.titles == ["W.I.N.G.編「公園の歌声」"]
+    assert embedder.titles == ["町の音楽祭「雨の日の公園」"]
 
 
 async def test_a_fact_is_titled_with_its_headings(tmp_path: Path):
     embedder = FakeEmbedder()
     mano = Character(
-        "mano", "櫻木真乃", "", "voice", "sheet", None, "#ffbad6", Birthday(4, 25), 16,
-        facts=parse_facts("喜欢鸟。\n# 人物关系\n## 風野灯織\n同组合的伙伴。"),
+        "mano", "櫻庭紗季", "", "voice", "sheet", None, "#ffbad6", Birthday(4, 25), 16,
+        facts=parse_facts("喜欢鸟。\n# 人物关系\n## 井原灯里\n同组合的伙伴。"),
     )
     db = Database(tmp_path / "eidolon.db")
     facts = CharacterFacts(db, embedder, [mano])
@@ -37,4 +37,4 @@ async def test_a_fact_is_titled_with_its_headings(tmp_path: Path):
     assert await facts.embed_missing() == 2
     await db.close()
 
-    assert embedder.titles == [None, "人物关系 / 風野灯織"]
+    assert embedder.titles == [None, "人物关系 / 井原灯里"]

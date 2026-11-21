@@ -118,14 +118,14 @@ async def test_the_model_reads_the_first_turns_in_order_with_their_events_and_he
     [prompt] = background.prompts
     assert prompt[0].role == "system" and "起标题" in prompt[0].content
     assert fed(prompt) == [
-        "# 用户和櫻木真乃的对话",
+        "# 用户和櫻庭紗季的对话",
         "用户：我想去看海",
-        "櫻木真乃：好啊",
-        "（櫻木真乃挂断了电话）",
+        "櫻庭紗季：好啊",
+        "（櫻庭紗季挂断了电话）",
         f"用户：{'海' * 150}…",
-        "櫻木真乃：好的",
+        "櫻庭紗季：好的",
         "用户：第三句",
-        "櫻木真乃：好的",
+        "櫻庭紗季：好的",
     ]
 
 
@@ -169,7 +169,7 @@ async def test_she_ending_the_conversation_in_its_third_turn_names_it_all_the_sa
     assert ended_by(turns[-1])
     assert await listed_titles(client) == [TITLE]
     [prompt] = background.prompts
-    assert fed(prompt)[-1] == "（櫻木真乃结束了对话）"
+    assert fed(prompt)[-1] == "（櫻庭紗季结束了对话）"
 
 
 async def test_a_turn_in_a_call_counts_among_the_three(

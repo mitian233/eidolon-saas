@@ -49,7 +49,7 @@ def one_call_an_hour(settings: Settings) -> Settings:
 async def test_a_call_is_heard_and_voiced_and_lands_in_the_conversation(
     make_client: ClientFactory, speech: FakeSpeech, browser: Browser
 ):
-    llm = FakeLLM(MANO_REPLY, ["<ja>ピーちゃん！</ja><zh>小皮！</zh>"])
+    llm = FakeLLM(MANO_REPLY, ["<ja>ポポちゃん！</ja><zh>小皮！</zh>"])
     client = make_client(llm, clock=lambda: datetime(2026, 9, 25, 12, 30, tzinfo=UTC))
     client.headers["X-Timezone"] = "Asia/Tokyo"
     conversation_id = await start_conversation(client, "mano")
@@ -74,7 +74,7 @@ async def test_a_call_is_heard_and_voiced_and_lands_in_the_conversation(
     assert typed[0]["text"] == "鸽子叫什么？"
     [tts] = speech.ttss
     assert tts.voice_id == "mano-voice"
-    assert "".join(tts.voiced) == "ほわっ、おはようございます！今日もピーちゃん！"  # Japanese only
+    assert "".join(tts.voiced) == "ほわっ、おはようございます！今日もポポちゃん！"  # Japanese only
     system = system_of(llm.prompts[0])
     assert "21:30" in system and "Asia/Tokyo" in system  # the time on the caller's device
     res = await client.get(f"/api/conversations/{conversation_id}/messages")
@@ -82,7 +82,7 @@ async def test_a_call_is_heard_and_voiced_and_lands_in_the_conversation(
         ("user", "早上好", None),
         ("character", None, "ほわっ、おはようございます！今日も"),
         ("user", "鸽子叫什么？", None),
-        ("character", None, "ピーちゃん！"),
+        ("character", None, "ポポちゃん！"),
     ]
 
 
@@ -102,7 +102,7 @@ async def test_call_turns_look_things_up_and_remember(
     browser.type("你还记得我家的猫吗？")
     await browser.turn()
 
-    assert jev.asked == [("櫻木真乃", "我家的猫叫小白哦"), ("櫻木真乃", "你还记得我家的猫吗？")]
+    assert jev.asked == [("櫻庭紗季", "我家的猫叫小白哦"), ("櫻庭紗季", "你还记得我家的猫吗？")]
     context = context_of(llm.prompts[-1])
     assert CAT in context
 

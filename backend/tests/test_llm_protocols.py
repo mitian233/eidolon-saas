@@ -94,7 +94,7 @@ async def test_a_recorded_tool_call_is_assembled(protocol: str):
 
 
 PROMPT = [
-    ChatMessage("system", "你是櫻木真乃。"),
+    ChatMessage("system", "你是櫻庭紗季。"),
     ChatMessage("user", "你好"),
     ChatMessage("assistant", "<ja>ほわっ</ja><zh>哇</zh>"),
     ChatMessage("user", "那次拍写真集"),
@@ -124,7 +124,7 @@ async def test_responses_request_carries_the_prompt_tools_and_tool_round_trip():
         "model": "some-model",
         "stream": True,
         "store": False,
-        "instructions": "你是櫻木真乃。",
+        "instructions": "你是櫻庭紗季。",
         "input": [
             {"role": "user", "content": "你好"},
             {"role": "assistant", "content": "<ja>ほわっ</ja><zh>哇</zh>"},
@@ -171,7 +171,7 @@ async def test_anthropic_request_carries_the_prompt_tools_and_tool_round_trip():
         "model": "some-model",
         "stream": True,
         "max_tokens": body["max_tokens"],
-        "system": "你是櫻木真乃。",
+        "system": "你是櫻庭紗季。",
         "messages": [
             {"role": "user", "content": "你好"},
             {"role": "assistant", "content": "<ja>ほわっ</ja><zh>哇</zh>"},

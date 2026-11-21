@@ -100,13 +100,13 @@ describe("导入结果的一句话", () => {
         ...nothing,
         conversations: 1,
         skipped: [
-          { character_name: "月岡恋鐘", conversations: 2 },
-          { character_name: "櫻木真乃", conversations: 1 },
+          { character_name: "北川恋鈴", conversations: 2 },
+          { character_name: "櫻庭紗季", conversations: 1 },
         ],
       }),
-    ).toBe("导入了 1 段对话。跳过了和月岡恋鐘的 2 段、櫻木真乃的 1 段对话，这里没有她们。");
-    expect(importSummary({ ...nothing, skipped: [{ character_name: "月岡恋鐘", conversations: 2 }] })).toBe(
-      "没有新的内容要导入。跳过了和月岡恋鐘的 2 段对话，这里没有她。",
+    ).toBe("导入了 1 段对话。跳过了和北川恋鈴的 2 段、櫻庭紗季的 1 段对话，这里没有她们。");
+    expect(importSummary({ ...nothing, skipped: [{ character_name: "北川恋鈴", conversations: 2 }] })).toBe(
+      "没有新的内容要导入。跳过了和北川恋鈴的 2 段对话，这里没有她。",
     );
   });
 });

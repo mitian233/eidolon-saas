@@ -6,7 +6,7 @@ import type { Look } from "@/lib/api";
 
 const t = copy.conversation;
 
-/** 「櫻木真乃正在看天气、翻日程」：她的全名，看的几样按她看的顺序用「、」连起来。 */
+/** 「櫻庭紗季正在看天气、翻日程」：她的全名，看的几样按她看的顺序用「、」连起来。 */
 export function lookingUpText(name: string, what: readonly Look[]): string {
   return t.lookingUp(name, what.map((look) => t.looks[look]).join("、"));
 }

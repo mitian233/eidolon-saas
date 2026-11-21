@@ -1,6 +1,5 @@
-# 生产环境（VPS）：docker compose -f docker-compose.prod.yml pull && docker compose -f docker-compose.prod.yml up -d
-# 前端和后端用 CI 发布到 GHCR 的镜像，默认是 main 分支最新的一版；在 .env 里设 EIDOLON_IMAGE_TAG 可以固定到某一版
-# （例如 sha-29d651a）。改了代码想在服务器上直接构建时用 up -d --build。
+# 生产部署：docker compose -f docker-compose.prod.yml up -d --build
+# 前端和后端使用本仓库的 Dockerfile 在部署机上构建。Caddy 和 coturn 使用各自的公开镜像。
 # 部署步骤见 docs/deploy.md。所有密钥都来自仓库根目录的 .env，不写进这个文件。
 #
 # 四个服务都用 host 网络：语音通话走 WebRTC（UDP），后端需要把本机的公网地址作为候选地址告诉浏览器，
@@ -29,7 +28,7 @@ services:
     logging: *logging
 
   frontend:
-    image: ghcr.io/sallyn0225/eidolon-sc-frontend:${EIDOLON_IMAGE_TAG:-main}
+    pull_policy: build
     build:
       context: ./frontend
       args:
@@ -39,7 +38,7 @@ services:
       HOSTNAME: 127.0.0.1
       PORT: 3000
       BACKEND_URL: http://127.0.0.1:8000
-      # 写进 CSP：页面只许从这里另外加载立绘、缩略图和招呼
+      # 可选的外链图片来源，供前端内容安全策略使用
       EIDOLON_STAND_ASSETS_URL: ${EIDOLON_STAND_ASSETS_URL:-}
     depends_on:
       - backend
@@ -47,7 +46,7 @@ services:
     logging: *logging
 
   backend:
-    image: ghcr.io/sallyn0225/eidolon-sc-backend:${EIDOLON_IMAGE_TAG:-main}
+    pull_policy: build
     build: ./backend
     network_mode: host
     env_file: .env

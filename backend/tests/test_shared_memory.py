@@ -53,7 +53,7 @@ async def test_what_the_user_told_mano_reaches_kogane_as_hearsay(make_client: Cl
     memories = memories_section(context_of(kogane))
     assert CAT in memories
     line = next(line for line in memories.splitlines() if CAT in line)
-    assert "櫻木真乃" in line and "转述" in line
+    assert "櫻庭紗季" in line and "转述" in line
     # A new conversation carries only what memory retrieves, not the earlier conversation.
     assert [m.role for m in kogane] == ["system", "system", "system", "user"]
 

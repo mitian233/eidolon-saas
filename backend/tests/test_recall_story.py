@@ -13,8 +13,8 @@ from tests.document_sources import FakeDocuments
 from tests.test_text_turn import send_turn, start_conversation
 from tests.fakes import RETRIEVAL_KEYS
 
-PARK_LINE = "公園で鳩と一緒に歌っていました"
-ANSWER = ["<ja>公園でピーちゃんたちと歌ってたんです</ja><zh>我在公园和小皮它们唱歌</zh>"]
+PARK_LINE = "雨の公園で鳩を数えていました"
+ANSWER = ["<ja>雨の日に公園で鳩を数えました</ja><zh>下雨那天我在公园数鸽子</zh>"]
 
 
 def recall(query: str, id: str = "call_1") -> ToolCall:
@@ -57,11 +57,11 @@ async def test_the_recalled_passage_reaches_the_model_and_the_tool_exchange_is_n
     assert PARK_LINE in result.content
 
     assert events[-1]["type"] == "done"
-    assert events[-1]["message"]["ja"] == "公園でピーちゃんたちと歌ってたんです"
+    assert events[-1]["message"]["ja"] == "雨の日に公園で鳩を数えました"
     messages = (await client.get(f"/api/conversations/{conversation_id}/messages")).json()
     assert [(m["role"], m["text"], m["ja"]) for m in messages] == [
         ("user", "那次在公园唱歌是怎么回事？", None),
-        ("character", None, "公園でピーちゃんたちと歌ってたんです"),
+        ("character", None, "雨の日に公園で鳩を数えました"),
     ]
 
 
@@ -113,7 +113,7 @@ async def test_what_she_says_before_calling_the_tool_is_part_of_the_reply(
     assert llm.prompts[1][-2].content == "<ja>えっと……</ja><zh>嗯……</zh>"
     assert events[-1]["message"]["segments"] == [
         {"ja": "えっと……", "zh": "嗯……"},
-        {"ja": "公園でピーちゃんたちと歌ってたんです", "zh": "我在公园和小皮它们唱歌"},
+        {"ja": "雨の日に公園で鳩を数えました", "zh": "下雨那天我在公园数鸽子"},
     ]
 
 
@@ -137,7 +137,7 @@ async def test_tool_calls_stop_after_a_few_rounds_and_a_call_made_then_goes_unan
     assert llm.forbidden == [False] * MAX_TOOL_ROUNDS + [True]
     assert len(llm.prompts) == MAX_TOOL_ROUNDS + 1
     assert events[-1]["type"] == "done"
-    assert events[-1]["message"]["ja"] == "公園でピーちゃんたちと歌ってたんです"
+    assert events[-1]["message"]["ja"] == "雨の日に公園で鳩を数えました"
 
 
 async def test_a_failed_or_malformed_call_is_answered_and_the_turn_goes_on(
@@ -179,7 +179,7 @@ async def test_the_note_is_never_recorded_or_seen_again_in_later_turns(
     await send_turn(client, conversation_id, "后来呢？", own_keys=RETRIEVAL_KEYS)
 
     assert events[-1]["message"]["segments"] == [
-        {"ja": "公園でピーちゃんたちと歌ってたんです", "zh": "我在公园和小皮它们唱歌"}
+        {"ja": "雨の日に公園で鳩を数えました", "zh": "下雨那天我在公园数鸽子"}
     ]
     # The later turn, without tool calls, asks the model once, with no note.
     assert len(llm.prompts) == 3

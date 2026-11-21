@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest";
 import { matchesSearch, type Searchable } from "@/lib/characterSearch";
 
 const ROSTER: Searchable[] = [
-  { name: "櫻木真乃", intro: "さくらぎ まの Sakuragi Mano" },
-  { name: "月岡恋鐘", intro: "つきおか こがね Tsukioka Kogane" },
-  { name: "田中摩美々", intro: "たなか まみみ" },
-  { name: "浅倉透", intro: "あさくら とおる Asakura Toru" },
-  { name: "樋口円香", intro: "ひぐち まどか" },
+  { name: "櫻庭紗季", intro: "さくらば さき Sakuraba Saki" },
+  { name: "北川恋鈴", intro: "きたがわ れいりん Kitagawa Reirin" },
+  { name: "森川奈々", intro: "もりかわ なな" },
+  { name: "水野透", intro: "みずの とおる Mizuno Toru" },
+  { name: "石田円葉", intro: "いしだ まるは" },
   { name: "誰か", intro: "" },
 ];
 
@@ -17,47 +17,47 @@ function found(query: string): string[] {
 }
 
 describe("matchesSearch", () => {
-  it.each(["樱木", "真乃", "櫻木真乃"])("名字只输一部分也找得到：%s", (query) => {
-    expect(found(query)).toEqual(["櫻木真乃"]);
+  it.each(["樱庭", "紗季", "櫻庭紗季"])("名字只输一部分也找得到：%s", (query) => {
+    expect(found(query)).toEqual(["櫻庭紗季"]);
   });
 
-  it.each(["恋钟", "恋鐘", "戀鐘", "戀钟"])("繁体、日文字形和简体混着输都行：%s", (query) => {
-    expect(found(query)).toEqual(["月岡恋鐘"]);
+  it.each(["恋铃", "恋鈴", "戀鈴", "戀铃"])("繁体、日文字形和简体混着输都行：%s", (query) => {
+    expect(found(query)).toEqual(["北川恋鈴"]);
   });
 
-  it("圆香找得到日文写法的円香", () => {
-    expect(found("圆香")).toEqual(["樋口円香"]);
+  it("圆叶找得到日文写法的円葉", () => {
+    expect(found("圆叶")).toEqual(["石田円葉"]);
   });
 
-  it.each(["摩美々", "摩美美", "田中摩美"])("々 和它前面的字一样：%s", (query) => {
-    expect(found(query)).toEqual(["田中摩美々"]);
+  it.each(["奈々", "奈奈", "森川奈"])("々 和它前面的字一样：%s", (query) => {
+    expect(found(query)).toEqual(["森川奈々"]);
   });
 
-  it.each(["まの", "マノ", "さくらぎ", "サクラギマノ", "ｻｸﾗｷﾞ"])("简介里的假名，平假名片假名都算：%s", (query) => {
-    expect(found(query)).toEqual(["櫻木真乃"]);
+  it.each(["さき", "サキ", "さくらば", "サクラバサキ", "ｻｸﾗﾊﾞ"])("简介里的假名，平假名片假名都算：%s", (query) => {
+    expect(found(query)).toEqual(["櫻庭紗季"]);
   });
 
-  it.each(["mano", "Sakuragi", "sakuragimano", "SAKURAGI"])("简介里的罗马字不分大小写和空格：%s", (query) => {
-    expect(found(query)).toEqual(["櫻木真乃"]);
+  it.each(["saki", "Sakuraba", "sakurabasaki", "SAKURABA"])("简介里的罗马字不分大小写和空格：%s", (query) => {
+    expect(found(query)).toEqual(["櫻庭紗季"]);
   });
 
   it.each(["toru", "tooru", "tōru", "Tohru"])("长音的几种写法都认：%s", (query) => {
-    expect(found(query)).toEqual(["浅倉透"]);
+    expect(found(query)).toEqual(["水野透"]);
   });
 
   it("简介里的词也找得到", () => {
-    expect(found("こがね")).toEqual(["月岡恋鐘"]);
+    expect(found("れいりん")).toEqual(["北川恋鈴"]);
   });
 
   it("前后多打的空格不算", () => {
-    expect(found("  真乃 ")).toEqual(["櫻木真乃"]);
+    expect(found("  紗季 ")).toEqual(["櫻庭紗季"]);
   });
 
   it.each(["", "   "])("空着时全部留下：%j", (query) => {
     expect(found(query)).toEqual(ROSTER.map((c) => c.name));
   });
 
-  it.each(["佐藤", "xyz", "ぴーちゃん"])("不认识的输入什么都不留下：%s", (query) => {
+  it.each(["佐藤", "xyz", "ぽぽちゃん"])("不认识的输入什么都不留下：%s", (query) => {
     expect(found(query)).toEqual([]);
   });
 

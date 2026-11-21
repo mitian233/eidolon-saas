@@ -69,16 +69,7 @@
 
 ### 实现说明（票 02）
 
-**截图**（本地构建版，开发登录的验收用户，验完已删）：`.scratch/cycle-page/screens-02/`
-- `01-play-desk.png` 玩法页四张卡（没记过时的说明）
-- `07-many-records-desk.png` 电脑：记了 6 次、展开后的右栏，过了日子变淡
-- `06-faded-irregular-desk.png` 电脑：长短不一
-- `08-filter-popover-desk.png` 筛选弹出框
-- `10-cycles-phone.png`、`14-cycles-phone-lower.png` 手机上叠成一栏
-- `12-dialog-edit-phone.png` 手机上「改这次」的弹窗（primary 是她的颜色，左下「删除这次」）
-- `13-picker-desk.png` 第一天的小月历（今天以后不能选）
-
-截图是审查前截的，那时「这天是第一天」还是她颜色的实底；审查后改成了中性 primary，见下面。
+旧构建版截图含原作角色，SaaS 分支已移除。
 
 **模块**
 - `frontend/src/lib/cycles.ts`：接口类型（`Her`、`CycleEstimate`、`CyclesView`）和读、记、改、删四个请求，以及子页、卡用到的纯函数：

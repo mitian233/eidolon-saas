@@ -120,17 +120,18 @@ class Invites:
         """The link the user signed up through, if they did through one still kept."""
         return await self._db.read(_of_user, user_id)
 
-    def admit(self, code: str | None) -> Admit:
-        """What lets the user just made, in the write that made them, sign up as one
-        invited: through the link with `code`, counting a use of it and keeping who it let
-        in. The deployment's first user needs none: the deployer, who has no admin console
-        to make one in yet. Raises NotInvited, so that the write is undone."""
+    def admit(self, code: str | None, *, allow_first_user: bool) -> Admit:
+        """Check and count an invite in the same write that creates the user.
+
+        Without an admin list the first user can sign in to find their admin identity.
+        Raises NotInvited to undo the write when registration is refused."""
         now = self._clock()
 
         def admitting(db: sqlite3.Connection, user_id: str) -> None:
-            [(users,)] = db.execute("SELECT COUNT(*) FROM users")
-            if users == 1:
-                return
+            if allow_first_user:
+                [(users,)] = db.execute("SELECT COUNT(*) FROM users")
+                if users == 1:
+                    return
             if code is None:
                 raise NotInvited("not_invited")
             row = by_name(db).execute(
