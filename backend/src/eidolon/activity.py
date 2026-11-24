@@ -81,7 +81,7 @@ from collections.abc import AsyncIterator, Awaitable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import Context, ContextVar, copy_context
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from urllib.parse import urlsplit
@@ -103,7 +103,7 @@ from eidolon.config import (
 )
 from eidolon.data_access import Database
 from eidolon.embedding import Document, Embedder
-from eidolon.housekeeping import in_batches
+from eidolon.housekeeping import RECORDS_KEPT, in_batches
 from eidolon.llm import ChatLLM, ChatMessage, Reasoning, Streamed, Tool
 from eidolon.photo_prompt import CROSSINGS, Crossing
 from eidolon.rerank import Reranker
@@ -174,7 +174,7 @@ which the user did not take, nor of achievements, nor of visits."""
 JUDGEMENT_COLUMNS = ("affinity_level", "out_of_line", "manipulation", "cooled")
 """What a turn's record keeps of how the judge model judged it, as its columns are named."""
 
-KEPT = timedelta(days=90)
+KEPT = RECORDS_KEPT
 """How long activity records are kept."""
 
 _SCHEMA = """

@@ -1,12 +1,14 @@
 """Post-turn jobs keep outcomes, never credentials, and run only in the API process."""
 
 import asyncio
+import sqlite3
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from eidolon import database
+from eidolon import database, housekeeping
 from eidolon.characters import Character
 from eidolon.config import Settings
 from eidolon.data_access import Database
@@ -237,6 +239,48 @@ async def test_jobs_are_deleted_with_their_conversation_and_user(job_world: Worl
     [job] = await world.store.jobs_for_turn(reply.id)
     await world.store.delete_user(world.producer)
     assert await world.store.get_job(job.id) is None
+
+
+async def test_housekeeping_deletes_only_expired_finished_jobs_in_batches(
+    job_world: World, monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(housekeeping, "BATCH", 2)
+    db, store = job_world.db, job_world.store
+    conversation = await job_world.conversation("friend")
+    now = datetime(2026, 11, 24, tzinfo=UTC)
+    expired = now - timedelta(days=90, seconds=1)
+    cutoff = now - timedelta(days=90)
+    for status, updated_at in [
+        ("succeeded", expired), ("failed", expired), ("cancelled", expired),
+        ("pending", expired), ("running", expired), ("cancelled", cutoff),
+        ("failed", now),
+    ]:
+        reply = await job_world.reply(conversation, status)
+        await db.write(lambda conn: conn.execute(
+            "INSERT INTO jobs (id, turn_id, type, status, created_at, updated_at)"
+            " VALUES (?, ?, 'memory', ?, ?, ?)",
+            (str(reply.id), reply.id, status, expired.isoformat(), updated_at.isoformat()),
+        ))
+
+    def jobs(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+        return conn.execute("SELECT status, updated_at FROM jobs ORDER BY status").fetchall()
+
+    write = db.write
+    remaining = []
+
+    async def observe_batch(body, *args):
+        result = await write(body, *args)
+        remaining.append(len(await db.read(jobs)))
+        return result
+
+    monkeypatch.setattr(db, "write", observe_batch)
+    await store.forget_old_jobs(now)
+
+    assert remaining == [5, 4]
+    assert await db.read(jobs) == [
+        ("cancelled", cutoff.isoformat()), ("failed", now.isoformat()),
+        ("pending", expired.isoformat()), ("running", expired.isoformat()),
+    ]
 
 
 async def test_deletion_before_submission_does_not_run_or_recreate_the_job(job_world: World):

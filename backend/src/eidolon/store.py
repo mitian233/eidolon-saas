@@ -24,6 +24,7 @@ from eidolon.database import (
     tables,
 )
 from eidolon.delivery_cues import without_cues
+from eidolon.housekeeping import RECORDS_KEPT, in_batches
 from eidolon.producer import Birthday, City, ProducerProfile
 from eidolon.reply_format import Segment
 
@@ -131,7 +132,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at TEXT NOT NULL,
     UNIQUE (turn_id, type)
 );
-CREATE INDEX IF NOT EXISTS jobs_by_status ON jobs(status, created_at);
+CREATE INDEX IF NOT EXISTS jobs_finished_by_updated_at ON jobs(updated_at, id)
+    WHERE status IN ('succeeded', 'failed', 'cancelled');
+DROP INDEX IF EXISTS jobs_by_status;
 CREATE TABLE IF NOT EXISTS conversation_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL REFERENCES conversations(id),
@@ -774,6 +777,11 @@ class Store:
         error: str | None = None,
     ) -> None:
         await self._db.write(_finish_job, job_id, status, error)
+
+    async def forget_old_jobs(self, now: datetime) -> None:
+        """Delete finished jobs last updated more than `RECORDS_KEPT` ago, in batches."""
+        before = (now.astimezone(UTC) - RECORDS_KEPT).isoformat()
+        await in_batches(self._db, _forget_jobs_before, before)
 
     async def delete_conversation(self, conversation: Conversation) -> None:
         """Delete a past conversation (GLOSSARY.md「历史对话」) and its record, for good, all
@@ -2154,3 +2162,13 @@ def _finish_job(
         " WHERE id = ? AND status IN ('pending', 'running')",
         (status, error, _now(), job_id),
     )
+
+
+def _forget_jobs_before(db: sqlite3.Connection, before: str, limit: int) -> int:
+    return db.execute("""
+        DELETE FROM jobs WHERE id IN (
+            SELECT id FROM jobs
+            WHERE status IN ('succeeded', 'failed', 'cancelled') AND updated_at < ?
+            ORDER BY updated_at, id LIMIT ?
+        )
+    """, (before, limit)).rowcount

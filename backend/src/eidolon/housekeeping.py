@@ -1,7 +1,7 @@
 """Housekeeping: what the backend deletes as it ages, everyone's at once, every `TICK` from
-when it starts: uses of the limits a day old (`usage.KEPT`), activity records and service
-calls 90 days old (`activity.KEPT`), with their rollups, and moments 30 days old
-(`moments.KEPT`), with what goes with them, and the moments planned and missed. Not as
+when it starts: uses of the limits a day old (`usage.KEPT`), activity records, service
+calls and finished jobs 90 days old (`RECORDS_KEPT`), and moments 30 days old
+(`moments.KEPT`), with their associated rows. Not as
 each turn begins, which would keep it waiting on deleting.
 
 Each is deleted in batches (`in_batches`), each a write task of its own (ADR-0028), so that
@@ -22,6 +22,9 @@ log = logging.getLogger(__name__)
 A = TypeVarTuple("A")
 
 TICK = timedelta(minutes=10)
+
+RECORDS_KEPT = timedelta(days=90)
+"""How long activity records, service calls and finished jobs are kept."""
 
 BATCH = 1000
 """How many rows a batch deletes at most: measured to take some 40 ms at most, a day's

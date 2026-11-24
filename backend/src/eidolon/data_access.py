@@ -35,7 +35,7 @@ from typing import Any, TypeVar, TypeVarTuple, Unpack, cast
 
 import psycopg
 
-from eidolon.database import connect, postgres_url
+from eidolon.database import _PostgresConnection, connect, postgres_url
 
 log = logging.getLogger(__name__)
 
@@ -254,9 +254,13 @@ class Database:
                 if task.in_transaction:
                     # Held from the first statement, so that what the body reads before it
                     # writes holds still for every other connection too.
-                    self._writer.execute("BEGIN IMMEDIATE")
-                    with self._writer:
-                        result = task.body(self._writer, *task.args)
+                    writer = self._writer
+                    if isinstance(writer, _PostgresConnection):
+                        writer.retry_disconnected(writer.execute, "BEGIN IMMEDIATE")
+                    else:
+                        writer.execute("BEGIN IMMEDIATE")
+                    with writer:
+                        result = task.body(writer, *task.args)
                 else:
                     result = task.body(self._writer, *task.args)
             except BaseException as e:
@@ -318,11 +322,9 @@ class Database:
             _off_the_loop(body)
             conn = self._connection(body)
             try:
-                conn.execute("BEGIN")
-                try:
-                    return body(conn, *args)
-                finally:
-                    conn.rollback()
+                if isinstance(conn, _PostgresConnection):
+                    return conn.retry_disconnected(_read_transaction, conn, body, args)
+                return _read_transaction(conn, body, args)
             finally:
                 self._idle.put(conn)
         finally:
@@ -354,6 +356,16 @@ class Database:
                 _name(body), waited * 1000, waiting,
             )
         return conn
+
+
+def _read_transaction(
+    conn: sqlite3.Connection, body: Callable[..., T], args: tuple[Any, ...],
+) -> T:
+    conn.execute("BEGIN")
+    try:
+        return body(conn, *args)
+    finally:
+        conn.rollback()
 
 
 def _truncated_log(conn: sqlite3.Connection) -> bool:

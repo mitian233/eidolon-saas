@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 import threading
 
+import psycopg
 import pytest
 
 from eidolon import database
@@ -288,6 +289,87 @@ async def test_a_timed_out_write_lock_does_not_break_later_writes(postgres_url: 
                 locker.execute("SELECT pg_advisory_unlock(1936287820)")
         assert (await store.create_user("After timeout")).name == "After timeout"
         assert [user.name for user in await store.list_users()] == ["After timeout"]
+    finally:
+        await db.close()
+
+
+def _terminate(postgres_url: str, pid: int) -> None:
+    with psycopg.connect(postgres_url, autocommit=True) as admin:
+        result = admin.execute("SELECT pg_terminate_backend(%s, 5000)", (pid,)).fetchone()
+        assert result == (True,)
+
+
+async def test_postgres_reopens_idle_connections_with_their_session_setup(postgres_url: str):
+    db = Database(postgres_url, readers=1)
+
+    def pid(conn: sqlite3.Connection) -> int:
+        return conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+
+    try:
+        store = Store(db)
+        db.function("spread_bucket", 1, lambda value: 16, deterministic=True)
+        writer, reader = await db.write(pid), await db.read(pid)
+        await asyncio.to_thread(_terminate, postgres_url, writer)
+        await asyncio.to_thread(_terminate, postgres_url, reader)
+        # PostgreSQL keeps functions in the database. Remove this one to exercise replay.
+        with psycopg.connect(postgres_url, autocommit=True) as admin:
+            admin.execute("DROP FUNCTION spread_bucket(double precision)")
+
+        user = await store.create_user("After disconnect")
+        assert await db.write(pid) != writer
+        assert await db.read(pid) != reader
+        assert await store.get_user(user.id) == user
+        assert await db.read(lambda conn: conn.execute(
+            "SELECT spread_bucket(2.0), current_setting('default_transaction_read_only')"
+        ).fetchone()) == (16, "on")
+    finally:
+        await db.close()
+
+
+async def test_postgres_retries_a_read_disconnected_inside_the_transaction(postgres_url: str):
+    db = Database(postgres_url, readers=1)
+    attempts = 0
+
+    def read(conn: sqlite3.Connection) -> str:
+        nonlocal attempts
+        attempts += 1
+        pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+        if attempts == 1:
+            _terminate(postgres_url, pid)
+        return conn.execute("SELECT name FROM users").fetchone()[0]
+
+    try:
+        store = Store(db)
+        await store.create_user("Before disconnect")
+        assert await db.read(read) == "Before disconnect"
+        assert attempts == 2
+    finally:
+        await db.close()
+
+
+async def test_postgres_does_not_replay_a_write_disconnected_before_commit(postgres_url: str):
+    db = Database(postgres_url)
+    attempts = 0
+
+    def write(conn: sqlite3.Connection) -> None:
+        nonlocal attempts
+        attempts += 1
+        conn.execute("UPDATE users SET name = 'Interrupted'")
+        if attempts == 1:
+            pid = conn.execute("SELECT pg_backend_pid()").fetchone()[0]
+            _terminate(postgres_url, pid)
+
+    try:
+        store = Store(db)
+        original = await store.create_user("Before disconnect")
+        with pytest.raises(sqlite3.OperationalError):
+            await db.write(write)
+        await store.create_user("After disconnect")
+        assert attempts == 1
+        assert await store.get_user(original.id) == original
+        assert {user.name for user in await store.list_users()} == {
+            "Before disconnect", "After disconnect",
+        }
     finally:
         await db.close()
 

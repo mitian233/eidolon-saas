@@ -18,12 +18,15 @@ import re
 import secrets
 import sqlite3
 from pathlib import Path
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, LiteralString, cast
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import Any, LiteralString, ParamSpec, TypeVar, cast
 
 import psycopg
 from psycopg.pq import TransactionStatus
 from sqlglot import exp, parse_one
+
+P = ParamSpec("P")
+T = TypeVar("T")
 
 USER_DATA = [
     ("active_calls", "user_id = ?"),
@@ -320,6 +323,17 @@ def _statements(script: str) -> Iterable[str]:
         yield pending.strip()
 
 
+_POSTGRES_FUNCTIONS: dict[tuple[str, int], LiteralString] = {
+    ("spread_bucket", 1): """
+        CREATE OR REPLACE FUNCTION spread_bucket(double precision) RETURNS integer
+        LANGUAGE SQL IMMUTABLE STRICT AS $$
+            SELECT CASE WHEN $1 > 0 THEN floor(ln($1) / ln(2.0) * 16)::integer
+                        ELSE -2147483648 END
+        $$
+    """,
+}
+
+
 class _PostgresConnection:
     """Postgres behind the existing thread-owned DB-API callback contract.
 
@@ -329,14 +343,59 @@ class _PostgresConnection:
     """
 
     def __init__(self, url: str, timeout: float = 30) -> None:
-        try:
-            self._conn = psycopg.connect(url, autocommit=True, connect_timeout=max(1, int(timeout)))
-            self._conn.execute("SELECT set_config('statement_timeout', %s, false)", (str(int(timeout * 1000)),))
-        except psycopg.Error as error:
-            raise sqlite3.OperationalError(str(error)) from error
+        self._url = url
+        self._timeout = timeout
+        self._conn = self._connect()
         self._read_only = False
+        self._functions: set[LiteralString] = set()
         self._columns: dict[str, list[tuple]] = {}
         self._translated: dict[str, tuple[str, str | None]] = {}
+
+    def _connect(self) -> psycopg.Connection:
+        try:
+            conn = psycopg.connect(
+                self._url, autocommit=True, connect_timeout=max(1, int(self._timeout)),
+            )
+            try:
+                conn.execute(
+                    "SELECT set_config('statement_timeout', %s, false)",
+                    (str(int(self._timeout * 1000)),),
+                )
+            except BaseException:
+                conn.close()
+                raise
+        except psycopg.Error as error:
+            raise sqlite3.OperationalError(str(error)) from error
+        return conn
+
+    def _reconnect(self) -> bool:
+        if not self._conn.closed:
+            return False
+        self._conn = self._connect()
+        self._columns.clear()
+        self._translated.clear()
+        try:
+            if self._read_only:
+                self.execute("PRAGMA query_only = ON")
+            if self._functions:
+                # Use the same write lock as the initial function registration.
+                with self:
+                    for statement in self._functions:
+                        self._install_function(statement)
+        except BaseException:
+            self.close()
+            raise
+        return True
+
+    def retry_disconnected(self, operation: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+        """Retry a read or the start of a write once if its connection was lost."""
+        self._reconnect()
+        try:
+            return operation(*args, **kwargs)
+        except sqlite3.OperationalError:
+            if not self._reconnect():
+                raise
+        return operation(*args, **kwargs)
 
     def cursor(self):
         return _PostgresCursor(self)
@@ -357,33 +416,54 @@ class _PostgresConnection:
 
     def __exit__(self, kind, value, traceback):
         if kind is None:
-            self._conn.commit()
+            self.commit()
         else:
-            self._conn.rollback()
+            self._abort()
 
     def rollback(self):
-        self._conn.rollback()
+        try:
+            self._conn.rollback()
+        except psycopg.Error as error:
+            raise self._operational_error(error) from error
 
     def commit(self):
-        self._conn.commit()
+        try:
+            self._conn.commit()
+        except psycopg.IntegrityError as error:
+            raise sqlite3.IntegrityError(str(error)) from error
+        except psycopg.Error as error:
+            raise self._operational_error(error) from error
+
+    def _abort(self) -> None:
+        if not self._conn.closed:
+            try:
+                self.rollback()
+            except sqlite3.OperationalError:
+                self.close()  # Preserve the original error, discard the unusable session.
+
+    def _operational_error(self, error: psycopg.Error) -> sqlite3.OperationalError:
+        state = error.sqlstate or ""
+        if state.startswith("08") or state in ("57P01", "57P02"):
+            self.close()  # Connection exception or server shutdown.
+        return sqlite3.OperationalError(str(error))
 
     def close(self):
         self._conn.close()
 
     def create_function(self, name, arity, implementation, *, deterministic=False):
-        # These are the only Python SQL functions in the running SaaS backend.
-        # Postgres runs the equivalent expression itself, on every connection.
-        if name != "spread_bucket" or arity != 1:
+        # Postgres installs SQL equivalents in the database, visible to every reader.
+        statement = _POSTGRES_FUNCTIONS.get((name, arity))
+        if statement is None:
             raise NotImplementedError(f"Postgres SQL function {name}/{arity}")
-        if self._read_only:
-            return  # The writer installed it in the database, visible to all readers.
-        self._conn.execute("""
-            CREATE OR REPLACE FUNCTION spread_bucket(double precision) RETURNS integer
-            LANGUAGE SQL IMMUTABLE STRICT AS $$
-                SELECT CASE WHEN $1 > 0 THEN floor(ln($1) / ln(2.0) * 16)::integer
-                            ELSE -2147483648 END
-            $$
-        """)
+        if not self._read_only:
+            self._install_function(statement)
+            self._functions.add(statement)
+
+    def _install_function(self, statement: LiteralString) -> None:
+        try:
+            self._conn.execute(statement)
+        except psycopg.Error as error:
+            raise self._operational_error(error) from error
 
     def _metadata(self, table: str) -> list[tuple]:
         if table not in self._columns:
@@ -408,14 +488,9 @@ class _PostgresConnection:
         upper = raw.upper()
         try:
             if upper == "BEGIN IMMEDIATE":
-                try:
-                    self._conn.execute("BEGIN")
-                    # Preserve callbacks' read-then-write atomicity across API processes.
-                    self._conn.execute("SELECT pg_advisory_xact_lock(1936287820)")
-                except psycopg.Error:
-                    # The access layer has not entered its transaction context yet.
-                    self._conn.rollback()
-                    raise
+                self._conn.execute("BEGIN")
+                # Preserve callbacks' read-then-write atomicity across API processes.
+                self._conn.execute("SELECT pg_advisory_xact_lock(1936287820)")
                 return [], [], -1, None
             if upper == "BEGIN":
                 self._conn.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -459,7 +534,11 @@ class _PostgresConnection:
         except psycopg.IntegrityError as error:
             raise sqlite3.IntegrityError(str(error)) from error
         except psycopg.Error as error:
-            raise sqlite3.OperationalError(str(error)) from error
+            failure = self._operational_error(error)
+            if upper == "BEGIN IMMEDIATE":
+                # The access layer has not entered its transaction context yet.
+                self._abort()
+            raise failure from error
 
     def _translate(self, statement: str) -> tuple[str, str | None]:
         if statement in self._translated:

@@ -96,6 +96,7 @@ class Backend:
             asyncio.create_task(self.service_status.keep_probing()),
             asyncio.create_task(keep_tidy(
                 self.usage.forget_old, self.activity.forget_old, self.reports.forget_old_limits,
+                lambda: self.store.forget_old_jobs(self.clock()),
             )),
             asyncio.create_task(watch_the_loop(lambda: self.calls.in_progress)),
         ]
