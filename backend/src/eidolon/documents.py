@@ -12,6 +12,14 @@ from eidolon.document_text import normalize_text, passages, text_hash
 from eidolon.embedding import Document, Embedder, nearest, to_blob
 from eidolon.retrieval import DocumentPassage
 
+MAX_DOCUMENTS_PER_CHARACTER = 50
+MAX_PASSAGES_PER_CHARACTER = 2000
+
+
+class DocumentLimitReached(Exception):
+    """Adding the document would exceed the character's document or passage limit."""
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
@@ -26,6 +34,7 @@ CREATE TABLE IF NOT EXISTS document_passages (
     document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     text TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS document_passages_by_document ON document_passages(document_id);
 CREATE TABLE IF NOT EXISTS document_vectors (
     passage_id TEXT NOT NULL REFERENCES document_passages(id) ON DELETE CASCADE,
     model TEXT NOT NULL,
@@ -146,11 +155,24 @@ def _import(conn: sqlite3.Connection, owner: str, character: str, origin: str, t
                        (character, digest)).fetchone()
     if row:
         return row[0]
+    document_count = conn.execute(
+        "SELECT COUNT(*) FROM documents WHERE character_id = ?", (character,),
+    ).fetchone()[0]
+    if document_count >= MAX_DOCUMENTS_PER_CHARACTER:
+        raise DocumentLimitReached(f"每个角色最多保存 {MAX_DOCUMENTS_PER_CHARACTER} 份文档，请先删除不需要的文档")
+    parts = passages(text)
+    passage_count = conn.execute(
+        "SELECT COUNT(*) FROM document_passages p JOIN documents d ON d.id = p.document_id "
+        "WHERE d.character_id = ?", (character,),
+    ).fetchone()[0]
+    if passage_count + len(parts) > MAX_PASSAGES_PER_CHARACTER:
+        raise DocumentLimitReached(f"每个角色最多保存 {MAX_PASSAGES_PER_CHARACTER} 个段落，请缩短文本或删除不需要的文档")
+
     document_id = uuid.uuid4().hex
     conn.execute("INSERT INTO documents (id, character_id, origin, text_hash, created_at) VALUES (?, ?, ?, ?, ?)",
                  (document_id, character, origin, digest, datetime.now(UTC).isoformat()))
     conn.executemany("INSERT INTO document_passages VALUES (?, ?, ?)",
-                     [(uuid.uuid4().hex, document_id, part) for part in passages(text)])
+                     [(uuid.uuid4().hex, document_id, part) for part in parts])
     return document_id
 
 

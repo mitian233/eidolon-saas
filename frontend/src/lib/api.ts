@@ -283,12 +283,15 @@ export class ApiError extends Error {
   /** Refused for the limit: the user has no turns or calls left this hour, or may take them
    * only on their own keys (GLOSSARY.md「限额」「免限额密钥」). */
   get overLimit(): boolean {
-    return this.status === OVER_LIMIT;
+    return this.status === OVER_LIMIT && this.code !== RATE_LIMITED;
   }
 }
 
 /** The status of a turn or call refused for the limit. */
 const OVER_LIMIT = 429;
+
+/** The backend already gives a retry delay for these requests. */
+const RATE_LIMITED = "rate_limited";
 
 /** The status of a turn or call refused while she is in a cooldown with the user, and of what
  * is done with gifts while they are not open, told apart by their bodies. */
@@ -309,14 +312,15 @@ export function redirectFor(status: number): string | null {
 export async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
+    const code = typeof body?.code === "string" ? body.code : null;
+    const exceededUsageLimit = res.status === OVER_LIMIT && code !== RATE_LIMITED;
     let message = describe(body?.detail) ?? `请求失败（${res.status}）`;
-    if (res.status === OVER_LIMIT) message = overLimit(message, body?.retry_at);
+    if (exceededUsageLimit) message = overLimit(message, body?.retry_at);
     // Refused while she is in a cooldown, told apart from the limit's 429.
     const cooldownUntil = res.status === CONFLICT && typeof body?.cooldown_until === "string" ? body.cooldown_until : null;
     const giftsClosed = res.status === CONFLICT && body?.gifts_closed === true;
     const scheduleClosed = res.status === CONFLICT && body?.schedule_closed === true;
-    const code = typeof body?.code === "string" ? body.code : null;
-    const retryAt = res.status === OVER_LIMIT && typeof body?.retry_at === "string" ? body.retry_at : null;
+    const retryAt = exceededUsageLimit && typeof body?.retry_at === "string" ? body.retry_at : null;
     throw new ApiError(message, res.status, { cooldownUntil, giftsClosed, scheduleClosed, code, retryAt });
   }
   return res.json();

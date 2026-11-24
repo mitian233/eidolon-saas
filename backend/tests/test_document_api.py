@@ -1,8 +1,14 @@
 """Character document HTTP API with the user's vector service."""
 
+import json
 from dataclasses import replace
 
-from tests.fakes import FakeLLM
+import httpx
+
+from eidolon import documents
+from eidolon.own_keys import OwnRetrievalService
+from tests.conftest import compete_for_write, sign_in_as
+from tests.fakes import FakeClock, FakeLLM
 
 
 def body(model="first"):
@@ -34,13 +40,10 @@ async def test_document_api(make_client, own_vectors, settings, database_target)
     assert (await client.delete(f"{url}/{document_id}")).status_code == 404
     assert (await client.get(url)).json() == []
 
-async def test_failed_embedding_leaves_text_for_retry(make_client):
-    import httpx
 
-    from eidolon.own_keys import OwnRetrievalService
-
-    import json
-
+async def test_failed_embedding_leaves_text_for_retry_at_capacity(make_client, settings, database_target, monkeypatch):
+    monkeypatch.setattr(documents, "MAX_DOCUMENTS_PER_CHARACTER", 1, raising=False)
+    monkeypatch.setattr(documents, "MAX_PASSAGES_PER_CHARACTER", 1, raising=False)
     available = False
 
     def respond(request):
@@ -53,12 +56,16 @@ async def test_failed_embedding_leaves_text_for_retry(make_client):
 
     failing = OwnRetrievalService(public_only=False, transport=httpx.MockTransport(respond))
     try:
-        client = make_client(FakeLLM(), own_retrieval_service=failing)
+        client = make_client(FakeLLM(), settings=replace(settings, database_path=database_target),
+                             own_retrieval_service=failing)
         url = "/api/characters/mano/documents"
         response = await client.post(url, json=body())
         assert response.status_code == 502
         listed = (await client.get(url)).json()
         assert listed[0]["embedded_passage_count"] == 0
+        refused = await client.post(url, json=body() | {"text": "另一份资料"})
+        assert refused.status_code == 409
+        assert (await client.get(url)).json() == listed
         # Retry against the same database with a working service.
         available = True
         response = await client.post(url, json=body())
@@ -89,8 +96,6 @@ async def test_document_input_limits(make_client):
 
 
 async def test_document_request_byte_limit_and_streaming(make_client):
-    import json
-
     from eidolon.app import MAX_DOCUMENT_REQUEST_BYTES
 
     client = make_client(FakeLLM())
@@ -106,3 +111,75 @@ async def test_document_request_byte_limit_and_streaming(make_client):
     legal = json.dumps({"origin": "笔记", "text": "中" * 1000000}).encode()
     response = await client.post(url, content=legal, headers={"content-type": "application/json"})
     assert response.status_code == 400  # Parsed successfully; embedding key is absent.
+
+
+async def test_document_count_limit_across_connections(make_client, own_vectors, settings, database_target, monkeypatch):
+    settings = replace(settings, database_path=database_target)
+    first = make_client(FakeLLM(), settings=settings, own_retrieval_service=own_vectors, clock=FakeClock())
+    second = make_client(FakeLLM(), settings=settings, own_retrieval_service=own_vectors, clock=FakeClock())
+    url = "/api/characters/mano/documents"
+    for number in range(49):
+        response = await first.post(url, json=body() | {"text": f"第 {number} 份资料"})
+        assert response.status_code == 201, response.text
+
+    created, refused = await compete_for_write(
+        monkeypatch, documents._import,
+        first.post(url, json=body() | {"text": "甲的资料"}),
+        second.post(url, json=body() | {"text": "乙的资料"}),
+    )
+    assert (created.status_code, refused.status_code) == (201, 409)
+    assert "50" in refused.json()["detail"] and "文档" in refused.json()["detail"]
+    listed = (await second.get(url)).json()
+    assert len(listed) == sum(item["passage_count"] for item in listed) == 50
+
+
+async def test_passage_limit_rejects_whole_documents_across_connections(make_client, own_vectors, settings, database_target, monkeypatch):
+    monkeypatch.setattr(documents, "MAX_PASSAGES_PER_CHARACTER", 3, raising=False)
+    settings = replace(settings, database_path=database_target)
+    first = make_client(FakeLLM(), settings=settings, own_retrieval_service=own_vectors)
+    second = make_client(FakeLLM(), settings=settings, own_retrieval_service=own_vectors)
+    url = "/api/characters/mano/documents"
+    assert (await first.post(url, json=body())).status_code == 201
+
+    created, refused = await compete_for_write(
+        monkeypatch, documents._import,
+        first.post(url, json=body() | {"text": "甲" * 1201}),
+        second.post(url, json=body() | {"text": "乙" * 1201}),
+    )
+    assert (created.status_code, refused.status_code) == (201, 409)
+    assert "3" in refused.json()["detail"] and "段落" in refused.json()["detail"]
+    listed = (await second.get(url)).json()
+    assert sorted(item["passage_count"] for item in listed) == [1, 2]
+    assert (await first.post(url, json=body())).json() == {
+        "id": next(item["id"] for item in listed if item["passage_count"] == 1),
+    }
+
+
+async def test_character_creation_and_document_import_are_throttled_per_user(make_client, own_vectors, settings, database_target):
+    settings = replace(settings, database_path=database_target)
+    clock = FakeClock()
+    client = make_client(FakeLLM(), settings=settings, own_retrieval_service=own_vectors, clock=clock)
+    other = make_client(FakeLLM(), user="other", settings=settings, clock=clock)
+    characters = "/api/characters"
+    character = {"name": "向导", "sheet": "你是山间向导。"}
+    for _ in range(20):
+        assert (await client.post(characters, json=character)).status_code == 201
+    refused = await client.post(characters, json=character)
+    assert refused.status_code == 429 and refused.headers["Retry-After"] == "60"
+    assert refused.json()["code"] == "rate_limited"
+
+    for _ in range(60):
+        assert (await client.post(f"{characters}/mano/documents", json=body())).status_code == 201
+    refused = await client.post(f"{characters}/kogane/documents", json=body())
+    assert refused.status_code == 429 and refused.headers["Retry-After"] == "60"
+    assert refused.json()["code"] == "rate_limited"
+
+    original_session = httpx.Cookies(client.cookies)
+    sign_in_as(client, other)
+    assert (await client.post(characters, json=character)).status_code == 201
+    assert (await client.post(f"{characters}/mano-other/documents", json=body())).status_code == 201
+
+    client.cookies.update(original_session)
+    clock.advance(minutes=1)
+    assert (await client.post(characters, json=character)).status_code == 201
+    assert (await client.post(f"{characters}/kogane/documents", json=body())).status_code == 201

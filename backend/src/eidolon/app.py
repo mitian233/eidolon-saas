@@ -27,8 +27,9 @@ from eidolon.call import (
     StillPlacing,
 )
 from eidolon.call_nodes import AlreadyPlacing, CapacityReached, NodeUnavailable
-from eidolon.character_repository import shown_character
+from eidolon.character_repository import CharacterLimitReached, shown_character
 from eidolon.database import readable
+from eidolon.documents import DocumentLimitReached
 from eidolon.engine import ENDED, TurnJudged, shown
 from eidolon.embedding import EmbeddingError
 from eidolon.reply_format import SegmentComplete, SegmentDelta, SpeechDelta
@@ -65,7 +66,7 @@ from eidolon.sponsor_api import add_sponsor_routes
 from eidolon.service_status import add_service_status_routes
 from eidolon.stats import add_stats_routes
 from eidolon.store import Conversation, ConversationEvent, IsCurrent, ReachOut, Recorded
-from eidolon.throttle import Throttled
+from eidolon.throttle import Throttle, Throttled
 from eidolon.turn_outcome import TurnOutcome
 from eidolon.usage import OverLimit
 
@@ -209,6 +210,8 @@ def create_app(backend: Backend) -> FastAPI:
     store, characters, engine = backend.store, backend.characters, backend.engine
     memory, calls, admissions = backend.memories, backend.calls, backend.admissions
     titles = backend.titles
+    character_creation = Throttle(backend.clock, per_minute=20, per_hour=100)
+    document_import = Throttle(backend.clock, per_minute=60, per_hour=240)
 
     def last_shown(last: Recorded | None) -> dict | None:
         if last is None:
@@ -288,13 +291,18 @@ def create_app(backend: Backend) -> FastAPI:
 
     @app.exception_handler(Throttled)
     async def throttled(_: Request, e: Throttled) -> JSONResponse:
-        """Asked services on the internet too often: when to ask again, in words too."""
+        """Asked too often: when to ask again, in words too."""
         wait = e.retry_after
         later = f"{wait} 秒" if wait < 120 else f"{math.ceil(wait / 60)} 分钟"
         return JSONResponse(
-            {"detail": f"{e}，请 {later}后再试"}, status_code=429,
+            {"detail": f"{e}，请 {later}后再试", "code": "rate_limited"}, status_code=429,
             headers={"Retry-After": str(wait)},
         )
+
+    @app.exception_handler(CharacterLimitReached)
+    @app.exception_handler(DocumentLimitReached)
+    async def resource_limit(_: Request, e: CharacterLimitReached | DocumentLimitReached) -> JSONResponse:
+        return JSONResponse({"detail": str(e)}, status_code=409)
 
     @app.exception_handler(UnknownService)
     async def unknown_service(_: Request, e: UnknownService) -> JSONResponse:
@@ -452,7 +460,8 @@ def create_app(backend: Backend) -> FastAPI:
 
     @app.post("/api/characters", status_code=201)
     async def create_character(body: CharacterInput, user_id: UserId) -> dict:
-        character = await backend.character_repository.create(user_id, **body.settings())
+        with character_creation.asking(user_id):
+            character = await backend.character_repository.create(user_id, **body.settings())
         return shown_character(character)
 
     @app.get("/api/characters/{character_id}")
@@ -466,20 +475,21 @@ def create_app(backend: Backend) -> FastAPI:
 
     @app.post("/api/characters/{character_id}/documents", status_code=201, response_model=None)
     async def import_document(character_id: str, body: DocumentInput, user_id: UserId) -> dict | JSONResponse:
-        await owned_character(character_id, user_id)
-        brought = body.own_keys.brought() if body.own_keys else BroughtKeys()
-        embedder = backend.own_keys.document_embedder(brought)
-        if embedder is None:
-            return JSONResponse({"detail": "请提供自带的向量化密钥", "code": "embedding_key_missing"}, status_code=400)
-        try:
-            document_id = await backend.documents.import_text(
-                user_id, character_id, body.origin, body.text, embedder,
-                brought.embedding.dimensions if brought.embedding else None,
-            )
-        except EmbeddingError:
-            raise HTTPException(502, "向量化失败，文本已保存，请重新导入重试") from None
-        except ValueError as e:
-            raise HTTPException(400, str(e)) from None
+        with document_import.asking(user_id):
+            await owned_character(character_id, user_id)
+            brought = body.own_keys.brought() if body.own_keys else BroughtKeys()
+            embedder = backend.own_keys.document_embedder(brought)
+            if embedder is None:
+                return JSONResponse({"detail": "请提供自带的向量化密钥", "code": "embedding_key_missing"}, status_code=400)
+            try:
+                document_id = await backend.documents.import_text(
+                    user_id, character_id, body.origin, body.text, embedder,
+                    brought.embedding.dimensions if brought.embedding else None,
+                )
+            except EmbeddingError:
+                raise HTTPException(502, "向量化失败，文本已保存，请重新导入重试") from None
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from None
         return {"id": document_id}
 
     @app.delete("/api/characters/{character_id}/documents/{document_id}", status_code=204)

@@ -369,14 +369,14 @@ class OwnRetrievalService:
             httpx.AsyncClient(transport=transport, timeout=EMBEDDING_TIMEOUT, trust_env=False)
             if transport is not None else _own_client(
                 "own_embedding", EMBEDDING_TIMEOUT, public_only=public_only,
-                routes=routes, known_provider=known_provider,
+                routes=routes, known_provider=known_provider, https_only=public_only,
             )
         )
         self._rerank = (
             httpx.AsyncClient(transport=transport, timeout=RERANK_TIMEOUT, trust_env=False)
             if transport is not None else _own_client(
                 "own_rerank", RERANK_TIMEOUT, public_only=public_only,
-                routes=routes, known_provider=known_provider,
+                routes=routes, known_provider=known_provider, https_only=public_only,
             )
         )
 

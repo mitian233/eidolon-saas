@@ -21,3 +21,15 @@ PostgreSQL 重启、网络断开或服务端关闭空闲连接后，后端仍持
 - 用 pgserver 启动真实 PostgreSQL，通过 `pg_terminate_backend` 断开空闲连接和进行中的事务。测试读写恢复、写回调只执行一次、SQL 函数和只读设置恢复，以及 `/api/health` 从 503 恢复到 200。
 - 在 SQLite 和 PostgreSQL 上测试 jobs 清理。每批提交后读取剩余行，确保已过期的终态任务分批删除，未过期和未完成的任务保留。
 - 串行运行相关测试、Ruff、Pyright 和 `sh scripts/affected-tests.sh 65fd21b1`。按仓库约定做两路代码审查，清理测试启动的 PostgreSQL 和临时目录。
+
+## 02 角色和资料上限、自带向量服务 HTTPS
+
+- 每个用户最多创建 50 个角色。每个角色最多导入 50 份文档、保存 2000 个段落。计数和插入在同一个数据库写事务中，超出上限时返回 409 和中文说明，整份文档均不写入。
+- 同角色中已导入的相同文本直接返回原来的文档 ID，即使已满额也可重试尚未生成的向量。
+- 创建角色和导入资料分别按用户限制请求频率。超频返回 429、`Retry-After` 和中文等待提示。角色表单和资料区展示后端提供的说明。
+- 设置 `EIDOLON_DOMAIN` 时，用户自带的向量化和重排服务只接受 HTTPS。未设置时本地开发仍可使用 HTTP。
+
+### Testing Decisions
+
+- 在 SQLite 和真实 PostgreSQL 上分别走创建、导入 API，测试满额、并发写入、失败后无残留、重复导入重试向量，以及 429 和等待时间。并发写入使用同一数据库上的独立连接。
+- 测试公网拒绝 HTTP、允许 HTTPS，以及本地允许 HTTP。串行运行相关测试、Ruff、Pyright 和 `sh scripts/affected-tests.sh 2bb7cbd3`，按仓库规范做两路代码审查。

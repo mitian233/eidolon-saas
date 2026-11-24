@@ -22,6 +22,13 @@ from eidolon.data_access import Database
 from eidolon.database import by_name, delete_conversation_data, tables
 from eidolon.producer import Birthday, is_day_of_the_year
 
+MAX_CHARACTERS_PER_USER = 50
+
+
+class CharacterLimitReached(Exception):
+    """The owner has no room for another character."""
+
+
 _SCHEMA = """
 -- A character a user created: `owner_id` whose she is (a user; account deletion removes her
 -- rows through `database.USER_DATA`); `sheet` her persona text; `greeting` plain text;
@@ -242,6 +249,10 @@ def _insert(
     cols: dict[str, object],
     created_at: str,
 ) -> None:
+    count = conn.execute("SELECT COUNT(*) FROM characters WHERE owner_id = ?", (owner_id,)).fetchone()[0]
+    if count >= MAX_CHARACTERS_PER_USER:
+        raise CharacterLimitReached(f"每个账号最多创建 {MAX_CHARACTERS_PER_USER} 个角色，请先删除不需要的角色")
+
     values = {"id": character_id, "owner_id": owner_id, **cols, "created_at": created_at}
     names = ", ".join(values)
     marks = ", ".join("?" for _ in values)

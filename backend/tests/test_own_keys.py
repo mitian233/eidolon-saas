@@ -8,11 +8,13 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
 from eidolon.activity import OWN, ActivityLog
 from eidolon.data_access import Database
-from eidolon.config import EXEMPTING_SERVICES, ChatModelSettings, LLMSettings, SttKey
+from eidolon.config import EXEMPTING_SERVICES, ChatModelSettings, EmbeddingSettings, LLMSettings, RerankSettings, SttKey
+from eidolon.embedding import EmbeddingError
 from eidolon.llm import ChatLLM, ChatMessage
 from eidolon.own_keys import (
     BroughtKeys,
@@ -21,9 +23,11 @@ from eidolon.own_keys import (
     DeployerLease,
     OwnKeyRejected,
     OwnKeys,
+    OwnRetrievalService,
     SERVICES,
     Service,
 )
+from eidolon.rerank import RerankError
 from tests.fakes import (
     DEPLOYER_FISH_KEY,
     DEPLOYER_SONIOX_KEY,
@@ -251,3 +255,33 @@ async def test_a_turn_that_brings_an_llm_runs_on_it_without_deployer_models(
 
     assert keys.own_llm is True
     assert deployment.llm_service.llm.keys == [MY_LLM.text.api_key, MY_LLM.text.api_key]
+
+
+@pytest.mark.parametrize(("public_only", "scheme"), [(True, "http"), (True, "https"), (False, "http")])
+async def test_user_retrieval_endpoints_require_https_in_public_deployments(monkeypatch, public_only, scheme):
+    sent = []
+
+    async def respond(_transport, request):
+        sent.append((request.url.scheme, request.url.path))
+        if request.url.path == "/embeddings":
+            return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+        return httpx.Response(200, json={"results": [{"index": 0, "relevance_score": 0.8}]})
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", respond)
+    service = OwnRetrievalService(public_only=public_only)
+    try:
+        url = f"{scheme}://vectors.example.com"
+        embedder = service.embedder(EmbeddingSettings(url, "test-model", 1, "test-key"))
+        reranker = service.reranker(RerankSettings("test-key", base_url=url))
+        if public_only and scheme == "http":
+            with pytest.raises(EmbeddingError, match="https://"):
+                await embedder.embed_query("茶")
+            with pytest.raises(RerankError, match="https://"):
+                await reranker.rerank("茶", ["资料"], 1)
+            assert sent == []
+        else:
+            assert await embedder.embed_query("茶") == [1.0]
+            assert await reranker.rerank("茶", ["资料"], 1) == [(0, 0.8)]
+            assert sent == [(scheme, "/embeddings"), (scheme, "/rerank")]
+    finally:
+        await service.aclose()

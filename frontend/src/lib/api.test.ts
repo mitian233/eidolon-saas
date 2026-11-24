@@ -23,6 +23,7 @@ import {
   type TurnEvent,
 } from "@/lib/api";
 import { keepOwnKey, localOwnKeys } from "@/lib/localOwnKeys";
+import { documentImportFailure, toFailure } from "@/lib/failure";
 
 describe("redirectFor", () => {
   it("sends a browser that is not signed in to the landing page, to sign in there", () => {
@@ -82,6 +83,14 @@ describe("json: the backend's reason for a failure", () => {
   it("falls back to the status when the body is not JSON", async () => {
     const res = new Response("Bad Gateway", { status: 502 });
     await expect(json(res)).rejects.toThrow(new ApiError("请求失败（502）", 502));
+  });
+
+  it("shows a request's retry time without suggesting own keys on character and document forms", async () => {
+    const detail = "请求太频繁了，请 60 秒后再试";
+    const error = await failure(429, { detail, code: "rate_limited" });
+    const expected = { message: detail, signedOut: false };
+    expect(toFailure(error)).toEqual(expected);
+    expect(documentImportFailure(error, "请填写密钥", "请重新导入")).toEqual(expected);
   });
 });
 

@@ -1,9 +1,11 @@
 import asyncio
 import json
+import threading
 import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -89,6 +91,50 @@ def aside(work: Coroutine[Any, Any, T]) -> T:
     client is made, or as in another process."""
     with ThreadPoolExecutor(1) as thread:
         return thread.submit(asyncio.run, work).result()
+
+
+async def compete_for_write(
+    monkeypatch: pytest.MonkeyPatch, body: Callable[..., Any],
+    first: Coroutine[Any, Any, T], second: Coroutine[Any, Any, T],
+) -> tuple[T, T]:
+    """Both requests reach the write, then the second queues while the first holds the transaction."""
+    second_ready, first_in_transaction = asyncio.Event(), asyncio.Event()
+    release = threading.Event()
+    loop = asyncio.get_running_loop()
+    is_first_request = ContextVar("is_first_request", default=False)
+    write = Database.write
+
+    def held(conn, *args):
+        loop.call_soon_threadsafe(first_in_transaction.set)
+        if not release.wait(5):
+            raise AssertionError("the second request never queued its write")
+        return body(conn, *args)
+
+    async def staged_write(db, callback, *args):
+        if callback is not body:
+            return await write(db, callback, *args)
+        if is_first_request.get():
+            await second_ready.wait()
+            return await write(db, held, *args)
+        second_ready.set()
+        await first_in_transaction.wait()
+        # Database.write queues synchronously before its first await and before this callback runs.
+        loop.call_soon(release.set)
+        return await write(db, callback, *args)
+
+    async def run_first() -> T:
+        is_first_request.set(True)
+        return await first
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Database, "write", staged_write)
+        try:
+            async with asyncio.timeout(5), asyncio.TaskGroup() as tasks:
+                first_request = tasks.create_task(run_first())
+                second_request = tasks.create_task(second)
+        finally:
+            release.set()
+    return first_request.result(), second_request.result()
 
 
 @asynccontextmanager
