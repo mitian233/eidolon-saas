@@ -39,7 +39,7 @@ import pyrage
 
 from eidolon.clock import Clock
 from eidolon.data_access import Database
-from eidolon.database import connect
+from eidolon.database import connect, postgres_url
 from eidolon.s3 import NEEDED, Bucket, S3Error, S3Settings
 
 log = logging.getLogger(__name__)
@@ -81,6 +81,7 @@ OVERDUE = timedelta(hours=26)
 the cron's are a day apart, and one takes minutes."""
 
 BUSY_MESSAGE = "上一次备份还没结束（cron、手动或后台按钮发起的），这次没有运行"
+POSTGRES_BACKUP_HELP = "内置备份与恢复仅适用于 SQLite；PostgreSQL 请使用 pg_dump 与 age 加密备份"
 
 _BUCKET_PREFIX = "EIDOLON_BACKUP_S3_"
 
@@ -223,7 +224,7 @@ def backup_key(made_at: datetime) -> str:
 
 
 async def back_up(
-    database: Path,
+    database: Path | str,
     settings: BackupSettings,
     *,
     now: datetime,
@@ -232,6 +233,8 @@ async def back_up(
     """Back the database at `database` up to the bucket, delete the backups past the
     retention, and ping if all went well; what went wrong is in the report, not raised.
     The temporary files are deleted whatever happens."""
+    if postgres_url(database) is not None:
+        return BackupReport(config_error=POSTGRES_BACKUP_HELP)
     report = BackupReport()
     bucket = Bucket(settings.bucket, transport=transport)
     try:
@@ -239,7 +242,7 @@ async def back_up(
             try:
                 # In a thread: in the server, its event loop has calls to keep going.
                 encrypted = await asyncio.to_thread(
-                    _export, database, Path(work), settings.recipient
+                    _export, Path(database), Path(work), settings.recipient
                 )
             except _ExportFailed as e:
                 report.export_error = str(e)
@@ -371,6 +374,7 @@ class BackupStatus:
     listed: BackupRecord | None
     """The latest run that listed the bucket: what is in it."""
     problem: Problem | None
+    unavailable_reason: str | None = None
 
     @property
     def over_warning(self) -> bool:
@@ -414,6 +418,8 @@ class Backups:
         they will not do or another run is under way, and record it; a run that did
         nothing for the settings is recorded too, one that did nothing for another is
         not."""
+        if self._db.is_postgres:
+            return BackupReport(config_error=POSTGRES_BACKUP_HELP)
         try:
             loaded = settings()
         except RuntimeError as e:
@@ -434,6 +440,8 @@ class Backups:
         report logged once it is done; whether it began, not if another was under way.
         Raises RuntimeError, having recorded nothing, if the settings will not do. `aclose`
         abandons it if it has not finished."""
+        if self._db.is_postgres:
+            raise RuntimeError(POSTGRES_BACKUP_HELP)
         loaded = settings()
         run = await self.start(source)
         if run is None:
@@ -447,6 +455,12 @@ class Backups:
         """The backups as they are now, with their settings read from the environment
         now. A run begun over `STALE` ago and not finished is taken never to finish, as
         the next run to begin will take it."""
+        if self._db.is_postgres:
+            return BackupStatus(
+                any_set=False, settings=None, config_error=None, under_way=None,
+                last_success=None, last=None, listed=None, problem=None,
+                unavailable_reason=POSTGRES_BACKUP_HELP,
+            )
         any_set = BackupSettings.any_set()
         loaded, config_error = None, None
         if any_set:
@@ -489,6 +503,8 @@ class Backups:
         not finished): its id, or None if there was one. Takes those begun before that
         and not finished never to finish, and forgets the records older than
         `RECORDS_KEPT`."""
+        if self._db.is_postgres:
+            raise RuntimeError(POSTGRES_BACKUP_HELP)
         return await self._begin(source, exclusive=True)
 
     async def records(self) -> list[BackupRecord]:

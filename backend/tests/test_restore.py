@@ -14,7 +14,7 @@ import pytest
 
 from eidolon.config import Settings
 from tests.conftest import Admin, aside, users_in
-from tests.test_backup import IDENTITY, Deployment, backups_in, begun_in, records_in
+from tests.test_backup import POSTGRES_BACKUP_HELP, IDENTITY, Deployment, backups_in, begun_in, records_in
 
 
 def names(database: Path) -> list[str]:
@@ -38,6 +38,13 @@ def current(settings: Settings) -> Path:
 
 def files_beside(database: Path) -> list[str]:
     return sorted(path.name for path in database.parent.iterdir())
+
+
+def test_postgres_restore_command_refuses_an_explicit_url(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    code, out, err = Admin("postgres://127.0.0.1:1/eidolon", capsys).invoke(
+        "restore", str(tmp_path / "no-such-backup.db"),
+    )
+    assert (code, out, err.strip()) == (1, "", POSTGRES_BACKUP_HELP)
 
 
 @pytest.mark.parametrize(

@@ -33,6 +33,13 @@ describe("backupHeadline", () => {
     expect(backupHeadline(WELL, false)).toEqual({ kind: "ok" });
     expect(backupHeadline(null, false)).toBeNull();
   });
+
+  it("shows the reason when built-in backups are unavailable and disallows starting one", () => {
+    const reason = "内置备份与恢复仅适用于 SQLite；PostgreSQL 请使用 pg_dump 与 age 加密备份";
+    const status = { ...WELL, configured: false, unavailable_reason: reason };
+    expect(backupHeadline(status, false)).toEqual({ kind: "unavailable", reason });
+    expect(canBackUp(status, false)).toBe(false);
+  });
 });
 
 describe("canBackUp", () => {

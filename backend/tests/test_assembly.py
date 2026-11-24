@@ -11,8 +11,9 @@ from eidolon.account_api import OwnKeysInput
 from eidolon.assembly import Backend
 from eidolon.config import Settings
 from eidolon.retrieval import RECALL_STORY_TOOL
-from tests.conftest import Characters
+from tests.conftest import Characters, seed_characters
 from tests.fakes import RETRIEVAL_KEYS, FakeBackgroundLLM, FakeEmbedder, FakeJudge, FakeLLM, FakeReranker, build_faked
+from tests.fakes import registry_of
 
 NOW = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
 REPLY = ["<ja>はいっ</ja><zh>好的</zh>"]
@@ -38,6 +39,7 @@ async def backends() -> AsyncIterator[list[Backend]]:
 
 async def tell_mano(backend: Backend, text: str, keys: dict | None = None) -> tuple[str, list[dict]]:
     user = await backend.store.create_user("producer")
+    await seed_characters(backend, user.id, registry_of(backend))
     conversation = await backend.store.create_conversation(user.id, "mano")
     turn = backend.own_keys.for_turn(OwnKeysInput.model_validate(keys or RETRIEVAL_KEYS).brought())
     try:

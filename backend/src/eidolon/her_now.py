@@ -11,14 +11,16 @@ What every prompt of hers opens with (her sheet, her birthday) is not now: it st
 same all day, for a service to cache (`today.always_known`).
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
 
 from eidolon.affinity import Affinities, Status
+from eidolon.character_repository import CharacterRepository
 from eidolon.characters import Character
-from eidolon.producer import ProducerProfile, Talking, local_date, now_prompt
+from eidolon.producer import Birthday, ProducerProfile, Talking, local_date, now_prompt
+from eidolon.store import NotFound
 from eidolon.today import today_lines
 
 Occasion = Talking | Literal["visit"]
@@ -27,17 +29,17 @@ Occasion = Talking | Literal["visit"]
 
 @dataclass(frozen=True)
 class KnownNow:
-    """What the first step read of now (GLOSSARY.md「此刻」), for the user's `character`:
-    her affinity, read for a visit (None otherwise, or while affinity is off)."""
+    """The user's character, affinity for a visit, and other birthdays for a conversation."""
 
     character: Character
     affinity: Status | None = None
+    other_birthdays: Sequence[tuple[str, Birthday]] = ()
 
 
 class HerNow:
     def __init__(
         self,
-        characters: Mapping[str, Character],
+        characters: CharacterRepository,
         affinities: Affinities | None = None,
     ) -> None:
         """Without `affinities`, she reads no affinity for a visit."""
@@ -49,11 +51,18 @@ class HerNow:
     ) -> KnownNow:
         """The first step, for the user's character on `occasion`: her affinity for a visit,
         None otherwise."""
+        character = await self._characters.get(user_id, character_id)
+        if character is None:
+            raise NotFound(character_id)
         affinity = (
             await self._affinities.status(user_id, character_id)
             if occasion == "visit" and self._affinities is not None else None
         )
-        return KnownNow(self._characters[character_id], affinity)
+        birthdays = (
+            await self._characters.other_birthdays(user_id, character_id)
+            if occasion != "visit" else ()
+        )
+        return KnownNow(character, affinity, birthdays)
 
     def lines(
         self,
@@ -74,5 +83,5 @@ class HerNow:
             return list(affinity_lines)
         return [
             now_prompt(profile, now, timezone, occasion, affinity_lines, last_contact),
-            *today_lines(local_date(now, timezone), known.character, self._characters.values()),
+            *today_lines(local_date(now, timezone), known.character, known.other_birthdays),
         ]

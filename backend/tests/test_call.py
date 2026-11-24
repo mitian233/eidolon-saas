@@ -190,6 +190,7 @@ async def test_a_call_failing_as_it_is_answered_never_connected_and_lets_go_of_i
     )
     try:
         user = (await backend.store.create_user("producer")).id
+        await seed_characters(backend, user, characters)
         conversation = await backend.store.create_conversation(user, "mano")
         released: list[None] = []
         lease = backend.config.lease
@@ -209,9 +210,11 @@ async def test_a_call_failing_as_it_is_answered_never_connected_and_lets_go_of_i
         monkeypatch.setattr(backend.config, "lease", counted_lease)
         monkeypatch.setattr(backend.calls, "_answer", answer)
 
+        mano = await backend.character_repository.get(user, "mano")
+        assert mano is not None
         with pytest.raises(RuntimeError):
             await backend.calls.start(
-                user, conversation, backend.characters["mano"], CallOptions(),
+                user, conversation, mano, CallOptions(),
                 SessionDescription("v=0", "offer"),
             )
 

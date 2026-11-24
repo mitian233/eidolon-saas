@@ -146,28 +146,17 @@ async def test_other_users_keep_their_data(make_client: ClientFactory, settings:
     before = rows_mentioning(settings.database_path, user_id(settings.database_path, "friend"))
     mine = memory_client(make_client)
     await use_everything(mine)
-
-    await mine.post("/api/account/delete", json=DELETE)
-
-    after = rows_mentioning(settings.database_path, user_id(settings.database_path, "friend"))
-    assert after == before
-    assert len((await friend.get("/api/memories")).json()) == 1
-
-
-async def test_deleting_removes_the_users_characters_from_the_shared_mapping(
-    make_client: ClientFactory,
-):
-    mine = make_client(FakeLLM())
-    friend = make_client(FakeLLM(), "friend")
     backend = mine._transport.app.state.backend  # pyright: ignore[reportAttributeAccessIssue]
-    # Each client has a backend of its own over the one database: refresh mine's shared
-    # mapping from it, as the server does at startup, to see the friend's characters too.
-    await backend.character_repository.load()
-    assert {"mano", "kogane", "mano-friend", "kogane-friend"} <= set(backend.characters)
+    owner = await backend.store.first_user_named("producer")
+    assert owner is not None
+    assert [c.id for c in await backend.character_repository.list(owner.id)] == ["mano", "kogane"]
 
     assert (await mine.post("/api/account/delete", json=DELETE)).status_code == 204
 
-    assert set(backend.characters) == {"mano-friend", "kogane-friend"}
+    assert await backend.character_repository.list(owner.id) == []
+    after = rows_mentioning(settings.database_path, user_id(settings.database_path, "friend"))
+    assert after == before
+    assert len((await friend.get("/api/memories")).json()) == 1
     assert [c["id"] for c in (await friend.get("/api/characters")).json()] == [
         "mano-friend", "kogane-friend",
     ]

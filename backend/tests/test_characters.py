@@ -3,11 +3,14 @@ a character added to the registry to talk to, a deleted character's conversation
 and her facts split by heading."""
 
 from dataclasses import replace
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from eidolon import character_repository
 from eidolon.characters import Fact, parse_facts
+from eidolon.config import Settings
 from tests.conftest import KOGANE_SHEET, MANO_SHEET, Characters, ClientFactory, compete_for_write
 from tests.fakes import FakeClock, FakeLLM
 from tests.test_text_turn import send_turn, start_conversation
@@ -58,6 +61,47 @@ async def test_conversation_with_a_deleted_character_is_gone(
 
     assert res.status_code == 404
     assert res.json()["detail"] == "对话不存在"
+
+
+async def test_each_postgres_api_uses_the_latest_characters(
+    make_client: ClientFactory, settings: Settings, postgres_url: str,
+):
+    settings = replace(settings, database_path=cast(Path, postgres_url))
+    clock = FakeClock()
+    first = make_client(FakeLLM(), settings=settings, clock=clock)
+    llm = FakeLLM(["你好。"], ["又见面了。"])
+    second = make_client(llm, settings=settings, clock=clock)
+
+    url = "/api/characters"
+    original = {"name": "山间向导", "sheet": "你喜欢登山。", "user_address": "旅人"}
+    created = await first.post(url, json=original)
+    assert created.status_code == 201, created.text
+    guide = created.json()["id"]
+    conversation = await start_conversation(second, guide)
+    events = await send_turn(second, conversation, "你好")
+    assert events[-1]["type"] == "done", events
+    assert original["sheet"] in llm.prompts[0][0].content
+    assert original["user_address"] in llm.prompts[0][1].content
+
+    companion = await first.post(url, json={
+        "name": "街角店主", "sheet": "你经营一家小店。", "birthday": {"month": 9, "day": 25},
+    })
+    assert companion.status_code == 201, companion.text
+    changed = {"name": "海边向导", "sheet": "你喜欢潜水。", "user_address": "朋友"}
+    updated = await first.put(f"{url}/{guide}", json=changed)
+    assert updated.status_code == 200, updated.text
+
+    events = await send_turn(second, conversation, "还在山上吗")
+    assert events[-1]["type"] == "done", events
+    assert changed["sheet"] in llm.prompts[1][0].content
+    assert original["sheet"] not in llm.prompts[1][0].content
+    assert changed["user_address"] in llm.prompts[1][1].content
+    assert original["user_address"] not in llm.prompts[1][1].content
+    assert any("今天是街角店主的生日" in message.content for message in llm.prompts[1])
+    assert (await second.get(f"{url}/{guide}")).json()["name"] == changed["name"]
+
+    assert (await first.delete(f"{url}/{guide}")).status_code == 204
+    assert (await second.post(f"/api/conversations/{conversation}/turns", json={"text": "在吗"})).status_code == 404
 
 
 async def test_character_creation_keeps_the_limit_across_connections(make_client, settings, database_target, monkeypatch):

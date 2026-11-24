@@ -28,6 +28,7 @@ from eidolon.call import (
 )
 from eidolon.call_nodes import AlreadyPlacing, CapacityReached, NodeUnavailable
 from eidolon.character_repository import CharacterLimitReached, shown_character
+from eidolon.characters import Character
 from eidolon.database import readable
 from eidolon.documents import DocumentLimitReached
 from eidolon.engine import ENDED, TurnJudged, shown
@@ -207,7 +208,7 @@ class IceCandidates(BaseModel):
 
 def create_app(backend: Backend) -> FastAPI:
     """The API over `backend`, which the app closes when it shuts down."""
-    store, characters, engine = backend.store, backend.characters, backend.engine
+    store, engine = backend.store, backend.engine
     memory, calls, admissions = backend.memories, backend.calls, backend.admissions
     titles = backend.titles
     character_creation = Throttle(backend.clock, per_minute=20, per_hour=100)
@@ -331,14 +332,14 @@ def create_app(backend: Backend) -> FastAPI:
     async def call_failed(_: Request, e: CallFailed) -> JSONResponse:
         return JSONResponse({"detail": str(e)}, status_code=500)
 
-    async def conversation_or_404(conversation_id: str, user_id: str) -> Conversation:
+    async def conversation_or_404(conversation_id: str, user_id: str) -> tuple[Conversation, Character]:
         conversation = await store.get_conversation(conversation_id)
         if conversation is None or conversation.user_id != user_id:
             raise HTTPException(404, "对话不存在")
         character = await backend.character_repository.get(user_id, conversation.character_id)
         if character is None:
             raise HTTPException(404, "角色不存在")
-        return conversation
+        return conversation, character
 
     async def refuse_if_ended(conversation: Conversation) -> None:
         """A call into a conversation she has ended (GLOSSARY.md「已结束的对话」) is refused,
@@ -346,12 +347,12 @@ def create_app(backend: Backend) -> FastAPI:
         if await store.ended(conversation.id) is not None:
             raise HTTPException(409, ENDED)
 
-    async def conversation_to_call(conversation_id: str, user_id: str) -> Conversation:
+    async def conversation_to_call(conversation_id: str, user_id: str) -> tuple[Conversation, Character]:
         """The user's conversation a call is to go into, as `conversation_or_404` finds it,
         unless she has ended it (`refuse_if_ended`)."""
-        conversation = await conversation_or_404(conversation_id, user_id)
+        conversation, character = await conversation_or_404(conversation_id, user_id)
         await refuse_if_ended(conversation)
-        return conversation
+        return conversation, character
 
     @app.get("/api/health")
     async def health() -> JSONResponse:
@@ -391,7 +392,7 @@ def create_app(backend: Backend) -> FastAPI:
         is in a cooldown or has ended it."""
         character_id = None
         if conversation:
-            into = await conversation_to_call(conversation, user_id)
+            into, _ = await conversation_to_call(conversation, user_id)
             character_id = into.character_id
         return await calls.ice_servers(user_id, named_services(own), character_id)
 
@@ -408,10 +409,7 @@ def create_app(backend: Backend) -> FastAPI:
             )
         if body.call is None:
             raise HTTPException(422, "缺少要通话的对话")
-        conversation = await conversation_to_call(body.call.conversation_id, user_id)
-        character = characters.get(conversation.character_id)
-        if character is None:
-            raise CallNotFound()
+        conversation, character = await conversation_to_call(body.call.conversation_id, user_id)
         return await calls.start(
             user_id,
             conversation,
@@ -601,7 +599,7 @@ def create_app(backend: Backend) -> FastAPI:
     async def delete_conversation(conversation_id: str, user_id: UserId) -> None:
         """Delete a past conversation (GLOSSARY.md「历史对话」), for good; her current one is
         not deleted (409)."""
-        conversation = await conversation_or_404(conversation_id, user_id)
+        conversation, _ = await conversation_or_404(conversation_id, user_id)
         try:
             await store.delete_conversation(conversation)
         except IsCurrent:
@@ -611,7 +609,7 @@ def create_app(backend: Backend) -> FastAPI:
     async def list_messages(conversation_id: str, user_id: UserId) -> list[dict]:
         """The conversation's record: its messages, conversation events and reach-outs, in
         order. The user reads it: its reach-outs are seen from now on."""
-        conversation = await conversation_or_404(conversation_id, user_id)
+        conversation, _ = await conversation_or_404(conversation_id, user_id)
         return [recorded(entry) for entry in await store.read_by_user(conversation.id)]
 
     @app.post("/api/conversations/{conversation_id}/turns")
@@ -621,7 +619,7 @@ def create_app(backend: Backend) -> FastAPI:
         user_id: UserId,
         device_timezone: DeviceTimezone = None,
     ) -> StreamingResponse:
-        conversation = await conversation_or_404(conversation_id, user_id)
+        conversation, _ = await conversation_or_404(conversation_id, user_id)
         brought = body.own_keys.brought() if body.own_keys else BroughtKeys()
         # Cancelled meanwhile, what is let in never runs, so is settled as left.
         admission = await admissions.admitted(

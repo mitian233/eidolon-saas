@@ -13,14 +13,14 @@ from weakref import WeakKeyDictionary
 
 import pytest
 
-from dataclasses import replace
-
+from eidolon.character_repository import CharacterRepository
 from eidolon.characters import Character
 from eidolon import memory
 from eidolon.data_access import Database
 from eidolon.llm import ChatLLM
 from eidolon.memory import Memories, MemoryTurn, memory_query
 from eidolon.store import Conversation, Message, Segment, Store, add_turn
+from tests.conftest import seed_database_character
 from tests.fakes import FakeBackgroundLLM, FakeEmbedder, FakeReranker
 from tests.test_shared_memory import CAT, TRIP, memorized
 
@@ -32,10 +32,12 @@ class World:
     """A store with users and conversations for the memories module to remember them by."""
 
     def __init__(
-        self, db: Database, store: Store, characters: dict[str, Character], producer: str
+        self, db: Database, store: Store, repository: CharacterRepository,
+        characters: dict[str, Character], producer: str,
     ) -> None:
         self.db = db
         self.store = store
+        self.repository = repository
         self.characters = characters
         self.producer = producer
 
@@ -44,10 +46,17 @@ class World:
         """The world of the store in `db`, the producer made in it."""
         store = Store(db)
         producer = (await store.create_user("producer")).id
-        owned = {id: replace(c, owner_id=producer) for id, c in characters.items()}
-        return cls(db, store, owned, producer)
+        repository = CharacterRepository(db)
+        for id, character in characters.items():
+            await seed_database_character(db, repository, producer, id, character)
+        return cls(db, store, repository, characters, producer)
 
     async def conversation(self, character_id: str, user_id: str | None = None) -> Conversation:
+        if user_id is not None and user_id != self.producer:
+            definition = self.characters[character_id]
+            character_id = f"{character_id}-{user_id}"
+            if await self.repository.get(user_id, character_id) is None:
+                await seed_database_character(self.db, self.repository, user_id, character_id, definition)
         return await self.store.create_conversation(user_id or self.producer, character_id)
 
     async def reply(
@@ -99,11 +108,11 @@ async def make_memories(world: World) -> AsyncIterator[MemoriesFactory]:
         reranker: FakeReranker | None = None,
     ) -> Memories:
         memories = (
-            Memories(world.db, world.characters, lambda: NOW)
+            Memories(world.db, world.repository, lambda: NOW)
             if off
             else writing_with(
                 Memories(
-                    world.db, world.characters, lambda: NOW,
+                    world.db, world.repository, lambda: NOW,
                     embedder=embedder or FakeEmbedder(),
                     reranker=reranker or FakeReranker("制作人"),
                 ),
@@ -169,15 +178,10 @@ async def test_a_memory_told_to_a_character_since_removed_is_hearsay_from_anothe
     earlier = make_memories(memorized(CAT))
     await tell(earlier, world, await world.conversation("mano"), "我家的猫叫小白哦")
     await earlier.entries(world.producer)  # written down
-    without_mano = {"kogane": world.characters["kogane"]}
-    memories = Memories(
-        world.db, without_mano, lambda: NOW,
-        embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
-    )
+    assert await world.repository.delete(world.producer, "mano")
 
-    section = await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？")
-    [cat] = await memories.entries(world.producer)
-    await memories.aclose()
+    section = await find(earlier, world, await world.conversation("kogane"), "你知道我家的猫吗？")
+    [cat] = await earlier.entries(world.producer)
 
     assert "转述" in line_of(section, CAT)  # hearsay, the removed character's name not revealed
     assert (cat.source_character_id, cat.source_character_name) == ("mano", None)
@@ -190,18 +194,13 @@ async def test_a_memory_from_another_owners_character_never_reveals_its_name(
     earlier = make_memories(memorized(CAT))
     await tell(earlier, world, await world.conversation("mano"), "我家的猫叫小白哦")
     await earlier.entries(world.producer)  # written down
-    foreign = {
-        "mano": replace(world.characters["mano"], owner_id="someone-else"),
-        "kogane": world.characters["kogane"],
-    }
-    memories = Memories(
-        world.db, foreign, lambda: NOW,
-        embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
+    friend = (await world.store.create_user("friend")).id
+    await world.db.write(
+        lambda db: db.execute("UPDATE characters SET owner_id = ? WHERE id = 'mano'", (friend,))
     )
 
-    section = await find(memories, world, await world.conversation("kogane"), "你知道我家的猫吗？")
-    [cat] = await memories.entries(world.producer)
-    await memories.aclose()
+    section = await find(earlier, world, await world.conversation("kogane"), "你知道我家的猫吗？")
+    [cat] = await earlier.entries(world.producer)
 
     assert "櫻庭紗季" not in section
     assert "转述" in line_of(section, CAT)
@@ -671,7 +670,7 @@ async def test_memories_kept_before_superseding_all_hold(tmp_path: Path, world: 
         )
     db.close()
     memories = Memories(
-        world.db, world.characters, lambda: NOW,
+        world.db, world.repository, lambda: NOW,
         embedder=FakeEmbedder(), reranker=FakeReranker("制作人"),
     )
 

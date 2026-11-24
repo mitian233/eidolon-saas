@@ -162,10 +162,10 @@ class CallUnderTest:
             settings, llm, clients=clients, clock=lambda: NOW, emotion_judge=judge,
             **remembering,
         )
-        await backend.character_repository.load()
         try:
             keys = RETRIEVAL_KEYS if remembering else JUDGED_KEYS if judge is not None or affinity is not None else {}
-            mano = backend.characters["mano"]
+            mano = await backend.character_repository.get(self.conversation.user_id, "mano")
+            assert mano is not None
             admission = await backend.admissions.call(
                 self.conversation.user_id, "mano", OwnKeysInput.model_validate(keys).brought()
             )
@@ -199,9 +199,9 @@ class CallUnderTest:
         upstream of `CallTurns` holds the cancelling up past `cancel_timeout` seconds, so
         the call is settled before the turn is over."""
         backend = build_faked(self._settings, llm, clock=lambda: NOW)
-        await backend.character_repository.load()
         try:
-            mano = backend.characters["mano"]
+            mano = await backend.character_repository.get(self.conversation.user_id, "mano")
+            assert mano is not None
             admission = await backend.admissions.call(
                 self.conversation.user_id, "mano", BroughtKeys()
             )

@@ -41,6 +41,7 @@ range may hold millions. A range so begins where the slot of 15 minutes its firs
 in does (`activity.range_start`).
 """
 
+import sqlite3
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -118,7 +119,7 @@ def add_dashboard_routes(app: FastAPI, backend: Backend) -> None:
         # Reach-outs, letters, achievements, visits and moments are no turns nor calls, nor
         # counted as taken by any user; their service calls count.
         records = [r for r in tally.records if r.kind in ("turn", "call")]
-        names = {id: c.name for id, c in backend.characters.items()}
+        names = await backend.database.read(_character_names, list({r.character_id for r in records}))
         spent = cost(tally.calls, pricing, starts)
         return {
             "range": range,
@@ -316,6 +317,16 @@ def trend(taken: Sequence[Taken], starts: Sequence[datetime]) -> list[dict]:
         {"start": start.isoformat(), "turns": t.turns, "calls": t.calls, "active_users": t.users}
         for start, t in zip(starts, taken, strict=True)
     ]
+
+
+def _character_names(db: sqlite3.Connection, ids: list[str]) -> dict[str, str]:
+    """Names for the admin's activity summary, in batches that fit SQLite's parameter limit."""
+    names: dict[str, str] = {}
+    for start in range(0, len(ids), 500):
+        batch = ids[start:start + 500]
+        marks = ", ".join("?" for _ in batch)
+        names.update(db.execute(f"SELECT id, name FROM characters WHERE id IN ({marks})", batch))
+    return names
 
 
 def characters(records: Sequence[RecordGroup], names: dict[str, str]) -> list[dict]:

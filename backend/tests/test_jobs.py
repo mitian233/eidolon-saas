@@ -48,7 +48,7 @@ async def job_world(database_target: Path | str) -> AsyncIterator[World]:
 
 def remembering(world: World) -> Memories:
     return Memories(
-        world.db, world.characters, lambda: NOW,
+        world.db, world.repository, lambda: NOW,
         embedder=FakeEmbedder(), reranker=FakeReranker("猫"),
     )
 
@@ -117,7 +117,7 @@ async def test_invalid_memory_output_is_a_visible_failure(job_world: World):
 async def test_memory_off_creates_no_job(job_world: World):
     world = job_world
     conversation = await world.conversation("friend")
-    memories = Memories(world.db, world.characters, lambda: NOW)
+    memories = Memories(world.db, world.repository, lambda: NOW)
     try:
         turn = await memories.begin(conversation, TZ, FakeBackgroundLLM(memorized(CAT)))
         reply = await world.reply(conversation, "我家的猫叫小白")

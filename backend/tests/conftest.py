@@ -45,6 +45,7 @@ from tests.fakes import (
     FakeLLM,
     FakeLLMService,
     FakeSpeech,
+    SeededRepository,
     build_faked,
     registry_of,
 )
@@ -171,7 +172,7 @@ async def users_in(database: Path, *names: str) -> list[str]:
 class Admin:
     """Drives the admin command line against the test database."""
 
-    def __init__(self, database_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    def __init__(self, database_path: Path | str, capsys: pytest.CaptureFixture[str]) -> None:
         self._database_path = database_path
         self._capsys = capsys
 
@@ -205,10 +206,9 @@ KOGANE_SHEET = "# 人设\n你是北川恋鈴。在海边开一家纸艺店。"
 
 
 class Characters(Mapping[str, Character]):
-    """The test characters, defined in memory as the engine sees them: no configuration
-    directory, no asset files. `build_faked` seeds them into the backend's shared mapping;
-    `make_client` and `sign_in_with` also keep them in the database as the signed-in user's
-    own, so the private-character API finds them (`seed_characters`). Legacy tests speak
+    """The test characters, defined without a configuration directory or asset files.
+    `make_client` and `sign_in_with` seed them as the signed-in user's own (`seed_characters`).
+    Legacy tests speak
     paired Japanese and Chinese, so `add` defaults to `language_mode="bilingual"`;
     characters created through the API default to single language as production does."""
 
@@ -293,6 +293,10 @@ def _rename_character(conn, old_id: str, new_id: str) -> None:
     conn.execute("UPDATE characters SET id = ? WHERE id = ?", (new_id, old_id))
 
 
+def _has_character_id(conn, id: str) -> bool:
+    return conn.execute("SELECT 1 FROM characters WHERE id = ?", (id,)).fetchone() is not None
+
+
 def character_id(id: str, user: str = "producer") -> str:
     """The id the registry's character `id` is kept under for the user named `user`: the
     producer's under its own name, everyone else's with the user's name after it, as each
@@ -300,87 +304,30 @@ def character_id(id: str, user: str = "producer") -> str:
     return id if user == "producer" else f"{id}-{user}"
 
 
-class _SeededRepository(CharacterRepository):
-    """The repository of a backend whose characters were seeded (`seed_characters`): the
-    database keeps their settings, the registry's view what it has no column for (her
-    speakers, facts and other names). Each read that refreshes the shared mapping keeps
-    those on it, so a turn looking its character up does not drop what the engine and the
-    corpus read. Ownership stays the database's: a read finds only the owner's character."""
-
-    def __init__(self, repository: CharacterRepository) -> None:
-        self._db = repository._db
-        self._characters = repository._characters
-        self._views: dict[str, Character] = {}
-
-    def keep(self, seeded: Mapping[str, Character]) -> None:
-        """Remember the registry's view of each seeded character, by the id it is kept under."""
-        self._views.update(seeded)
-
-    async def load(self) -> None:
-        await super().load()
-        for id, character in self._characters.items():
-            if (view := self._views.get(id)) is not None:
-                self._characters[id] = _with_view(character, view)
-
-    async def get(self, owner_id: str, character_id: str) -> Character | None:
-        return self._kept(await super().get(owner_id, character_id))
-
-    async def update(
-        self, owner_id: str, character_id: str, **settings: object
-    ) -> Character | None:
-        return self._kept(await super().update(owner_id, character_id, **settings))
-
-    def _kept(self, character: Character | None) -> Character | None:
-        if character is None or (view := self._views.get(character.id)) is None:
-            return character
-        kept = _with_view(character, view)
-        self._characters[kept.id] = kept
-        return kept
-
-
-def _with_view(character: Character, view: Character) -> Character:
-    """The database's character with what only the registry keeps (`Characters.add`)."""
-    return replace(
-        character,
-        speakers=view.speakers, facts=view.facts, idol_id=view.idol_id,
-        call_opener=view.call_opener, short_name=view.short_name,
-        name_zh=view.name_zh, name_kana=view.name_kana, name_romaji=view.name_romaji,
-    )
-
-
 async def seed_characters(
     backend: Backend, owner_id: str, characters: Mapping[str, Character], *, suffix: str = ""
 ) -> None:
-    """Keep the registry's characters in the database as `owner_id`'s own, under the ids
-    the tests know them by with `suffix` after each, and refresh the shared mapping with
-    them: the real repository writes them (a fresh id renamed to the test's, once), so the
-    private-character API finds them as the owner's. What the database does not keep (her
-    speakers, facts and other names) stays on the mapping's view, for the engine and the
-    corpus to read; every later read of the database keeps it there (`_SeededRepository`).
-    Seeding again updates what is already there, leaving conversations
-    alone; an id another user already owns is left to them, as names are not unique and two
-    users may be called the same."""
-    await backend.character_repository.load()
-    seeded: dict[str, Character] = {}
+    """Keep the registry's characters in the database under their test IDs for this owner."""
+    repository = backend.character_repository
     for definition in characters.values():
         id = definition.id + suffix
-        held = backend.characters.get(id)
-        if held is not None and held.owner_id != owner_id:
-            continue
-        settings = _settings_of(definition)
-        if held is None:
-            made = await backend.character_repository.create(owner_id, **settings)
-            await backend.database.write(_rename_character, made.id, id)
-        else:
-            await backend.character_repository.update(owner_id, id, **settings)
-        seeded[id] = replace(definition, id=id, owner_id=owner_id)
-    repository = backend.character_repository
-    if not isinstance(repository, _SeededRepository):
-        repository = _SeededRepository(repository)
-        backend.character_repository = repository
-    repository.keep(seeded)
-    await repository.load()
-    backend.characters.update(seeded)
+        if await seed_database_character(backend.database, repository, owner_id, id, definition):
+            if isinstance(repository, SeededRepository):
+                repository.views[id] = replace(definition, id=id, owner_id=owner_id)
+
+
+async def seed_database_character(
+    db: Database, repository: CharacterRepository, owner_id: str, id: str, definition: Character,
+) -> bool:
+    """Insert or update an owned fixture character. Leave an ID already taken by another owner."""
+    settings = _settings_of(definition)
+    if await repository.update(owner_id, id, **settings) is not None:
+        return True
+    if await db.read(_has_character_id, id):
+        return False
+    made = await repository.create(owner_id, **settings)
+    await db.write(_rename_character, made.id, id)
+    return True
 
 
 @pytest.fixture

@@ -19,7 +19,7 @@ from eidolon.llm import ToolCall
 from eidolon.own_keys import BroughtKeys
 from eidolon.reply_format import SegmentComplete, SpeechDelta
 from eidolon.store import Conversation, Store
-from tests.conftest import Characters, store_in
+from tests.conftest import Characters, seed_characters, store_in
 from tests.fakes import (
     HANG,
     FakeBackgroundLLM,
@@ -66,6 +66,8 @@ class Turns:
         stop = asyncio.Event()
         events = []
         try:
+            if self._characters is not None:
+                await seed_characters(backend, self.conversation.user_id, self._characters)
             llms = backend.own_keys.for_turn(BroughtKeys()).llms
             async for event in backend.engine.turn(self.conversation, text, llms, stop=stop):
                 events.append(event)

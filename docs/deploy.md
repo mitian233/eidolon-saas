@@ -111,7 +111,11 @@ docker compose -f docker-compose.prod.yml -f docker-compose.calls.yml up -d --bu
 
 ## 备份
 
-下文的脚本用于 SQLite。PostgreSQL 请用 `pg_dump` 和 `pg_restore`，并按站点隐私政策设置保留期限。SQLite 可以每天备份到私有 S3 兼容存储桶，压缩并用 age 公钥加密（ADR-0012）。
+内置备份与恢复仅适用于 SQLite；PostgreSQL 请使用 `pg_dump` 与 age 加密备份。
+
+### SQLite
+
+SQLite 可以每天备份到私有 S3 兼容存储桶，压缩并用 age 公钥加密（ADR-0012）。
 
 1. 建一个**私有**存储桶，配好 `EIDOLON_BACKUP_S3_*`（写法见 `.env.example`）。
 2. 本机 `age-keygen` 生成密钥对：公钥（`age1…`）填 `EIDOLON_BACKUP_AGE_RECIPIENT`，私钥离线保存——丢了所有备份都解不开。
@@ -124,19 +128,63 @@ docker compose -f docker-compose.prod.yml -f docker-compose.calls.yml up -d --bu
 
 保留期默认 30 天（`EIDOLON_BACKUP_KEEP_DAYS`，只能调短——隐私政策承诺删除的数据最多 30 天后从备份消失）。可选 `EIDOLON_BACKUP_PING_URL`（healthchecks.io 心跳）、`EIDOLON_BACKUP_WARN_GB`（空间提醒）。后台看板也能发起备份、看备份记录。
 
-### 从备份恢复
+#### 从备份恢复
 
-在自己电脑上用 age 私钥解密备份（`age -d -i key.txt eidolon-<时间>.db.gz > eidolon.db`），传到服务器，然后：
+在自己电脑上用 age 私钥解密备份（`age -d -i key.txt eidolon-<时间>.db.gz.age > eidolon.db.gz`），把解密后的文件传到服务器，然后运行：
 
 ```sh
-deploy/db-restore.sh eidolon.db
+deploy/db-restore.sh eidolon.db.gz
 ```
 
 脚本先检查备份（完整性、是不是本项目的库），不通过什么都不动；通过后先备份现在的库，再停后端、替换数据卷里的库、启动后端。新服务器上恢复加 `--no-backup`（库是空的，备份可能还没配）。
 
-### 换服务器
+#### 换服务器
 
 新服务器装好 Docker、克隆仓库、填好 `.env`（存储桶和 age 公钥照旧），`up -d --build` 起一次空库，再 `deploy/db-restore.sh <解密后的备份> --no-backup`。域名 A 记录切到新服务器，Caddy 自动申请新证书。
+
+### PostgreSQL
+
+在备份机安装 PostgreSQL 客户端、gzip 和 age。客户端版本至少与源库的主版本相同。在 `~/.pg_service.conf` 里设 `eidolon-backup`，填源库的 `host`、`port`、`dbname` 和 `user`，密码放在权限为 `0600` 的 `~/.pgpass`。用 `age-keygen` 生成密钥对，把公钥设为 `EIDOLON_BACKUP_AGE_RECIPIENT`，私钥离线保存。
+
+把以下命令放进每天运行的 Bash 脚本，由 cron 或 systemd timer 调用。备份直接压缩加密，成功后才公布最终文件名。
+
+```bash
+set -euo pipefail
+umask 077
+: "${EIDOLON_BACKUP_AGE_RECIPIENT:?请设置 age 公钥}"
+export PGSERVICE=eidolon-backup
+backup_dir=/var/lib/eidolon/pg-backups
+mkdir -p -- "$backup_dir"
+archive="$backup_dir/eidolon-pg-$(date -u +%Y%m%dT%H%M%SZ).dump.gz.age"
+temporary=$(mktemp "$backup_dir/.eidolon-pg-XXXXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+pg_dump --format=custom --compress=0 | gzip -c \
+  | age -r "$EIDOLON_BACKUP_AGE_RECIPIENT" > "$temporary"
+mv -- "$temporary" "$archive"
+```
+
+每份备份最多保留 30 天。定时清理单独运行，使备份当天失败时过期文件仍会删除。异地副本也应设同样的到期规则。
+
+```sh
+find /var/lib/eidolon/pg-backups -maxdepth 1 -type f \
+  -name 'eidolon-pg-*.dump.gz.age' ! -newermt '30 days ago' -delete
+```
+
+恢复到一个新建的空库。下例中 `eidolon-admin` 是有建库权限的连接配置，`eidolon-restore` 指向新库 `eidolon_restored`，以库的所有者 `eidolon` 登录。用离线保存的 age 私钥解密后再导入。
+
+```bash
+set -euo pipefail
+umask 077
+temporary=$(mktemp -d)
+trap 'rm -rf -- "$temporary"' EXIT
+age -d -i /path/to/age-key.txt /path/to/eidolon-pg-YYYYMMDDTHHMMSSZ.dump.gz.age \
+  | gzip -dc > "$temporary/eidolon.dump"
+PGSERVICE=eidolon-admin createdb --owner=eidolon eidolon_restored
+pg_restore --dbname='service=eidolon-restore' \
+  --single-transaction --no-owner --no-privileges "$temporary/eidolon.dump"
+```
+
+确认新库可以运行后，停掉 API 和通话进程，将各进程的 `DATABASE_URL` 改为新库，再重新启动。
 
 ## 网络和代理
 

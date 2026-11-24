@@ -5,7 +5,10 @@ same run as `eidolon backup`'s. Driven through the backend's external API with a
 the tests control and a fake bucket."""
 
 import asyncio
+from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -15,7 +18,9 @@ from eidolon.config import Settings
 from tests.conftest import ClientFactory
 from tests.fakes import START, FakeBucket, FakeClock, FakeIdentityProvider, FakeLLM
 from tests.test_activity_records import admin_client, settings  # noqa: F401  (with an admin)
-from tests.test_backup import BACKUP_ENV, backup_env, begun_in, records_in  # noqa: F401
+from tests.test_backup import (  # noqa: F401
+    BACKUP_ENV, POSTGRES_BACKUP_HELP, backup_env, begun_in, records_in,
+)
 
 
 @pytest.fixture
@@ -81,6 +86,23 @@ async def test_only_admins_see_the_backups_or_begin_one(
         assert (await client.get("/api/admin/backups")).status_code == 404
         assert (await client.post("/api/admin/backups")).status_code == 404
     assert storage.puts == []
+
+
+async def test_postgres_backup_status_is_informational_and_refuses_a_run(
+    make_client: ClientFactory, github: FakeIdentityProvider, clock: FakeClock,
+    settings: Settings, postgres_url: str, set_up: pytest.MonkeyPatch,
+):
+    set_up.setenv("EIDOLON_BACKUP_KEEP_DAYS", "60")  # ignored on PostgreSQL
+    client = await admin_client(
+        make_client, github, clock, settings=replace(settings, database_path=cast(Path, postgres_url)),
+    )
+    board = await status(client)
+    assert board["unavailable_reason"] == POSTGRES_BACKUP_HELP
+    assert not board["configured"] and board["problem"] is None and board["last"] is None
+
+    response = await client.post("/api/admin/backups")
+    assert (response.status_code, response.json()["detail"]) == (400, POSTGRES_BACKUP_HELP)
+    assert (await status(client))["last"] is None
 
 
 async def test_without_any_backup_settings_backups_are_not_set_up_and_that_is_wrong(

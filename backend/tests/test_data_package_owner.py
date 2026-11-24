@@ -62,7 +62,6 @@ async def test_package_uses_current_owned_characters_and_restores_a_single_langu
     owner_id = await log_in(writer, "alice")
     await log_in(reader, "alice")
     await log_in(stranger, "bob")
-    await backend_of(reader).character_repository.load()
 
     character_id = await create_character(writer, "向导")
     stranger_id = await create_character(stranger, "另一位用户的向导")
@@ -73,6 +72,8 @@ async def test_package_uses_current_owned_characters_and_restores_a_single_langu
         "name": "山间向导", "sheet": "你是山间向导。",
     })).status_code == 200
     assert (await writer.put("/api/profile", json={"form_of_address": "旅人"})).status_code == 200
+    [shown_memory] = (await reader.get("/api/memories")).json()
+    assert shown_memory["source_character_name"] == "山间向导"
 
     # Older data may still reference a foreign character. The package must not reveal its name,
     # and the importing owner must match the character ID independently of the package's name.

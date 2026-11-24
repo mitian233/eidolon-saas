@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from eidolon.character_repository import CharacterRepository
 from eidolon.data_access import Database
 from eidolon.memory import Memories
 from tests.conftest import store_in, users_in
@@ -28,7 +29,7 @@ async def test_what_is_looked_up_by_user_or_conversation_reads_no_one_elses(
     async with store_in(path):
         pass
     database = Database(path)
-    Memories(database, {}, lambda: datetime.now(UTC))
+    Memories(database, CharacterRepository(database), lambda: datetime.now(UTC))
     await database.close()
 
     with sqlite3.connect(path) as db:

@@ -340,6 +340,11 @@ async def test_deleting_a_user_keeps_the_numbers_but_not_who_it_was(
     # may change in between.
     for board in [before, after]:
         del board["cost"]["catalog_as_of"]
+    deleted_before = next(c for c in before["characters"] if c["character_id"] == "mano")
+    deleted_after = next(c for c in after["characters"] if c["character_id"] == "mano")
+    assert deleted_before["name"] == "櫻庭紗季"
+    assert deleted_after["name"] is None
+    deleted_before["name"] = None  # the activity remains, the deleted character's name is gone
     assert after == before
     assert after["active_users"] == 2
     assert rows_mentioning(settings.database_path, producer) == {}

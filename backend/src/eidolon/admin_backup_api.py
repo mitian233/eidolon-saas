@@ -15,8 +15,7 @@ from eidolon.backup import BUSY_MESSAGE, BackupRecord, BackupStatus
 def add_admin_backup_routes(app: FastAPI, backend: Backend) -> None:
     @app.get("/api/admin/backups")
     async def backup_status(_: Admin) -> dict:
-        """Whether backups are set up, how the last ones went, which is under way, and
-        what is wrong, if anything."""
+        """Whether built-in backups are supported and, where they are, how they stand."""
         return _status(await backend.backups.status())
 
     @app.post("/api/admin/backups")
@@ -36,7 +35,7 @@ def _status(status: BackupStatus) -> dict:
     settings, under_way, success, last = (
         status.settings, status.under_way, status.last_success, status.last
     )
-    return {
+    shown = {
         "configured": status.any_set,
         "config_error": status.config_error,
         "keep_days": settings.keep_days if settings else None,
@@ -55,6 +54,9 @@ def _status(status: BackupStatus) -> dict:
         },
         "problem": status.problem,
     }
+    if status.unavailable_reason is not None:
+        shown["unavailable_reason"] = status.unavailable_reason
+    return shown
 
 
 def _run(record: BackupRecord) -> dict:

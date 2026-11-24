@@ -19,6 +19,7 @@ import asyncio
 import re
 from collections.abc import Callable, Mapping, Sequence
 
+from eidolon.character_repository import CharacterRepository
 from eidolon.characters import Character
 from eidolon.gift_catalog import Gift
 from eidolon.jobs import JobRunner
@@ -61,7 +62,7 @@ class Titles:
     """Names conversations after their `TITLED_AT`th turn."""
 
     def __init__(
-        self, store: Store, characters: Mapping[str, Character], gift_catalog: Mapping[str, Gift]
+        self, store: Store, characters: CharacterRepository, gift_catalog: Mapping[str, Gift]
     ) -> None:
         self._store = store
         self._characters = characters
@@ -113,13 +114,15 @@ class Titles:
         current = await self._store.get_conversation(conversation.id)
         if current is None or current.title is not None:
             return
+        character = await self._characters.get(conversation.user_id, conversation.character_id)
+        if character is None:
+            return
         # Her reach-outs are no part of what the conversation is about, nor her being
         # unwell, which she is never told of.
         record = [
             entry for entry in await self._store.record(conversation.id)
             if not isinstance(entry, ReachOut) and told_her(entry)
         ]
-        character = self._characters[conversation.character_id]
         prompt = _naming_prompt(character, _first_turns(record), self._gift_catalog)
         answer = "".join([chunk async for chunk in llm.stream(prompt) if isinstance(chunk, str)])
         title = title_from(answer)

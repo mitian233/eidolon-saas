@@ -132,6 +132,10 @@ class Database:
         self._thread = threading.Thread(target=self._write_all, name="eidolon-writer", daemon=True)
         self._thread.start()
 
+    @property
+    def is_postgres(self) -> bool:
+        return self._postgres_url is not None
+
     async def write(self, body: Callable[[sqlite3.Connection, Unpack[A]], T], *args: Unpack[A]) -> T:
         """`body` run on the writing connection with `args`, in a transaction of its own
         that holds the database from its first statement: committed if it returns, rolled

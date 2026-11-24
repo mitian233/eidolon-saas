@@ -1,12 +1,8 @@
 """Characters kept in the database: each user's own characters (D13), persisted across a
 restart and private to their owner.
 
-`CharacterRepository` owns the `characters` table and produces the engine's `Character`
-view from each row. It is made with the shared mapping the engine reads (`characters`);
-`load` refreshes that same mapping in place at startup, and every write keeps it current
-after the database write succeeds, so the engine never sees a character the database does
-not have. Ownership is enforced in SQL: every read and write names the owner, so one user
-can neither see nor change another's characters.
+`CharacterRepository` owns the `characters` table and reads the engine's `Character`
+view on demand. Every character read and write names the owner.
 
 The platform stores only the avatar URL, never the file (D11); a character needs nothing
 but a name and a persona sheet. Deleting a character deletes its owner's conversations
@@ -66,18 +62,9 @@ _SETTINGS = (
 
 
 class CharacterRepository:
-    def __init__(self, database: Database, characters: dict[str, Character]) -> None:
+    def __init__(self, database: Database) -> None:
         self._db = database
-        self._characters = characters
         database.prepare(lambda conn: conn.executescript(_SCHEMA))
-
-    async def load(self) -> None:
-        """Refresh the shared mapping from the database, in place: what the engine reads at
-        startup, the same object it already holds. Read on the writing connection so it
-        orders with create/update/delete and cannot restore a character just deleted."""
-        rows = await self._db.write(_all)
-        self._characters.clear()
-        self._characters.update({c.id: c for c in rows})
 
     async def create(
         self,
@@ -95,8 +82,7 @@ class CharacterRepository:
         birthday: Birthday | None = None,
         age: int | None = None,
     ) -> Character:
-        """A new character of `owner_id`, with a fresh id; only `name` and `sheet` are
-        needed. Kept in the shared mapping once written."""
+        """A new character of `owner_id`, with a fresh id; only `name` and `sheet` are needed."""
         cols = _columns(
             dict(
                 name=name, sheet=sheet, intro=intro, avatar_url=avatar_url, greeting=greeting,
@@ -120,41 +106,32 @@ class CharacterRepository:
             age=age,
         )
         await self._db.write(_insert, character.id, owner_id, cols, _now())
-        self._characters[character.id] = character
         return character
 
     async def update(
         self, owner_id: str, character_id: str, **settings: object
     ) -> Character | None:
         """Change the given settings of the owner's character, leaving the rest; None if she
-        is not the owner's (or not there). Kept in the shared mapping once written."""
+        is not the owner's (or not there)."""
         cols = _columns(settings)
-        updated = await self._db.write(_update, owner_id, character_id, cols)
-        if updated is not None:
-            self._characters[character_id] = updated
-        return updated
+        return await self._db.write(_update, owner_id, character_id, cols)
 
     async def delete(self, owner_id: str, character_id: str) -> bool:
         """Delete the owner's character and their conversations with her, for good; False if
-        she is not the owner's (or not there). Gone from the shared mapping once written."""
-        deleted = await self._db.write(_delete, owner_id, character_id)
-        if deleted:
-            self._characters.pop(character_id, None)
-        return deleted
+        she is not the owner's (or not there)."""
+        return await self._db.write(_delete, owner_id, character_id)
+
+    async def other_birthdays(self, owner_id: str, character_id: str) -> list[tuple[str, Birthday]]:
+        """Names and birthdays of the owner's other characters, oldest characters first."""
+        return await self._db.read(_other_birthdays, owner_id, character_id)
 
     async def list(self, owner_id: str) -> list[Character]:
         """The owner's characters, the earliest created first."""
         return await self._db.read(_by_owner, owner_id)
 
     async def get(self, owner_id: str, character_id: str) -> Character | None:
-        """The owner's character, or None if she is not the owner's (or not there). Found,
-        she is kept in the shared mapping too, so the engine has her even before a `load`.
-        Read on the writing connection, as `load` is, so a slow read cannot restore an older
-        character over a newer edit, nor one just deleted."""
-        character = await self._db.write(_one, owner_id, character_id)
-        if character is not None:
-            self._characters[character_id] = character
-        return character
+        """The owner's character, or None if she is not the owner's (or not there)."""
+        return await self._db.read(_one, owner_id, character_id)
 
 
 def read_character_names(conn: sqlite3.Connection, owner_id: str) -> dict[str, str]:
@@ -237,7 +214,7 @@ def _character(row: sqlite3.Row) -> Character:
         greeting=Greeting(greeting, "") if greeting else None,
         user_address=row["user_address"],
         language_mode=row["language_mode"],
-        birthday=Birthday(int(birthday[:2]), int(birthday[3:])) if birthday else None,
+        birthday=_birthday(birthday) if birthday else None,
         age=row["age"],
     )
 
@@ -259,9 +236,19 @@ def _insert(
     conn.execute(f"INSERT INTO characters ({names}) VALUES ({marks})", tuple(values.values()))
 
 
-def _all(conn: sqlite3.Connection) -> list[Character]:
-    rows = by_name(conn).execute(f"SELECT {_COLUMNS} FROM characters ORDER BY created_at, rowid")
-    return [_character(row) for row in rows]
+def _birthday(text: str) -> Birthday:
+    return Birthday(int(text[:2]), int(text[3:]))
+
+
+def _other_birthdays(
+    conn: sqlite3.Connection, owner_id: str, character_id: str,
+) -> list[tuple[str, Birthday]]:
+    rows = conn.execute(
+        "SELECT name, birthday FROM characters WHERE owner_id = ? AND id <> ?"
+        " AND birthday IS NOT NULL ORDER BY created_at, rowid",
+        (owner_id, character_id),
+    )
+    return [(name, _birthday(birthday)) for name, birthday in rows]
 
 
 def _by_owner(conn: sqlite3.Connection, owner_id: str) -> list[Character]:

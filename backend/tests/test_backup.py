@@ -33,7 +33,7 @@ PING = "https://ping.test/backup"
 
 @asynccontextmanager
 async def backups_in(
-    database: Path, clock: Clock = utc_now, transport: httpx.AsyncBaseTransport | None = None
+    database: Path | str, clock: Clock = utc_now, transport: httpx.AsyncBaseTransport | None = None
 ) -> AsyncIterator[Backups]:
     """The backups of the database at `database`, on a data access layer of their own, as
     another process has them."""
@@ -144,6 +144,33 @@ def deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Deployment:
     temporary.mkdir()
     monkeypatch.setattr("tempfile.tempdir", str(temporary))
     return Deployment(tmp_path)
+
+
+POSTGRES_BACKUP_HELP = "内置备份与恢复仅适用于 SQLite；PostgreSQL 请使用 pg_dump 与 age 加密备份"
+
+
+async def test_postgres_cannot_start_a_builtin_backup(postgres_url: str, deployment: Deployment):
+    async with backups_in(postgres_url) as backups:
+        report = await backups.run("manual", deployment.settings)
+        assert (report.exit_code, report.config_error) == (1, POSTGRES_BACKUP_HELP)
+        assert await backups.records() == []
+
+    def unexpected_request(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"PostgreSQL backup contacted {request.url.host}")
+
+    report = await back_up(
+        postgres_url, deployment.settings(), now=START, transport=httpx.MockTransport(unexpected_request),
+    )
+    assert (report.exit_code, report.config_error) == (1, POSTGRES_BACKUP_HELP)
+
+
+def test_postgres_backup_command_refuses_the_configured_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+):
+    # An unreachable database proves the command refuses before opening a connection.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://127.0.0.1:1/eidolon")
+    code, out, err = Admin(tmp_path / "eidolon.db", capsys).invoke("backup")
+    assert (code, out, err.strip()) == (1, "", POSTGRES_BACKUP_HELP)
 
 
 async def test_the_backup_is_the_database_encrypted_to_the_deployers_key_and_pings_once(

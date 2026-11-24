@@ -27,6 +27,8 @@ export type BackupStatus = {
   configured: boolean;
   /** Why they will not do; null when they do, or none is set. */
   config_error: string | null;
+  /** Why this deployment uses external backups, when built-in backups are unavailable. */
+  unavailable_reason?: string;
   /** The settings, as they are now; null when they will not do. */
   keep_days: number | null;
   warn_gb: number | null;
@@ -67,9 +69,14 @@ export const BACKUP_BUSY_REFRESH_MS = 5_000;
 
 /** What the block says first: a backup under way (begun now from the button, or seen under
  * way, by whoever), else what is wrong, else that all is well. */
-export type BackupHeadline = { kind: "busy" } | { kind: "ok" } | { kind: "problem"; problem: BackupProblem };
+export type BackupHeadline =
+  | { kind: "busy" }
+  | { kind: "ok" }
+  | { kind: "problem"; problem: BackupProblem }
+  | { kind: "unavailable"; reason: string };
 
 export function backupHeadline(status: BackupStatus | null, pressed: boolean): BackupHeadline | null {
+  if (status?.unavailable_reason) return { kind: "unavailable", reason: status.unavailable_reason };
   if (pressed || status?.under_way) return { kind: "busy" };
   if (status === null) return null;
   return status.problem === null ? { kind: "ok" } : { kind: "problem", problem: status.problem };
@@ -77,7 +84,7 @@ export function backupHeadline(status: BackupStatus | null, pressed: boolean): B
 
 /** Whether the settings are set and will do: the backend read them, and would begin a backup. */
 export function settingsWillDo(status: BackupStatus): boolean {
-  return status.problem !== "unconfigured" && status.problem !== "misconfigured";
+  return !status.unavailable_reason && status.problem !== "unconfigured" && status.problem !== "misconfigured";
 }
 
 /** Whether the button may begin a backup: not while one is under way, nor without settings

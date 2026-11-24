@@ -827,7 +827,7 @@ export const zh = {
     /** 数据包（GLOSSARY.md「数据包」）：导出带走、导入接着用。 */
     dataPackage: {
       exportTitle: "导出",
-      exportHint: "下载一份对话、记忆和档案。请自行保管，文件没有加密。",
+      exportHint: "第 5 版数据包可导出对话、记忆和档案，不包含角色人设与背景资料。文件未加密，请自行保管。",
       categories: {
         conversations: "对话",
         memories: "记忆",
@@ -835,7 +835,7 @@ export const zh = {
       },
       export: "导出",
       importTitle: "导入",
-      importHint: "对话和记忆会加入现有数据，勾选档案会替换当前档案。旧数据包也只导入这三类。",
+      importHint: "只恢复当前账号仍保留的同一角色的对话。删除角色、删号重来或迁到其他部署后，角色编号对不上的对话会跳过。记忆照常加入，勾选档案会替换当前档案。",
       chooseFile: "选择数据包",
       import: "导入",
       importing: "正在导入…",

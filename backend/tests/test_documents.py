@@ -21,7 +21,7 @@ async def test_documents_persist_deduplicate_retrieve_and_delete(database_target
         store = Store(db)
         alice = await store.create_user("Alice")
         bob = await store.create_user("Bob")
-        characters = CharacterRepository(db, {})
+        characters = CharacterRepository(db)
         one = await characters.create(alice.id, name="一", sheet="")
         two = await characters.create(bob.id, name="二", sheet="")
         documents = Documents(db)
@@ -50,7 +50,7 @@ async def test_retrieval_paths_keep_documents_separate_for_characters_of_one_own
     db = Database(database_target)
     try:
         owner = await Store(db).create_user("Alice")
-        characters = CharacterRepository(db, {})
+        characters = CharacterRepository(db)
         one = await characters.create(owner.id, name="一", sheet="")
         two = await characters.create(owner.id, name="二", sheet="")
         documents = Documents(db)
@@ -86,7 +86,7 @@ async def test_failed_embedding_can_be_retried(tmp_path):
     db = Database(tmp_path / "test.db")
     try:
         owner = await Store(db).create_user("Alice")
-        character = await CharacterRepository(db, {}).create(owner.id, name="一", sheet="")
+        character = await CharacterRepository(db).create(owner.id, name="一", sheet="")
         documents = Documents(db)
         embedder = FakeEmbedder()
         embedder.documents_down = True
@@ -105,7 +105,7 @@ async def test_user_deletion_removes_documents(database_target):
     db = Database(database_target)
     try:
         user = await Store(db).create_user("Alice")
-        character = await CharacterRepository(db, {}).create(user.id, name="一", sheet="")
+        character = await CharacterRepository(db).create(user.id, name="一", sheet="")
         documents = Documents(db)
         await documents.import_text(user.id, character.id, "笔记", "猫", FakeEmbedder())
         await db.write(delete_user_data, user.id)
@@ -123,7 +123,7 @@ async def test_changed_dimensions_do_not_reuse_vectors(tmp_path):
     db = Database(tmp_path / "test.db")
     try:
         user = await Store(db).create_user("Alice")
-        character = await CharacterRepository(db, {}).create(user.id, name="一", sheet="")
+        character = await CharacterRepository(db).create(user.id, name="一", sheet="")
         documents = Documents(db)
         await documents.import_text(user.id, character.id, "笔记", "猫", FakeEmbedder("same"))
         shorter = ShortEmbedder("same")
@@ -138,7 +138,7 @@ async def test_document_list_migrates_existing_documents(database_target):
     db = Database(database_target)
     try:
         owner = await Store(db).create_user("Alice")
-        character = await CharacterRepository(db, {}).create(owner.id, name="一", sheet="")
+        character = await CharacterRepository(db).create(owner.id, name="一", sheet="")
         db.prepare(lambda conn: conn.executescript("""
             CREATE TABLE documents (
                 id TEXT PRIMARY KEY,
@@ -195,7 +195,7 @@ async def test_concurrent_imports_embed_once_across_database_instances(database_
 
     try:
         owner = await Store(first_db).create_user("Alice")
-        character = await CharacterRepository(first_db, {}).create(owner.id, name="一", sheet="")
+        character = await CharacterRepository(first_db).create(owner.id, name="一", sheet="")
         first, second = Documents(first_db), Documents(second_db)
         first_embedder, second_embedder = FirstEmbedder(), FakeEmbedder()
         async with asyncio.TaskGroup() as tasks:
@@ -235,7 +235,7 @@ async def test_other_character_can_import_and_search_while_embedding_hangs(datab
     task = None
     try:
         user = await Store(db).create_user("Alice")
-        characters = CharacterRepository(db, {})
+        characters = CharacterRepository(db)
         first = await characters.create(user.id, name="一", sheet="")
         second = await characters.create(user.id, name="二", sheet="")
         documents = Documents(db)
@@ -261,7 +261,7 @@ async def test_reimport_embeds_new_dimensions(database_target):
     db = Database(database_target)
     try:
         user = await Store(db).create_user("Alice")
-        character = await CharacterRepository(db, {}).create(user.id, name="一", sheet="")
+        character = await CharacterRepository(db).create(user.id, name="一", sheet="")
         documents = Documents(db)
         original = FakeEmbedder("same")
         shorter = ShortEmbedder("same")

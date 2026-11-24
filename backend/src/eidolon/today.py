@@ -17,7 +17,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from eidolon.characters import Character
-from eidolon.producer import is_birthday
+from eidolon.producer import Birthday, is_birthday
 from eidolon.world import Live, LiveDay, World
 
 TOKYO = ZoneInfo("Asia/Tokyo")
@@ -51,21 +51,14 @@ def always_known(character: Character, world_prompt: str | None = None) -> list[
     ]
 
 
-def today_lines(local: date, character: Character, characters: Iterable[Character]) -> list[str]:
-    """What `character` is told of the day it is where the user is, `local`: her birthday,
-    and the birthdays of the user's other characters (those of the same owner), each if it
-    is the day. A character without a birthday is told of none."""
+def today_lines(
+    local: date, character: Character, other_birthdays: Iterable[tuple[str, Birthday]],
+) -> list[str]:
+    """Her birthday and the owner's other characters' birthdays, each on its local day."""
     lines: list[str] = []
     if character.birthday is not None and is_birthday(character.birthday, local):
         lines.append(_HER_BIRTHDAY)
-    others = [
-        c.name
-        for c in characters
-        if c.id != character.id
-        and c.owner_id == character.owner_id
-        and c.birthday is not None
-        and is_birthday(c.birthday, local)
-    ]
+    others = [name for name, birthday in other_birthdays if is_birthday(birthday, local)]
     if others:
         lines.append(
             f"今天是{'、'.join(others)}的生日。你知道这件事，对方提起时能接上；不用主动提。"

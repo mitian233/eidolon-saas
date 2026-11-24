@@ -6,9 +6,10 @@ import io
 import json
 import secrets
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast, get_args
+from unittest.mock import patch
 import zipfile
 from http import HTTPStatus
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit
@@ -33,6 +34,7 @@ from pipecat.utils.time import time_now_iso8601
 from eidolon.assembly import Backend, build
 from eidolon.billing import bill
 from eidolon.call import SONIOX_FOLLOW_ON_TIMEOUT, Hearing
+from eidolon.character_repository import CharacterRepository
 from eidolon.characters import Character
 from eidolon.config import (
     BailianRegion,
@@ -543,6 +545,26 @@ def registry_of(backend: Backend) -> Mapping[str, Character]:
     return _test_registries.get(id(backend), {})
 
 
+class SeededRepository(CharacterRepository):
+    """Decorate owned database rows with the extra fields used by legacy test characters."""
+
+    def __init__(self, database) -> None:
+        super().__init__(database)
+        self.views: dict[str, Character] = {}
+
+    async def get(self, owner_id: str, character_id: str) -> Character | None:
+        character = await super().get(owner_id, character_id)
+        view = self.views.get(character_id)
+        if character is None or view is None or view.owner_id != owner_id:
+            return character
+        return replace(
+            character,
+            speakers=view.speakers, facts=view.facts, idol_id=view.idol_id,
+            call_opener=view.call_opener, short_name=view.short_name,
+            name_zh=view.name_zh, name_kana=view.name_kana, name_romaji=view.name_romaji,
+        )
+
+
 def build_faked(
     settings: Settings,
     llm: FakeLLM | None = None,
@@ -558,9 +580,9 @@ def build_faked(
     playing the characters from `llm`'s script, writing down memories from
     `background_llm`'s, judging what turns need from `retrieval_judge`'s and her emotions
     from `emotion_judge`'s, either judging both if only one is given. With a judge
-    script, `.env` has the judge model `FAKE_JUDGE` unless it has one. `characters` seeds
-    the backend's shared mapping with the test registry's definitions, as the database
-    would at startup. Any other keyword is an outside service passed on to `build`."""
+    script, `.env` has the judge model `FAKE_JUDGE` unless it has one. `characters` is the
+    registry the tests can seed for a user. Any other keyword is passed on to `build`.
+    """
     clients = clients or FakeServiceClients()
     if llm is not None:
         clients.llm = llm
@@ -576,10 +598,9 @@ def build_faked(
         services["own_llm_service"] = ScriptedUserLLMService(own, clients)
     if "own_retrieval_service" not in services:
         services["own_retrieval_service"] = FakeUserRetrieval(services.get("embedder"), services.get("reranker"))
-    backend = build(settings, clients=clients, **services)
+    with patch("eidolon.assembly.CharacterRepository", SeededRepository if characters else CharacterRepository):
+        backend = build(settings, clients=clients, **services)
     _test_registries[id(backend)] = characters or {}
-    if characters:
-        backend.characters.update(characters)
     return backend
 
 

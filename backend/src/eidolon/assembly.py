@@ -15,7 +15,6 @@ from eidolon.announcements import Announcements
 from eidolon.backup import Backups
 from eidolon.call import Calls, Speech, SpeechServices
 from eidolon.call_nodes import CallNodes
-from eidolon.characters import Character
 from eidolon.character_repository import CharacterRepository
 from eidolon.clock import Clock, utc_now
 from eidolon.config import DEFAULT_BAILIAN_STT_MODEL, Settings
@@ -55,7 +54,6 @@ class Backend:
     settings: Settings
     database: Database
     store: Store
-    characters: dict[str, Character]
     character_repository: CharacterRepository
     memories: Memories
     titles: Titles
@@ -88,7 +86,6 @@ class Backend:
         asyncio.get_running_loop().set_default_executor(
             ThreadPoolExecutor(THREADS, thread_name_prefix="eidolon")
         )
-        await self.character_repository.load()
         await self.config.start()
         await self.calls.open()
         self._tasks = [
@@ -132,8 +129,7 @@ def build(
     database = Database(settings.database_path)
     closers: list[Closer] = [database.close]
     store = Store(database)
-    characters: dict[str, Character] = {}
-    character_repository = CharacterRepository(database, characters)
+    character_repository = CharacterRepository(database)
     documents = Documents(database)
     if identity_providers is None:
         identity_providers = open_identity_providers(settings.github, settings.google)
@@ -198,11 +194,11 @@ def build(
             lambda: services.rerank_thresholds.references if services.rerank_thresholds else 0.0,
         )
     memories = Memories(
-        database, characters, clock, embedder=embedder, reranker=reranker,
+        database, character_repository, clock, embedder=embedder, reranker=reranker,
         min_relevance=lambda: config.rerank_thresholds.memories,
     )
     closers.append(memories.aclose)
-    titles = Titles(store, characters, {})
+    titles = Titles(store, character_repository, {})
     closers.append(titles.aclose)
     affinities = Affinities(database, clock, lambda: config.affinity_on)
     usage = UsageLimiter(database, lambda: config.usage_limits, clock)
@@ -211,9 +207,9 @@ def build(
         retrieval_service=own_retrieval_service,
         emotion=settings.emotion,
     )
-    her_now = HerNow(characters, affinities=affinities)
+    her_now = HerNow(character_repository, affinities=affinities)
     engine = ConversationEngine(
-        database, store, characters, {}, memories, titles, clock, her_now, retrieval,
+        database, store, {}, memories, titles, clock, her_now, retrieval,
         history_turns=lambda: config.history_turns,
         affinities=affinities,
         retrieval_for=retrieval_for,
@@ -234,13 +230,13 @@ def build(
     engine.on_cooled(calls.cooled)
     engine.on_ended(calls.conversation_ended)
     return Backend(
-        settings=settings, database=database, store=store, characters=characters,
+        settings=settings, database=database, store=store,
         character_repository=character_repository, memories=memories, titles=titles,
         engine=engine, usage=usage, clock=clock, calls=calls, speech=speech, own_keys=own_keys,
         admissions=admissions,
         accounts=Accounts(
             store, clock, memories, calls, invites, lambda: config.registration,
-            settings.admins, settings.secret_key, characters,
+            settings.admins, settings.secret_key,
         ),
         identity_providers=identity_providers, activity=activity, config=config,
         prices=prices, announcements=announcements, sponsor=sponsor, invites=invites,

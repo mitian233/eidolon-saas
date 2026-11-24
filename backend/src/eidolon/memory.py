@@ -39,12 +39,13 @@ import asyncio
 import json
 import logging
 import sqlite3
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from eidolon.activity import detached
+from eidolon.character_repository import CharacterRepository
 from eidolon.characters import Character
 from eidolon.clock import Clock
 from eidolon.corpus import REEMBED_BATCH
@@ -198,7 +199,7 @@ class Memories:
     def __init__(
         self,
         db: Database,
-        characters: Mapping[str, Character],
+        characters: CharacterRepository,
         clock: Clock,
         *,
         embedder: Embedder | None = None,
@@ -357,8 +358,10 @@ class Memories:
         services: MemoryServices | None = None,
     ) -> str | None:
         found = await self._relevant(query_text, candidates, services)
-        character = self._characters[conversation.character_id]
-        return _memories_prompt(found, character, timezone, _FOUND) if found else None
+        if not found:
+            return None
+        character = await self._characters.get(conversation.user_id, conversation.character_id)
+        return _memories_prompt(found, character, timezone, _FOUND) if character else None
 
     async def _relevant(
         self, query_text: str, candidates: Sequence[Memory], services: MemoryServices | None = None,
@@ -414,10 +417,12 @@ class Memories:
         ][-MAX_LATEST:]
         ids = {m.id for m in found}
         recalled = [*found, *(m for m in reversed(latest) if m.id not in ids)]
-        character = self._characters[character_id]
+        if not recalled:
+            return None
+        character = await self._characters.get(user_id, character_id)
         return (
             _memories_prompt(recalled, character, timezone, _POSTING if posting else _REACHING_OUT)
-            if recalled else None
+            if character else None
         )
 
     async def _nearest(
@@ -512,7 +517,9 @@ class Memories:
         now: datetime,
     ) -> None:
         user_id = conversation.user_id
-        character = self._characters[conversation.character_id]
+        character = await self._characters.get(user_id, conversation.character_id)
+        if character is None:
+            return
         shown = await self._shown(
             services.embedder, user_id, memory_query(history, text), query_vector
         )
@@ -526,7 +533,7 @@ class Memories:
             raise ValueError("memory extraction returned invalid JSON")
         if self._clearings.get(user_id, 0) != clearings:
             return  # cleared since the turn began
-        added = await self._db.write(self._add, conversation, written, shown, now)
+        added = await self._db.write(self._add, conversation, character.name, written, shown, now)
         try:
             if added:
                 model = services.embedder.model
@@ -544,11 +551,13 @@ class Memories:
     def read_kept(self, db: sqlite3.Connection, user_id: str) -> list[Memory]:
         """What `kept` reads, read through `db`: for a data package too."""
         rows = db.execute(
-            "SELECT id, user_id, source_character_id, text, created_at, superseded_by,"
-            " conversation_id FROM memories WHERE user_id = ? ORDER BY id",
+            "SELECT m.id, m.user_id, m.source_character_id, c.name, m.text, m.created_at,"
+            " m.superseded_by, m.conversation_id FROM memories m"
+            " LEFT JOIN characters c ON c.id = m.source_character_id AND c.owner_id = m.user_id"
+            " WHERE m.user_id = ? ORDER BY m.id",
             (user_id,),
         ).fetchall()
-        return [self._memory(*row) for row in rows]
+        return [Memory(*row) for row in rows]
 
     def _kept_with_vectors(
         self, db: sqlite3.Connection, user_id: str, model: str
@@ -557,23 +566,11 @@ class Memories:
         one moment."""
         return self.read_kept(db, user_id), _stored_vectors(db, user_id, model)
 
-    def _memory(
-        self, id: int, user_id: str, source_character_id: str, text: str, created_at: str,
-        superseded_by: int | None = None, conversation_id: str | None = None,
-    ) -> Memory:
-        source = self._characters.get(source_character_id)
-        # A memory imported from elsewhere may name another owner's character: its name is
-        # never revealed across owners (D13), only the hearsay fallback.
-        name = source.name if source is not None and source.owner_id == user_id else None
-        return Memory(
-            id, user_id, source_character_id, name, text,
-            created_at, superseded_by, conversation_id,
-        )
-
     def _add(
         self,
         db: sqlite3.Connection,
         conversation: Conversation,
+        character_name: str,
         written: Sequence["NewMemory"],
         shown: Sequence[Memory],
         now: datetime,
@@ -603,8 +600,8 @@ class Memories:
                 )
                 assert cursor.lastrowid is not None
                 id = cursor.lastrowid
-                added.append(self._memory(
-                    id, user_id, conversation.character_id, memory.text, created_at
+                added.append(Memory(
+                    id, user_id, conversation.character_id, character_name, memory.text, created_at,
                 ))
             else:
                 id, superseded = kept

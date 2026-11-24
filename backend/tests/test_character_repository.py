@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from eidolon.character_repository import CharacterRepository, shown_character
-from eidolon.characters import Character
 from eidolon.data_access import Database
 from eidolon.producer import Birthday
 from eidolon.store import Store
@@ -25,12 +24,10 @@ async def database_in(path: Path):
 
 @asynccontextmanager
 async def repository_in(path: Path):
-    """A store and a character repository on one database, as the backend has them, with the
-    shared mapping the engine reads."""
+    """A store and a character repository on one database, as the backend has them."""
     async with database_in(path) as db:
         store = Store(db)
-        characters: dict[str, Character] = {}
-        yield db, store, CharacterRepository(db, characters), characters
+        yield db, store, CharacterRepository(db)
 
 
 def _insert_message(conn, conversation_id: str) -> None:
@@ -47,7 +44,7 @@ def _count_messages(conn, conversation_id: str) -> int:
 
 
 async def test_a_plain_text_character_is_created_without_assets_or_birthday(tmp_path: Path):
-    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo, characters):
+    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo):
         alice = (await store.create_user("alice")).id
 
         c = await repo.create(alice, name="小测试", sheet="你是一个温和的助手。")
@@ -61,7 +58,7 @@ async def test_a_plain_text_character_is_created_without_assets_or_birthday(tmp_
         assert c.greeting is None
         assert c.avatar_url is None
         assert c.avatar is None
-        assert characters[c.id] is c
+        assert await repo.get(alice, c.id) == c
         assert shown_character(c) == {
             "id": c.id,
             "name": "小测试",
@@ -79,15 +76,15 @@ async def test_a_plain_text_character_is_created_without_assets_or_birthday(tmp_
 
 
 async def test_create_needs_an_existing_owner(tmp_path: Path):
-    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo, characters):
+    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo):
         with pytest.raises(sqlite3.IntegrityError):
             await repo.create("no-such-user", name="A", sheet="s")
-        assert characters == {}
+        assert await repo.list("no-such-user") == []
 
 
 async def test_every_setting_survives_a_reopen(tmp_path: Path):
     path = tmp_path / "eidolon.db"
-    async with repository_in(path) as (db, store, repo, characters):
+    async with repository_in(path) as (db, store, repo):
         alice = (await store.create_user("alice")).id
         c = await repo.create(
             alice,
@@ -104,10 +101,9 @@ async def test_every_setting_survives_a_reopen(tmp_path: Path):
             age=16,
         )
 
-    async with repository_in(path) as (db, store, repo, characters):
-        await repo.load()
-
-        loaded = characters[c.id]
+    async with repository_in(path) as (db, store, repo):
+        loaded = await repo.get(alice, c.id)
+        assert loaded is not None
         assert loaded == c
         assert loaded.birthday == Birthday(4, 25)
         assert loaded.age == 16
@@ -121,37 +117,8 @@ async def test_every_setting_survives_a_reopen(tmp_path: Path):
         assert shown["avatar_url"] == "https://example.com/a.png"
 
 
-async def test_load_refreshes_the_shared_mapping_in_place(tmp_path: Path):
-    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo, characters):
-        alice = (await store.create_user("alice")).id
-        c1 = await repo.create(alice, name="一", sheet="s")
-        c2 = await repo.create(alice, name="二", sheet="s")
-        held = characters
-
-        await repo.load()
-        assert characters is held
-        assert set(characters) == {c1.id, c2.id}
-
-        # A row removed elsewhere is gone from the mapping after the next load.
-        await db.write(lambda conn: conn.execute("DELETE FROM characters WHERE id = ?", (c2.id,)))
-        await repo.load()
-        assert set(characters) == {c1.id}
-
-
-async def test_get_keeps_the_character_in_the_shared_mapping(tmp_path: Path):
-    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo, characters):
-        alice = (await store.create_user("alice")).id
-        c = await repo.create(alice, name="A", sheet="s")
-        characters.clear()  # as before a startup load
-
-        found = await repo.get(alice, c.id)
-
-        assert found == c
-        assert characters[c.id] == c
-
-
 async def test_get_and_list_only_see_the_owners_characters(tmp_path: Path):
-    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo, characters):
+    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo):
         alice = (await store.create_user("alice")).id
         bob = (await store.create_user("bob")).id
         a = await repo.create(alice, name="A", sheet="s")
@@ -169,7 +136,7 @@ async def test_get_and_list_only_see_the_owners_characters(tmp_path: Path):
 
 async def test_update_changes_the_owners_character_and_persists(tmp_path: Path):
     path = tmp_path / "eidolon.db"
-    async with repository_in(path) as (db, store, repo, characters):
+    async with repository_in(path) as (db, store, repo):
         alice = (await store.create_user("alice")).id
         bob = (await store.create_user("bob")).id
         c = await repo.create(alice, name="旧", sheet="旧人设")
@@ -195,13 +162,12 @@ async def test_update_changes_the_owners_character_and_persists(tmp_path: Path):
         assert updated.birthday == Birthday(2, 29)
         assert updated.age == 17
         assert updated.user_address == "前辈"
-        assert characters[c.id] is updated
         assert await repo.update(bob, c.id, name="劫持") is None
         found = await repo.get(alice, c.id)
         assert found is not None
         assert found.name == "新"
 
-    async with repository_in(path) as (db, store, repo, characters):
+    async with repository_in(path) as (db, store, repo):
         again = await repo.get(alice, c.id)
         assert again is not None
         assert again.name == "新"
@@ -211,7 +177,7 @@ async def test_update_changes_the_owners_character_and_persists(tmp_path: Path):
 
 
 async def test_update_rejects_an_unknown_setting(tmp_path: Path):
-    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo, characters):
+    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo):
         alice = (await store.create_user("alice")).id
         c = await repo.create(alice, name="A", sheet="s")
 
@@ -224,7 +190,7 @@ async def test_update_rejects_an_unknown_setting(tmp_path: Path):
 
 
 async def test_create_rejects_invalid_settings(tmp_path: Path):
-    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo, characters):
+    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo):
         alice = (await store.create_user("alice")).id
 
         with pytest.raises(ValueError):
@@ -240,7 +206,7 @@ async def test_create_rejects_invalid_settings(tmp_path: Path):
 
 
 async def test_delete_removes_the_character_and_its_owners_conversations(tmp_path: Path):
-    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo, characters):
+    async with repository_in(tmp_path / "eidolon.db") as (db, store, repo):
         alice = (await store.create_user("alice")).id
         bob = (await store.create_user("bob")).id
         a = await repo.create(alice, name="A", sheet="s")
@@ -255,7 +221,6 @@ async def test_delete_removes_the_character_and_its_owners_conversations(tmp_pat
         assert await repo.get(alice, a.id) is not None
 
         assert await repo.delete(alice, a.id) is True
-        assert a.id not in characters
         assert await repo.get(alice, a.id) is None
         assert await store.get_conversation(conv_a.id) is None
         assert await db.read(_count_messages, conv_a.id) == 0
@@ -279,9 +244,8 @@ async def test_delete_works_before_the_store_is_opened(tmp_path: Path):
                 " VALUES ('alice', 'alice', '2026-11-12T00:00:00+00:00');"
             )
         )
-        characters: dict[str, Character] = {}
-        repo = CharacterRepository(db, characters)
+        repo = CharacterRepository(db)
         c = await repo.create("alice", name="A", sheet="s")
 
         assert await repo.delete("alice", c.id) is True
-        assert characters == {}
+        assert await repo.list("alice") == []

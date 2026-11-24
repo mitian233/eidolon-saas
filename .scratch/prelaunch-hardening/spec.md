@@ -33,3 +33,16 @@ PostgreSQL 重启、网络断开或服务端关闭空闲连接后，后端仍持
 
 - 在 SQLite 和真实 PostgreSQL 上分别走创建、导入 API，测试满额、并发写入、失败后无残留、重复导入重试向量，以及 429 和等待时间。并发写入使用同一数据库上的独立连接。
 - 测试公网拒绝 HTTP、允许 HTTPS，以及本地允许 HTTP。串行运行相关测试、Ruff、Pyright 和 `sh scripts/affected-tests.sh 2bb7cbd3`，按仓库规范做两路代码审查。
+
+## 03 多实例角色读取、PostgreSQL 备份提示和数据包说明
+
+- 后端启动不读入全站角色。创建、编辑和删除角色以数据库为准，新的请求与回合经 `Database.read/write` 在工作线程读取当前账号的角色。对话、通话、记忆和其余使用角色信息的路径一并迁移。后台汇总只查询记录里用到的角色名。
+- 检测到 PostgreSQL 时，内置备份与恢复命令拒绝运行，后台备份看板以普通说明显示「内置备份与恢复仅适用于 SQLite；PostgreSQL 请使用 pg_dump 与 age 加密备份」。SQLite 仍沿用现有流程。
+- 部署文档说明如何用 `pg_dump`、gzip、age 备份 PostgreSQL，如何保留 30 天以及如何恢复。
+- 设置页和数据包格式文档说明第 5 版包含对话、记忆和档案，不含角色人设与背景资料。导入对话时当前账号要有同一角色编号；删除角色、删号重来或迁往其他部署后，编号不同的对话会跳过，记忆和档案照常导入。
+
+### Testing Decisions
+
+- 两个独立后端连接同一临时 PostgreSQL。一个经 API 创建、编辑和删除角色，另一个经 API 开始对话、完成回合、读取新版角色设置并在删除后收到 404。LLM 使用已有测试替身。
+- 覆盖 PostgreSQL 下 `Backups`、后台的 GET/POST 及 `eidolon backup/restore`，保留 SQLite 用例。
+- 串行运行相关后端测试、Ruff、Pyright、前端测试和构建，以及 `sh scripts/affected-tests.sh 4cf28e2f`。按仓库规范做两路代码审查，清理临时资源。

@@ -371,12 +371,11 @@ async def _judged(
 @dataclass(frozen=True)
 class _BeforeAsking:
     """What a turn reads from the database before she is asked: whether she has ended the
-    conversation, her character, the conversation's record, when the user and she were last
-    in touch (None in a call, where she knows they are talking), her affinity as it begins,
+    conversation, its record, when the user and she were last in touch (None in a call,
+    where she knows they are talking), her affinity as it begins,
     and the user profile."""
 
     ended: bool
-    character: Character
     record: list[Recorded]
     last_contact: datetime | None
     affinity: Status | None
@@ -458,7 +457,6 @@ class ConversationEngine:
         self,
         db: Database,
         store: Store,
-        characters: dict[str, Character],
         gift_catalog: Mapping[str, Gift],
         memory: Memories,
         titles: Titles,
@@ -479,7 +477,6 @@ class ConversationEngine:
         `affinity_judge`. What she knows of now, `her_now` gives."""
         self._db = db
         self._store = store
-        self._characters = characters
         self._gift_catalog = gift_catalog
         self._clock = clock
         self._retrieval = retrieval
@@ -573,8 +570,9 @@ class ConversationEngine:
         if read.ended:
             yield TurnRejected(ENDED)
             return
-        character, record, last_contact, affinity, profile = (
-            read.character, read.record, read.last_contact, read.affinity, read.profile,
+        character = known.character
+        record, last_contact, affinity, profile = (
+            read.record, read.last_contact, read.affinity, read.profile,
         )
         bilingual = character.language_mode == "bilingual"
         # Said after reading the record, so an event this turn's prompt does not tell of
@@ -790,12 +788,10 @@ class ConversationEngine:
     ) -> _BeforeAsking:
         """What a turn of `conversation` reads before it is asked, through `db`, all in one
         read: `in_call` if it is taken in one, her affinity if `affinity_on`."""
-        character = self._characters[conversation.character_id]
         user_id, character_id = conversation.user_id, conversation.character_id
         last_contact = None if in_call is not None else read_last_contact(db, user_id, character_id)
         return _BeforeAsking(
             read_ended(db, conversation.id) is not None,
-            character,
             read_record(db, conversation.id),
             last_contact,
             self._affinity(db, conversation) if affinity_on else None,

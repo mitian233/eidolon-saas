@@ -80,12 +80,13 @@ export function BackupCard({ refreshKey }: { refreshKey: number }) {
   }
 
   const busy = headline?.kind === "busy";
+  const unavailable = headline?.kind === "unavailable";
   return (
     <DashboardCard
       title={t.title}
-      hint={t.hint}
+      hint={unavailable ? undefined : t.hint}
       level={2}
-      action={
+      action={!unavailable && (
         <Button
           variant="outline"
           size="sm"
@@ -97,7 +98,7 @@ export function BackupCard({ refreshKey }: { refreshKey: number }) {
           {busy && <Spinner data-icon="inline-start" />}
           {busy ? t.backingUp : t.backUpNow}
         </Button>
-      }
+      )}
     >
       <div className="flex flex-col gap-4">
         {startError !== null && (
@@ -113,7 +114,7 @@ export function BackupCard({ refreshKey }: { refreshKey: number }) {
           </Alert>
         )}
         {headline && <Headline headline={headline} status={status} />}
-        {status && (status.configured || status.last !== null) && <Details status={status} />}
+        {!unavailable && status && (status.configured || status.last !== null) && <Details status={status} />}
       </div>
     </DashboardCard>
   );
@@ -139,6 +140,7 @@ function Headline({ headline, status }: { headline: BackupHeadline; status: Back
     );
   }
   if (headline.kind === "ok") return <p className="text-sm text-muted-foreground">{t.states.ok}</p>;
+  if (headline.kind === "unavailable") return <p className="text-sm text-muted-foreground">{headline.reason}</p>;
   const reason =
     headline.problem === "unconfigured" ? t.unconfiguredHelp : headline.problem === "misconfigured" ? status?.config_error : null;
   return (

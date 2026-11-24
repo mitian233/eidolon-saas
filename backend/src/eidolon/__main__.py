@@ -41,6 +41,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+from eidolon.backup import Source
 from eidolon.clock import utc_now
 from eidolon.config import Settings, UsageLimits, database_path_from_env
 from eidolon.data_access import Database
@@ -62,10 +63,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         from eidolon.doctor import run
 
         return asyncio.run(run(args.json))
-    if args.command == "backup":
-        return asyncio.run(_backup(args))
-    if args.command == "restore":
-        return _restore(args)
+    if args.command in ("backup", "restore"):
+        from eidolon.backup import MISCONFIGURED, POSTGRES_BACKUP_HELP
+        from eidolon.database import postgres_url
+
+        target = args.db or database_path_from_env()
+        if postgres_url(target) is not None:
+            print(POSTGRES_BACKUP_HELP, file=sys.stderr)
+            return MISCONFIGURED
+        database = Path(target)
+        if args.command == "backup":
+            return asyncio.run(_backup(database, args.source))
+        return _restore(database, args)
 
     return asyncio.run(_user_command(args))
 
@@ -166,7 +175,7 @@ async def _check_chat_llm(settings: Settings) -> None:
         await models.aclose()
 
 
-async def _backup(args: argparse.Namespace) -> int:
+async def _backup(database: Path, source: Source) -> int:
     import sqlite3
     import time
 
@@ -175,9 +184,9 @@ async def _backup(args: argparse.Namespace) -> int:
 
     started = time.monotonic()
     try:
-        db = Database(args.db or database_path_from_env())
+        db = Database(database)
         try:
-            report = await Backups(db, utc_now).run(args.source)
+            report = await Backups(db, utc_now).run(source)
         finally:
             await db.close()
     except sqlite3.Error as e:  # not a missing setting, which exiting 1 would say
@@ -191,10 +200,9 @@ async def _backup(args: argparse.Namespace) -> int:
     return report.exit_code
 
 
-def _restore(args: argparse.Namespace) -> int:
+def _restore(database: Path, args: argparse.Namespace) -> int:
     from eidolon.restore import NotRestored, check, restore
 
-    database = args.db or database_path_from_env()
     try:
         if args.check:
             users = check(args.file, database)
@@ -254,7 +262,7 @@ def _tally_columns(tally: Tally) -> str:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="eidolon", description="Eidolon 后端")
     parser.add_argument(
-        "--db", type=Path, help="数据库文件（默认取环境变量 EIDOLON_DATABASE_PATH）"
+        "--db", help="数据库文件或 PostgreSQL URL（默认取 DATABASE_URL 或 EIDOLON_DATABASE_PATH）"
     )
     commands = parser.add_subparsers(dest="command", metavar="命令")
     commands.add_parser("serve", help="启动服务（默认）")
@@ -287,7 +295,7 @@ def _parser() -> argparse.ArgumentParser:
 
     backup = commands.add_parser(
         "backup",
-        help="把数据库压缩、用 age 公钥加密后备份到私有的存储桶，并删掉过了保留期（默认 30 天）的备份，"
+        help="把 SQLite 数据库压缩、用 age 公钥加密后备份到私有的存储桶，并删掉过了保留期（默认 30 天）的备份，"
         "最新的一份总是保留（存储桶、公钥和保留期取环境变量 EIDOLON_BACKUP_*；"
         "导出失败退出码为 2，上传失败为 3，删除过期备份失败为 4，上一次备份还没结束为 6）",
     )
@@ -300,7 +308,7 @@ def _parser() -> argparse.ArgumentParser:
 
     restore = commands.add_parser(
         "restore",
-        help="用在自己电脑上解密好的备份（.db 或 .db.gz）替换数据库，要先停后端"
+        help="用在自己电脑上解密好的 SQLite 备份（.db 或 .db.gz）替换数据库，要先停后端"
         "（服务器上用 deploy/db-restore.sh）；文件损坏、不是 SQLite 或者不是本项目的数据库时什么都不动，"
         "退出码为 1",
     )
